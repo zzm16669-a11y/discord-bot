@@ -1,14 +1,16 @@
+import os
+import asyncio
+import random
+from datetime import timedelta
+
 import discord
 from discord.ext import commands
 from discord.ui import View, Button
-import asyncio
-import random
-import time
+
 
 # =========================================================
-# الإعدادات
+# إعدادات البوت
 # =========================================================
-import os
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
@@ -20,18 +22,19 @@ bot = commands.Bot(
     help_command=None
 )
 
+
 # =========================================================
 # الرتب المسموحة
 # =========================================================
 
-ADMIN = [
+ADMIN_ROLES = [
     "Administrator",
     "Executive",
     "Co-Owner",
     "Owner"
 ]
 
-MOD = [
+MOD_ROLES = [
     "Moderator",
     "Senior Moderator",
     "Administrator",
@@ -40,7 +43,7 @@ MOD = [
     "Owner"
 ]
 
-TIMEOUT = [
+TIMEOUT_ROLES = [
     "Helper",
     "Support",
     "Junior Moderator",
@@ -52,7 +55,7 @@ TIMEOUT = [
     "Owner"
 ]
 
-VOICE = [
+VOICE_ROLES = [
     "Moderator",
     "Senior Moderator",
     "Administrator",
@@ -61,23 +64,24 @@ VOICE = [
     "Owner"
 ]
 
+
 # =========================================================
-# فحص الرتب
+# أدوات مساعدة
 # =========================================================
 
-def has_role(member, roles):
-    return any(role.name in roles for role in member.roles)
+def has_role(member, allowed_roles):
+    return any(role.name in allowed_roles for role in member.roles)
 
 
-async def deny(message):
+async def no_permission(message):
     await message.reply("❌ ما عندك صلاحية تستخدم هذا الأمر.")
 
 
 def can_target(author, target):
-    if author == target:
+    if author.id == target.id:
         return False
 
-    if target == author.guild.owner:
+    if target.guild.owner_id == target.id:
         return False
 
     if target.top_role >= author.top_role:
@@ -87,7 +91,7 @@ def can_target(author, target):
 
 
 # =========================================================
-# أدوات الإدارة
+# أوامر الإدارة بدون نقطة
 # =========================================================
 
 async def admin_command(message):
@@ -97,18 +101,20 @@ async def admin_command(message):
 
     content = message.content.strip()
 
-    # -----------------------------------------------------
-    # برا
-    # -----------------------------------------------------
+    # =====================================================
+    # إدارة الأعضاء
+    # =====================================================
 
+    # برا
     if content.startswith("برا "):
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target:
+        if target is None:
             await message.reply("استخدم: `برا @العضو`")
             return True
 
@@ -117,152 +123,201 @@ async def admin_command(message):
             return True
 
         try:
-            await target.ban(reason=f"بواسطة {message.author}")
-            await message.reply(f"🔨 تم تبنيد {target.mention}.")
+            await target.ban(
+                reason=f"Ban بواسطة {message.author}"
+            )
+            await message.reply(
+                f"🔨 تم تبنيد {target.mention}."
+            )
         except discord.Forbidden:
-            await message.reply("❌ البوت ما يقدر يتبند هذا العضو بسبب ترتيب الرتب.")
+            await message.reply(
+                "❌ البوت ما يقدر يبند هذا العضو."
+            )
+
         return True
 
-    # -----------------------------------------------------
     # سماح
-    # -----------------------------------------------------
-
     if content.startswith("سماح"):
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
         parts = content.split()
 
         if len(parts) < 2:
-            await message.reply("استخدم: `سماح ID`")
+            await message.reply(
+                "استخدم: `سماح ID`"
+            )
             return True
 
         try:
             user_id = int(parts[1])
             user = await bot.fetch_user(user_id)
-            await message.guild.unban(user)
-            await message.reply(f"✅ تم فك الباند عن **{user}**.")
-        except Exception:
-            await message.reply("❌ ما قدرت أفك الباند. تأكد من الـ ID.")
+
+            await message.guild.unban(
+                user,
+                reason=f"Unban بواسطة {message.author}"
+            )
+
+            await message.reply(
+                f"✅ تم فك الباند عن **{user}**."
+            )
+
+        except ValueError:
+            await message.reply("❌ الـ ID غير صحيح.")
+
+        except discord.NotFound:
+            await message.reply("❌ هذا العضو غير موجود في قائمة الباند.")
+
+        except discord.Forbidden:
+            await message.reply("❌ البوت ما عنده صلاحية فك الباند.")
+
         return True
 
-    # -----------------------------------------------------
     # ترحيل / كيك
-    # -----------------------------------------------------
-
     if content.startswith("ترحيل ") or content.startswith("كيك "):
 
-        if not has_role(message.author, MOD):
-            await deny(message)
+        if not has_role(message.author, MOD_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target:
-            await message.reply("استخدم: `ترحيل @العضو`")
+        if target is None:
+            await message.reply(
+                "استخدم: `ترحيل @العضو`"
+            )
             return True
 
         if not can_target(message.author, target):
-            await message.reply("❌ ما تقدر تطرد هذا العضو.")
+            await message.reply(
+                "❌ ما تقدر تطرد هذا العضو."
+            )
             return True
 
         try:
-            await target.kick(reason=f"بواسطة {message.author}")
-            await message.reply(f"👢 تم طرد {target.mention}.")
+            await target.kick(
+                reason=f"Kick بواسطة {message.author}"
+            )
+
+            await message.reply(
+                f"👢 تم طرد {target.mention}."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أطرد هذا العضو.")
+            await message.reply(
+                "❌ البوت ما يقدر يطرد هذا العضو."
+            )
+
         return True
 
-    # -----------------------------------------------------
     # تايم / اص
-    # -----------------------------------------------------
-
     if content.startswith("تايم ") or content.startswith("اص "):
 
-        if not has_role(message.author, TIMEOUT):
-            await deny(message)
+        if not has_role(message.author, TIMEOUT_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target:
-            await message.reply("استخدم: `تايم @العضو`")
+        if target is None:
+            await message.reply(
+                "استخدم: `تايم @العضو`"
+            )
             return True
 
         if not can_target(message.author, target):
-            await message.reply("❌ ما تقدر تعطي هذا العضو تايم.")
+            await message.reply(
+                "❌ ما تقدر تعطي هذا العضو تايم."
+            )
             return True
 
         try:
             await target.timeout(
-                discord.utils.utcnow() + discord.timedelta(minutes=10),
-                reason=f"تايم بواسطة {message.author}"
+                timedelta(minutes=10),
+                reason=f"Timeout بواسطة {message.author}"
             )
-            await message.reply(f"⏳ تم إعطاء {target.mention} تايم لمدة 10 دقائق.")
-        except Exception:
-            # بديل في حال discord.timedelta غير موجود
-            from datetime import timedelta
-            try:
-                await target.timeout(
-                    discord.utils.utcnow() + timedelta(minutes=10),
-                    reason=f"تايم بواسطة {message.author}"
-                )
-                await message.reply(f"⏳ تم إعطاء {target.mention} تايم لمدة 10 دقائق.")
-            except discord.Forbidden:
-                await message.reply("❌ ما أقدر أعطيه تايم.")
+
+            await message.reply(
+                f"⏳ تم إعطاء {target.mention} تايم لمدة 10 دقائق."
+            )
+
+        except discord.Forbidden:
+            await message.reply(
+                "❌ البوت ما يقدر يعطي هذا العضو تايم."
+            )
+
         return True
 
-    # -----------------------------------------------------
     # تحرير
-    # -----------------------------------------------------
-
     if content.startswith("تحرير "):
 
-        if not has_role(message.author, TIMEOUT):
-            await deny(message)
+        if not has_role(message.author, TIMEOUT_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target:
-            await message.reply("استخدم: `تحرير @العضو`")
+        if target is None:
+            await message.reply(
+                "استخدم: `تحرير @العضو`"
+            )
             return True
 
         try:
-            await target.timeout(None)
-            await message.reply(f"🔓 تم فك التايم عن {target.mention}.")
+            await target.timeout(
+                None,
+                reason=f"Remove timeout بواسطة {message.author}"
+            )
+
+            await message.reply(
+                f"🔓 تم فك التايم عن {target.mention}."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أفك التايم.")
+            await message.reply(
+                "❌ البوت ما يقدر يفك التايم."
+            )
+
         return True
 
-    # -----------------------------------------------------
-    # ميوت شات
-    # -----------------------------------------------------
-
+    # اخرس
     if content.startswith("اخرس "):
 
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target:
-            await message.reply("استخدم: `اخرس @العضو`")
+        if target is None:
+            await message.reply(
+                "استخدم: `اخرس @العضو`"
+            )
             return True
 
         if not can_target(message.author, target):
-            await message.reply("❌ ما تقدر تسكت هذا العضو.")
+            await message.reply(
+                "❌ ما تقدر تسكت هذا العضو."
+            )
             return True
 
-        role = discord.utils.get(message.guild.roles, name="ميوت")
+        role = discord.utils.get(
+            message.guild.roles,
+            name="ميوت"
+        )
 
-        if not role:
+        if role is None:
             try:
-                role = await message.guild.create_role(name="ميوت")
+                role = await message.guild.create_role(
+                    name="ميوت",
+                    reason="إنشاء رتبة الميوت"
+                )
             except discord.Forbidden:
-                await message.reply("❌ ما عندي صلاحية إنشاء رتبة.")
+                await message.reply(
+                    "❌ البوت ما عنده صلاحية إنشاء الرتب."
+                )
                 return True
 
         for channel in message.guild.text_channels:
@@ -271,204 +326,310 @@ async def admin_command(message):
                     role,
                     send_messages=False
                 )
-            except:
+            except discord.Forbidden:
                 pass
 
         try:
-            await target.add_roles(role)
-            await message.reply(f"🔇 تم إسكات {target.mention} في الشات.")
+            await target.add_roles(
+                role,
+                reason=f"Chat mute بواسطة {message.author}"
+            )
+
+            await message.reply(
+                f"🔇 تم إسكات {target.mention} في الشات."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أعطيه رتبة الميوت.")
+            await message.reply(
+                "❌ البوت ما يقدر يعطي رتبة الميوت."
+            )
+
         return True
 
-    # -----------------------------------------------------
     # تكلم
-    # -----------------------------------------------------
-
     if content.startswith("تكلم "):
 
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target:
-            await message.reply("استخدم: `تكلم @العضو`")
+        if target is None:
+            await message.reply(
+                "استخدم: `تكلم @العضو`"
+            )
             return True
 
-        role = discord.utils.get(message.guild.roles, name="ميوت")
+        role = discord.utils.get(
+            message.guild.roles,
+            name="ميوت"
+        )
 
-        if role:
-            try:
-                await target.remove_roles(role)
-                await message.reply(f"🔊 تم فك الميوت عن {target.mention}.")
-            except discord.Forbidden:
-                await message.reply("❌ ما أقدر أشيل رتبة الميوت.")
-        else:
-            await message.reply("❌ رتبة الميوت غير موجودة.")
-
-        return True
-
-    # -----------------------------------------------------
-    # سجن
-    # -----------------------------------------------------
-
-    if content.startswith("سجن "):
-
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+        if role is None:
+            await message.reply(
+                "❌ رتبة الميوت غير موجودة."
+            )
             return True
-
-        target = message.mentions[0] if message.mentions else None
-
-        if not target:
-            await message.reply("استخدم: `سجن @العضو`")
-            return True
-
-        role = discord.utils.get(message.guild.roles, name="سجين")
-
-        if not role:
-            role = await message.guild.create_role(name="سجين")
 
         try:
-            await target.add_roles(role)
-            await message.reply(f"🔒 تم سجن {target.mention}.")
+            await target.remove_roles(
+                role,
+                reason=f"Unmute بواسطة {message.author}"
+            )
+
+            await message.reply(
+                f"🔊 تم فك الميوت عن {target.mention}."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أعطيه رتبة السجين.")
+            await message.reply(
+                "❌ البوت ما يقدر يشيل رتبة الميوت."
+            )
 
         return True
 
-    # -----------------------------------------------------
-    # فك
-    # -----------------------------------------------------
+    # سجن
+    if content.startswith("سجن "):
 
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
+            return True
+
+        target = message.mentions[0] if message.mentions else None
+
+        if target is None:
+            await message.reply(
+                "استخدم: `سجن @العضو`"
+            )
+            return True
+
+        if not can_target(message.author, target):
+            await message.reply(
+                "❌ ما تقدر تسجن هذا العضو."
+            )
+            return True
+
+        role = discord.utils.get(
+            message.guild.roles,
+            name="سجين"
+        )
+
+        if role is None:
+            try:
+                role = await message.guild.create_role(
+                    name="سجين",
+                    reason="إنشاء رتبة السجين"
+                )
+            except discord.Forbidden:
+                await message.reply(
+                    "❌ ما أقدر أنشئ رتبة السجين."
+                )
+                return True
+
+        try:
+            await target.add_roles(
+                role,
+                reason=f"Jail بواسطة {message.author}"
+            )
+
+            await message.reply(
+                f"🔒 تم سجن {target.mention}."
+            )
+
+        except discord.Forbidden:
+            await message.reply(
+                "❌ البوت ما يقدر يعطي رتبة السجين."
+            )
+
+        return True
+
+    # فك
     if content.startswith("فك "):
 
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target:
-            await message.reply("استخدم: `فك @العضو`")
+        if target is None:
+            await message.reply(
+                "استخدم: `فك @العضو`"
+            )
             return True
 
-        role = discord.utils.get(message.guild.roles, name="سجين")
+        role = discord.utils.get(
+            message.guild.roles,
+            name="سجين"
+        )
 
-        if role:
-            try:
-                await target.remove_roles(role)
-                await message.reply(f"🔓 تم فك سجن {target.mention}.")
-            except discord.Forbidden:
-                await message.reply("❌ ما أقدر أشيل رتبة السجين.")
+        if role is None:
+            await message.reply(
+                "❌ رتبة السجين غير موجودة."
+            )
+            return True
+
+        try:
+            await target.remove_roles(
+                role,
+                reason=f"Unjail بواسطة {message.author}"
+            )
+
+            await message.reply(
+                f"🔓 تم فك سجن {target.mention}."
+            )
+
+        except discord.Forbidden:
+            await message.reply(
+                "❌ البوت ما يقدر يشيل رتبة السجين."
+            )
+
         return True
 
-    # -----------------------------------------------------
     # لقب / اسم
-    # -----------------------------------------------------
-
     if content.startswith("لقب ") or content.startswith("اسم "):
 
-        if not has_role(message.author, MOD):
-            await deny(message)
+        if not has_role(message.author, MOD_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target:
-            await message.reply("استخدم: `لقب @العضو الاسم الجديد`")
+        if target is None:
+            await message.reply(
+                "استخدم: `لقب @العضو الاسم الجديد`"
+            )
             return True
 
         parts = content.split(maxsplit=2)
 
         if len(parts) < 3:
-            await message.reply("اكتب الاسم الجديد.")
+            await message.reply(
+                "❌ اكتب الاسم الجديد."
+            )
             return True
 
         nickname = parts[2]
 
         try:
-            await target.edit(nick=nickname)
-            await message.reply(f"🏷️ تم تغيير لقب {target.mention} إلى **{nickname}**.")
+            await target.edit(
+                nick=nickname,
+                reason=f"Nickname بواسطة {message.author}"
+            )
+
+            await message.reply(
+                f"🏷️ تم تغيير لقب {target.mention} إلى **{nickname}**."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أغير لقبه.")
+            await message.reply(
+                "❌ البوت ما يقدر يغير لقب العضو."
+            )
+
         return True
 
-    # -----------------------------------------------------
     # تنزيل
-    # -----------------------------------------------------
-
     if content.startswith("تنزيل "):
 
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target:
-            await message.reply("استخدم: `تنزيل @العضو`")
+        if target is None:
+            await message.reply(
+                "استخدم: `تنزيل @العضو`"
+            )
             return True
 
-        roles = [
-            r for r in target.roles
-            if r != message.guild.default_role
-            and not r.managed
-            and r < message.guild.me.top_role
+        manageable_roles = [
+            role
+            for role in target.roles
+            if role != message.guild.default_role
+            and not role.managed
+            and role < message.guild.me.top_role
         ]
 
-        if not roles:
-            await message.reply("❌ ما عنده رتبة قابلة للإزالة.")
+        if not manageable_roles:
+            await message.reply(
+                "❌ ما عنده رتبة قابلة للإزالة."
+            )
             return True
 
-        role = max(roles, key=lambda r: r.position)
+        role = max(
+            manageable_roles,
+            key=lambda r: r.position
+        )
 
         try:
-            await target.remove_roles(role)
-            await message.reply(f"📉 تمت إزالة رتبة **{role.name}** من {target.mention}.")
+            await target.remove_roles(
+                role,
+                reason=f"Remove role بواسطة {message.author}"
+            )
+
+            await message.reply(
+                f"📉 تمت إزالة رتبة **{role.name}** من {target.mention}."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أشيل الرتبة.")
+            await message.reply(
+                "❌ البوت ما يقدر يشيل الرتبة."
+            )
+
         return True
 
-    # -----------------------------------------------------
     # رجع
-    # -----------------------------------------------------
-
     if content.startswith("رجع "):
 
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target:
-            await message.reply("استخدم: `رجع @العضو اسم الرتبة`")
+        if target is None:
+            await message.reply(
+                "استخدم: `رجع @العضو اسم الرتبة`"
+            )
             return True
 
         parts = content.split(maxsplit=2)
 
         if len(parts) < 3:
-            await message.reply("اكتب اسم الرتبة.")
+            await message.reply(
+                "❌ اكتب اسم الرتبة."
+            )
             return True
 
         role_name = parts[2]
+
         role = discord.utils.find(
             lambda r: r.name.lower() == role_name.lower(),
             message.guild.roles
         )
 
-        if not role:
-            await message.reply("❌ الرتبة غير موجودة.")
+        if role is None:
+            await message.reply(
+                "❌ الرتبة غير موجودة."
+            )
             return True
 
         try:
-            await target.add_roles(role)
-            await message.reply(f"📈 تمت إعادة رتبة **{role.name}** إلى {target.mention}.")
+            await target.add_roles(
+                role,
+                reason=f"Add role بواسطة {message.author}"
+            )
+
+            await message.reply(
+                f"📈 تمت إضافة رتبة **{role.name}** إلى {target.mention}."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أعطيه الرتبة.")
+            await message.reply(
+                "❌ البوت ما يقدر يعطي الرتبة."
+            )
 
         return True
 
@@ -476,255 +637,403 @@ async def admin_command(message):
     # إدارة الرومات
     # =====================================================
 
+    # اباده / مسح
     if content in ["اباده", "مسح"]:
 
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
         try:
-            await message.channel.purge(limit=100)
-            msg = await message.channel.send("🧹 تم مسح الرسائل.")
+            deleted = await message.channel.purge(
+                limit=100
+            )
+
+            confirmation = await message.channel.send(
+                f"🧹 تم مسح **{len(deleted)}** رسالة."
+            )
+
             await asyncio.sleep(3)
-            await msg.delete()
+
+            try:
+                await confirmation.delete()
+            except discord.NotFound:
+                pass
+
         except discord.Forbidden:
-            await message.channel.send("❌ ما عندي صلاحية حذف الرسائل.")
+            await message.channel.send(
+                "❌ ما عندي صلاحية حذف الرسائل."
+            )
 
         return True
 
+    # قفل
     if content == "قفل":
 
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
-        await message.channel.set_permissions(
-            message.guild.default_role,
-            send_messages=False
-        )
+        try:
+            await message.channel.set_permissions(
+                message.guild.default_role,
+                send_messages=False
+            )
 
-        await message.channel.send("🔒 تم قفل الروم.")
+            await message.channel.send(
+                "🔒 تم قفل الروم."
+            )
+
+        except discord.Forbidden:
+            await message.reply(
+                "❌ ما أقدر أعدل صلاحيات الروم."
+            )
+
         return True
 
+    # فتح
     if content == "فتح":
 
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
-        await message.channel.set_permissions(
-            message.guild.default_role,
-            send_messages=None
-        )
+        try:
+            await message.channel.set_permissions(
+                message.guild.default_role,
+                send_messages=None
+            )
 
-        await message.channel.send("🔓 تم فتح الروم.")
+            await message.channel.send(
+                "🔓 تم فتح الروم."
+            )
+
+        except discord.Forbidden:
+            await message.reply(
+                "❌ ما أقدر أعدل صلاحيات الروم."
+            )
+
         return True
 
+    # اخفاء / خفي
     if content in ["اخفاء", "خفي"]:
 
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
-        await message.channel.set_permissions(
-            message.guild.default_role,
-            view_channel=False
-        )
+        try:
+            await message.channel.set_permissions(
+                message.guild.default_role,
+                view_channel=False
+            )
 
-        await message.channel.send("👁️ تم إخفاء الروم.")
+            await message.channel.send(
+                "👁️ تم إخفاء الروم."
+            )
+
+        except discord.Forbidden:
+            await message.reply(
+                "❌ ما أقدر أخفي الروم."
+            )
+
         return True
 
+    # اظهار
     if content == "اظهار":
 
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
-        await message.channel.set_permissions(
-            message.guild.default_role,
-            view_channel=True
-        )
+        try:
+            await message.channel.set_permissions(
+                message.guild.default_role,
+                view_channel=True
+            )
 
-        await message.channel.send("👁️ تم إظهار الروم.")
+            await message.channel.send(
+                "👁️ تم إظهار الروم."
+            )
+
+        except discord.Forbidden:
+            await message.reply(
+                "❌ ما أقدر أظهر الروم."
+            )
+
         return True
 
     # =====================================================
     # إدارة الصوت
     # =====================================================
 
+    # بره
     if content.startswith("بره "):
 
-        if not has_role(message.author, VOICE):
-            await deny(message)
+        if not has_role(message.author, VOICE_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target or not target.voice:
-            await message.reply("❌ العضو مو داخل روم صوتي.")
+        if target is None or target.voice is None:
+            await message.reply(
+                "❌ العضو مو داخل روم صوتي."
+            )
             return True
 
         try:
             await target.move_to(None)
-            await message.reply(f"👢 طلعت {target.mention} من الصوت.")
+
+            await message.reply(
+                f"👢 تم إخراج {target.mention} من الصوت."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أطلعه من الصوت.")
+            await message.reply(
+                "❌ ما أقدر أطلعه من الصوت."
+            )
 
         return True
 
+    # اصمت
     if content.startswith("اصمت "):
 
-        if not has_role(message.author, VOICE):
-            await deny(message)
+        if not has_role(message.author, VOICE_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target or not target.voice:
-            await message.reply("❌ العضو مو داخل صوت.")
+        if target is None or target.voice is None:
+            await message.reply(
+                "❌ العضو مو داخل روم صوتي."
+            )
             return True
 
         try:
-            await target.edit(mute=True)
-            await message.reply(f"🔇 تم إسكات {target.mention}.")
+            await target.edit(
+                mute=True,
+                reason=f"Server mute بواسطة {message.author}"
+            )
+
+            await message.reply(
+                f"🔇 تم إسكات {target.mention}."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أسكته.")
+            await message.reply(
+                "❌ ما أقدر أسكته."
+            )
 
         return True
 
+    # انطق
     if content.startswith("انطق "):
 
-        if not has_role(message.author, VOICE):
-            await deny(message)
+        if not has_role(message.author, VOICE_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target or not target.voice:
-            await message.reply("❌ العضو مو داخل صوت.")
+        if target is None or target.voice is None:
+            await message.reply(
+                "❌ العضو مو داخل روم صوتي."
+            )
             return True
 
         try:
-            await target.edit(mute=False)
-            await message.reply(f"🔊 تم إلغاء إسكات {target.mention}.")
+            await target.edit(
+                mute=False,
+                reason=f"Server unmute بواسطة {message.author}"
+            )
+
+            await message.reply(
+                f"🔊 تم فك إسكات {target.mention}."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أفك إسكات العضو.")
+            await message.reply(
+                "❌ ما أقدر أفك الإسكات."
+            )
 
         return True
 
+    # اسحب
     if content.startswith("اسحب "):
 
-        if not has_role(message.author, VOICE):
-            await deny(message)
+        if not has_role(message.author, VOICE_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target or not target.voice:
-            await message.reply("❌ العضو مو داخل صوت.")
+        if target is None or target.voice is None:
+            await message.reply(
+                "❌ العضو مو داخل روم صوتي."
+            )
             return True
 
-        if not message.author.voice:
-            await message.reply("❌ ادخل روم صوتي أول.")
+        if message.author.voice is None:
+            await message.reply(
+                "❌ ادخل روم صوتي أول."
+            )
             return True
 
         try:
-            await target.move_to(message.author.voice.channel)
-            await message.reply(f"📥 تم سحب {target.mention}.")
+            await target.move_to(
+                message.author.voice.channel
+            )
+
+            await message.reply(
+                f"📥 تم سحب {target.mention}."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أسحبه.")
+            await message.reply(
+                "❌ ما أقدر أسحب العضو."
+            )
 
         return True
 
-    if content.startswith("تعال ") or content.startswith("كم هير بيبي "):
+    # كم هير بيبي / تعال
+    if (
+        content.startswith("كم هير بيبي ")
+        or content.startswith("تعال ")
+    ):
 
-        if not has_role(message.author, VOICE):
-            await deny(message)
+        if not has_role(message.author, VOICE_ROLES):
+            await no_permission(message)
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target or not target.voice:
-            await message.reply("❌ العضو مو داخل صوت.")
+        if target is None or target.voice is None:
+            await message.reply(
+                "❌ العضو مو داخل روم صوتي."
+            )
             return True
 
         try:
-            await message.author.move_to(target.voice.channel)
-            await message.reply(f"📍 رحت عند {target.mention}.")
+            await message.author.move_to(
+                target.voice.channel
+            )
+
+            await message.reply(
+                f"📍 تم نقلك عند {target.mention}."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أنقلك.")
+            await message.reply(
+                "❌ ما أقدر أنقلك."
+            )
 
         return True
 
+    # اجمعهم
     if content == "اجمعهم":
 
-        if not has_role(message.author, VOICE):
-            await deny(message)
+        if not has_role(message.author, VOICE_ROLES):
+            await no_permission(message)
             return True
 
-        if not message.author.voice:
-            await message.reply("❌ ادخل روم صوتي أول.")
+        if message.author.voice is None:
+            await message.reply(
+                "❌ ادخل روم صوتي أول."
+            )
             return True
 
         destination = message.author.voice.channel
         moved = 0
 
-        for vc in message.guild.voice_channels:
-            for member in list(vc.members):
-                if member != message.author:
-                    try:
-                        await member.move_to(destination)
-                        moved += 1
-                    except:
-                        pass
+        for voice_channel in message.guild.voice_channels:
 
-        await message.reply(f"📥 تم جمع **{moved}** عضو.")
+            for member in list(voice_channel.members):
+
+                if member.id == message.author.id:
+                    continue
+
+                try:
+                    await member.move_to(destination)
+                    moved += 1
+                except discord.Forbidden:
+                    pass
+                except discord.HTTPException:
+                    pass
+
+        await message.reply(
+            f"📥 تم جمع **{moved}** عضو في رومك."
+        )
+
         return True
 
+    # اطلع
     if content == "اطلع":
 
-        if not has_role(message.author, ADMIN):
-            await deny(message)
+        if not has_role(message.author, ADMIN_ROLES):
+            await no_permission(message)
             return True
 
-        if not message.author.voice:
-            await message.reply("❌ ادخل الروم الصوتي أول.")
+        if message.author.voice is None:
+            await message.reply(
+                "❌ ادخل الروم الصوتي أول."
+            )
             return True
 
         channel = message.author.voice.channel
 
+        kicked = 0
+
         for member in list(channel.members):
-            if member != message.author:
-                try:
-                    await member.move_to(None)
-                except:
-                    pass
+
+            if member.id == message.author.id:
+                continue
+
+            try:
+                await member.move_to(None)
+                kicked += 1
+            except discord.Forbidden:
+                pass
+            except discord.HTTPException:
+                pass
 
         try:
             await channel.set_permissions(
                 message.guild.default_role,
                 connect=False
             )
-            await message.reply("🚪 تم إخراج الموجودين وقفل دخول الروم.")
+
+            await message.reply(
+                f"🚪 تم إخراج **{kicked}** أعضاء وقفل دخول الروم."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أقفل الروم.")
+            await message.reply(
+                "❌ تم إخراج الموجودين لكن ما قدرت أقفل الروم."
+            )
 
         return True
 
+    # مسموح
     if content.startswith("مسموح "):
 
-        if not has_role(message.author, VOICE):
-            await deny(message)
+        if not has_role(message.author, VOICE_ROLES):
+            await no_permission(message)
             return True
 
-        if not message.author.voice:
-            await message.reply("❌ ادخل الروم الصوتي أول.")
+        if message.author.voice is None:
+            await message.reply(
+                "❌ ادخل الروم الصوتي أول."
+            )
             return True
 
         target = message.mentions[0] if message.mentions else None
 
-        if not target:
-            await message.reply("استخدم: `مسموح @العضو`")
+        if target is None:
+            await message.reply(
+                "استخدم: `مسموح @العضو`"
+            )
             return True
 
         try:
@@ -732,9 +1041,15 @@ async def admin_command(message):
                 target,
                 connect=True
             )
-            await message.reply(f"✅ سمحت لـ {target.mention} يدخل الروم.")
+
+            await message.reply(
+                f"✅ سمحت لـ {target.mention} يدخل الروم."
+            )
+
         except discord.Forbidden:
-            await message.reply("❌ ما أقدر أغير صلاحيات الروم.")
+            await message.reply(
+                "❌ ما أقدر أعدل صلاحيات الروم."
+            )
 
         return True
 
@@ -742,43 +1057,1192 @@ async def admin_command(message):
 
 
 # =========================================================
-# نظام الألعاب
+# نظام اللوبي
 # =========================================================
 
-games = [
-    "🎰 روليت",
-    "❌⭕ XO",
-    "🔪 مافيا",
-    "🪑 كراسي",
-    "✊ حجرة",
-    "🎲 نرد",
-    "🎡 عجلة",
-    "🙈 غميضة",
-    "⚡ ريبلكا",
-    "🔢 خمن",
-    "🔤 كلمة",
-    "🔘 زر",
-    "⚡ اسرع",
-    "🧩 فكك",
-    "🔗 ادمج",
-    "🏳️ اعلام",
-    "🔄 اعكس",
-    "🔤 حرف",
-    "✏️ صحح",
-    "🔢 ترتيب",
-    "🎨 الوان",
-    "😀 ايموجي",
-    "🔎 اكشف"
-]
+class LobbyView(View):
 
+    def __init__(
+        self,
+        ctx,
+        game_name,
+        max_players=20,
+        min_players=2
+    ):
+
+        super().__init__(timeout=None)
+
+        self.ctx = ctx
+        self.game_name = game_name
+        self.max_players = max_players
+        self.min_players = min_players
+
+        self.players = []
+        self.message = None
+        self.started = False
+
+        # مؤقت ثابت 30 ثانية
+        self.start_task = asyncio.create_task(
+            self.auto_start()
+        )
+
+    def make_embed(self):
+
+        if self.players:
+
+            players_text = "\n".join(
+                f"`{i + 1}` {player.mention}"
+                for i, player in enumerate(self.players)
+            )
+
+        else:
+
+            players_text = "لا يوجد لاعبين حتى الآن."
+
+        embed = discord.Embed(
+            title=f"🎮 {self.game_name}",
+            description=(
+                "اضغط **دخول** للمشاركة.\n"
+                "إذا غيرت رأيك اضغط **خروج**.\n\n"
+                f"👥 **اللاعبون: "
+                f"{len(self.players)}/{self.max_players}**\n\n"
+                f"{players_text}\n\n"
+                "⏱️ تبدأ اللعبة تلقائيًا بعد **30 ثانية**."
+            ),
+            color=discord.Color.default()
+        )
+
+        return embed
+
+    async def auto_start(self):
+
+        await asyncio.sleep(30)
+
+        if self.started:
+            return
+
+        self.started = True
+
+        # تعطيل جميع الأزرار
+        for child in self.children:
+            child.disabled = True
+
+        # تحديث اللوبي
+        if self.message:
+
+            try:
+                await self.message.edit(
+                    embed=self.make_embed(),
+                    view=self
+                )
+            except discord.HTTPException:
+                pass
+
+        # عدد اللاعبين غير كافي
+        if len(self.players) < self.min_players:
+
+            embed = discord.Embed(
+                title=f"❌ {self.game_name}",
+                description=(
+                    "انتهى وقت التسجيل.\n\n"
+                    f"المطلوب: **{self.min_players}** لاعبين.\n"
+                    f"الموجود: **{len(self.players)}**."
+                ),
+                color=discord.Color.default()
+            )
+
+            try:
+                await self.message.edit(
+                    embed=embed,
+                    view=self
+                )
+            except discord.HTTPException:
+                pass
+
+            self.stop()
+            return
+
+        await self.start_game()
+
+    # =====================================================
+    # دخول
+    # =====================================================
+
+    @discord.ui.button(
+        label="دخول",
+        emoji="🎮",
+        style=discord.ButtonStyle.secondary
+    )
+    async def join(
+        self,
+        interaction: discord.Interaction,
+        button: Button
+    ):
+
+        if self.started:
+
+            await interaction.response.send_message(
+                "❌ اللعبة بدأت.",
+                ephemeral=True
+            )
+            return
+
+        if interaction.user in self.players:
+
+            await interaction.response.send_message(
+                "⚠️ أنت داخل اللعبة أصلًا.",
+                ephemeral=True
+            )
+            return
+
+        if len(self.players) >= self.max_players:
+
+            await interaction.response.send_message(
+                "❌ اللعبة ممتلئة.",
+                ephemeral=True
+            )
+            return
+
+        self.players.append(interaction.user)
+
+        await interaction.response.edit_message(
+            embed=self.make_embed(),
+            view=self
+        )
+
+    # =====================================================
+    # خروج
+    # =====================================================
+
+    @discord.ui.button(
+        label="خروج",
+        emoji="🚪",
+        style=discord.ButtonStyle.secondary
+    )
+    async def leave(
+        self,
+        interaction: discord.Interaction,
+        button: Button
+    ):
+
+        if self.started:
+
+            await interaction.response.send_message(
+                "❌ اللعبة بدأت.",
+                ephemeral=True
+            )
+            return
+
+        if interaction.user not in self.players:
+
+            await interaction.response.send_message(
+                "⚠️ أنت مو داخل اللعبة.",
+                ephemeral=True
+            )
+            return
+
+        self.players.remove(interaction.user)
+
+        await interaction.response.edit_message(
+            embed=self.make_embed(),
+            view=self
+        )
+
+    async def start_game(self):
+        pass
+
+
+# =========================================================
+# الروليت
+# =========================================================
+
+class RouletteLobby(LobbyView):
+
+    async def start_game(self):
+
+        winner = random.choice(self.players)
+
+        embed = discord.Embed(
+            title="🎰 الروليت",
+            description=(
+                f"👥 عدد اللاعبين: **{len(self.players)}**\n\n"
+                f"💥 وقع الاختيار على:\n\n"
+                f"## {winner.mention}"
+            ),
+            color=discord.Color.default()
+        )
+
+        await self.message.edit(
+            embed=embed,
+            view=self
+        )
+
+        self.stop()
+
+
+@bot.command(name="روليت")
+async def roulette(ctx):
+
+    view = RouletteLobby(
+        ctx,
+        "🎰 الروليت",
+        max_players=20,
+        min_players=2
+    )
+
+    embed = view.make_embed()
+
+    view.message = await ctx.send(
+        embed=embed,
+        view=view
+    )
+
+
+# =========================================================
+# النرد
+# =========================================================
+
+class DiceLobby(LobbyView):
+
+    async def start_game(self):
+
+        results = []
+
+        for player in self.players:
+
+            number = random.randint(1, 6)
+
+            results.append(
+                (player, number)
+            )
+
+        highest = max(
+            number
+            for _, number in results
+        )
+
+        winners = [
+            player
+            for player, number in results
+            if number == highest
+        ]
+
+        results_text = "\n".join(
+            f"🎲 {player.mention} — **{number}**"
+            for player, number in results
+        )
+
+        winner_text = ", ".join(
+            player.mention
+            for player in winners
+        )
+
+        embed = discord.Embed(
+            title="🎲 النرد",
+            description=(
+                f"{results_text}\n\n"
+                f"🏆 الفائز: {winner_text}"
+            ),
+            color=discord.Color.default()
+        )
+
+        await self.message.edit(
+            embed=embed,
+            view=self
+        )
+
+        self.stop()
+
+
+@bot.command(name="نرد")
+async def dice(ctx):
+
+    view = DiceLobby(
+        ctx,
+        "🎲 النرد",
+        max_players=20,
+        min_players=2
+    )
+
+    view.message = await ctx.send(
+        embed=view.make_embed(),
+        view=view
+    )
+
+
+# =========================================================
+# العجلة
+# =========================================================
+
+class WheelLobby(LobbyView):
+
+    async def start_game(self):
+
+        embed = discord.Embed(
+            title="🎡 العجلة",
+            description="🎡 جاري تدوير العجلة...",
+            color=discord.Color.default()
+        )
+
+        await self.message.edit(
+            embed=embed,
+            view=self
+        )
+
+        await asyncio.sleep(2)
+
+        winner = random.choice(self.players)
+
+        embed = discord.Embed(
+            title="🎡 العجلة",
+            description=(
+                f"🎉 توقفت العجلة على:\n\n"
+                f"## {winner.mention}"
+            ),
+            color=discord.Color.default()
+        )
+
+        await self.message.edit(
+            embed=embed,
+            view=self
+        )
+
+        self.stop()
+
+
+@bot.command(name="عجلة")
+async def wheel(ctx):
+
+    view = WheelLobby(
+        ctx,
+        "🎡 العجلة",
+        max_players=20,
+        min_players=2
+    )
+
+    view.message = await ctx.send(
+        embed=view.make_embed(),
+        view=view
+    )
+
+
+# =========================================================
+# الكراسي
+# =========================================================
+
+class ChairsLobby(LobbyView):
+
+    async def start_game(self):
+
+        players = self.players.copy()
+
+        while len(players) > 1:
+
+            await asyncio.sleep(1)
+
+            eliminated = random.choice(players)
+
+            players.remove(eliminated)
+
+            remaining = "\n".join(
+                player.mention
+                for player in players
+            )
+
+            embed = discord.Embed(
+                title="🪑 الكراسي",
+                description=(
+                    f"❌ خرج {eliminated.mention}\n\n"
+                    f"👥 المتبقين: **{len(players)}**\n\n"
+                    f"{remaining}"
+                ),
+                color=discord.Color.default()
+            )
+
+            await self.message.edit(
+                embed=embed,
+                view=self
+            )
+
+        winner = players[0]
+
+        embed = discord.Embed(
+            title="🪑 الكراسي",
+            description=(
+                f"🏆 الفائز الأخير:\n\n"
+                f"## {winner.mention}"
+            ),
+            color=discord.Color.default()
+        )
+
+        await self.message.edit(
+            embed=embed,
+            view=self
+        )
+
+        self.stop()
+
+
+@bot.command(name="كراسي")
+async def chairs(ctx):
+
+    view = ChairsLobby(
+        ctx,
+        "🪑 الكراسي",
+        max_players=20,
+        min_players=2
+    )
+
+    view.message = await ctx.send(
+        embed=view.make_embed(),
+        view=view
+    )
+
+
+# =========================================================
+# حجرة ورقة مقص
+# =========================================================
+
+class RPSLobby(LobbyView):
+
+    async def start_game(self):
+
+        choices = [
+            "✊ حجر",
+            "📄 ورقة",
+            "✂️ مقص"
+        ]
+
+        results = []
+
+        for player in self.players:
+
+            choice = random.choice(choices)
+
+            results.append(
+                (player, choice)
+            )
+
+        text = "\n".join(
+            f"{player.mention} → **{choice}**"
+            for player, choice in results
+        )
+
+        winner = random.choice(self.players)
+
+        embed = discord.Embed(
+            title="✊ حجرة ورقة مقص",
+            description=(
+                f"{text}\n\n"
+                f"🏆 الفائز:\n"
+                f"## {winner.mention}"
+            ),
+            color=discord.Color.default()
+        )
+
+        await self.message.edit(
+            embed=embed,
+            view=self
+        )
+
+        self.stop()
+
+
+@bot.command(name="حجرة")
+async def rock_paper_scissors(ctx):
+
+    view = RPSLobby(
+        ctx,
+        "✊ حجرة ورقة مقص",
+        max_players=20,
+        min_players=2
+    )
+
+    view.message = await ctx.send(
+        embed=view.make_embed(),
+        view=view
+    )
+
+
+# =========================================================
+# ألعاب جماعية عشوائية
+# =========================================================
+
+class RandomGameLobby(LobbyView):
+
+    def __init__(
+        self,
+        ctx,
+        game_name,
+        emoji,
+        max_players=20,
+        min_players=2
+    ):
+
+        self.emoji = emoji
+
+        super().__init__(
+            ctx,
+            game_name,
+            max_players,
+            min_players
+        )
+
+    async def start_game(self):
+
+        winner = random.choice(self.players)
+
+        embed = discord.Embed(
+            title=f"{self.emoji} {self.game_name}",
+            description=(
+                f"👥 المشاركون: **{len(self.players)}**\n\n"
+                f"🏆 الفائز:\n\n"
+                f"## {winner.mention}"
+            ),
+            color=discord.Color.default()
+        )
+
+        await self.message.edit(
+            embed=embed,
+            view=self
+        )
+
+        self.stop()
+
+
+# مافيا
+@bot.command(name="مافيا")
+async def mafia(ctx):
+
+    view = RandomGameLobby(
+        ctx,
+        "مافيا",
+        "🔪"
+    )
+
+    view.message = await ctx.send(
+        embed=view.make_embed(),
+        view=view
+    )
+
+
+# غميضة
+@bot.command(name="غميضة")
+async def hide_seek(ctx):
+
+    view = RandomGameLobby(
+        ctx,
+        "غميضة",
+        "🙈"
+    )
+
+    view.message = await ctx.send(
+        embed=view.make_embed(),
+        view=view
+    )
+
+
+# ريبلكا
+@bot.command(name="ريبلكا")
+async def replica(ctx):
+
+    view = RandomGameLobby(
+        ctx,
+        "ريبلكا",
+        "⚡"
+    )
+
+    view.message = await ctx.send(
+        embed=view.make_embed(),
+        view=view
+    )
+
+
+# خمن
+@bot.command(name="خمن")
+async def guess(ctx):
+
+    view = RandomGameLobby(
+        ctx,
+        "خمن",
+        "🔢"
+    )
+
+    view.message = await ctx.send(
+        embed=view.make_embed(),
+        view=view
+    )
+
+
+# كلمة
+@bot.command(name="كلمة")
+async def word(ctx):
+
+    view = RandomGameLobby(
+        ctx,
+        "كلمة",
+        "🔤"
+    )
+
+    view.message = await ctx.send(
+        embed=view.make_embed(),
+        view=view
+    )
+
+
+# =========================================================
+# XO
+# =========================================================
+
+class XOButton(Button):
+
+    def __init__(self, index, game):
+
+        super().__init__(
+            label="⠀",
+            style=discord.ButtonStyle.secondary,
+            row=index // 3
+        )
+
+        self.index = index
+        self.game = game
+
+    async def callback(self, interaction):
+
+        game = self.game
+
+        if game.finished:
+
+            await interaction.response.send_message(
+                "❌ اللعبة انتهت.",
+                ephemeral=True
+            )
+            return
+
+        current_player = game.players[
+            game.turn
+        ]
+
+        if interaction.user.id != current_player.id:
+
+            await interaction.response.send_message(
+                "⏳ مو دورك.",
+                ephemeral=True
+            )
+            return
+
+        if game.board[self.index] != "":
+
+            await interaction.response.send_message(
+                "❌ هذا المكان مأخوذ.",
+                ephemeral=True
+            )
+            return
+
+        symbol = game.symbols[
+            interaction.user.id
+        ]
+
+        game.board[self.index] = symbol
+
+        self.label = symbol
+        self.disabled = True
+
+        winner = game.check_winner()
+
+        if winner is not None:
+
+            game.finished = True
+
+            for child in game.children:
+                child.disabled = True
+
+            if winner == "draw":
+
+                result = "🤝 انتهت اللعبة بتعادل."
+
+            else:
+
+                winner_user = next(
+                    user
+                    for user in game.players
+                    if game.symbols[user.id] == winner
+                )
+
+                result = (
+                    f"🏆 الفائز:\n"
+                    f"## {winner_user.mention}"
+                )
+
+            await interaction.response.edit_message(
+                content=result,
+                view=game
+            )
+
+            game.stop()
+            return
+
+        game.turn = 1 - game.turn
+
+        next_player = game.players[
+            game.turn
+        ]
+
+        await interaction.response.edit_message(
+            content=(
+                f"❌ {game.players[0].mention}\n"
+                f"⭕ {game.players[1].mention}\n\n"
+                f"🎯 الدور الآن: {next_player.mention}"
+            ),
+            view=game
+        )
+
+    # نهاية callback
+
+
+class XOGame(View):
+
+    def __init__(
+        self,
+        message,
+        players
+    ):
+
+        super().__init__(timeout=180)
+
+        self.message = message
+        self.players = players
+
+        self.board = [""] * 9
+        self.turn = 0
+        self.finished = False
+
+        self.symbols = {
+            players[0].id: "❌",
+            players[1].id: "⭕"
+        }
+
+        for index in range(9):
+
+            self.add_item(
+                XOButton(
+                    index,
+                    self
+                )
+            )
+
+    def check_winner(self):
+
+        combinations = [
+            (0, 1, 2),
+            (3, 4, 5),
+            (6, 7, 8),
+            (0, 3, 6),
+            (1, 4, 7),
+            (2, 5, 8),
+            (0, 4, 8),
+            (2, 4, 6)
+        ]
+
+        for a, b, c in combinations:
+
+            if (
+                self.board[a] != ""
+                and
+                self.board[a] == self.board[b]
+                and
+                self.board[a] == self.board[c]
+            ):
+
+                return self.board[a]
+
+        if all(
+            value != ""
+            for value in self.board
+        ):
+
+            return "draw"
+
+        return None
+
+
+class XOLobby(LobbyView):
+
+    async def start_game(self):
+
+        game = XOGame(
+            self.message,
+            self.players
+        )
+
+        await self.message.edit(
+            content=(
+                f"❌ {self.players[0].mention}\n"
+                f"⭕ {self.players[1].mention}\n\n"
+                f"🎯 الدور الآن: "
+                f"{self.players[0].mention}"
+            ),
+            embed=None,
+            view=game
+        )
+
+
+@bot.command(name="xo")
+async def xo(ctx):
+
+    view = XOLobby(
+        ctx,
+        "❌⭕ XO",
+        max_players=2,
+        min_players=2
+    )
+
+    embed = discord.Embed(
+        title="❌⭕ XO",
+        description=(
+            "👥 اللعبة تحتاج لاعبين فقط.\n\n"
+            "اضغط **دخول** للمشاركة.\n"
+            "إذا غيرت رأيك اضغط **خروج**.\n\n"
+            "⏱️ تبدأ اللعبة تلقائيًا بعد **30 ثانية**."
+        ),
+        color=discord.Color.default()
+    )
+
+    view.message = await ctx.send(
+        embed=embed,
+        view=view
+    )
+
+
+# =========================================================
+# الألعاب الفردية
+# =========================================================
+
+# زر
+@bot.command(name="زر")
+async def button_game(ctx):
+
+    class ButtonGame(View):
+
+        def __init__(self):
+
+            super().__init__(timeout=20)
+
+            self.clicked = False
+
+        @discord.ui.button(
+            label="اضغط",
+            emoji="🔘",
+            style=discord.ButtonStyle.secondary
+        )
+        async def press(
+            self,
+            interaction: discord.Interaction,
+            button: Button
+        ):
+
+            if self.clicked:
+
+                await interaction.response.send_message(
+                    "❌ أحدهم سبقك.",
+                    ephemeral=True
+                )
+                return
+
+            self.clicked = True
+            button.disabled = True
+
+            await interaction.response.edit_message(
+                content=(
+                    f"⚡ الفائز:\n"
+                    f"## {interaction.user.mention}"
+                ),
+                view=self
+            )
+
+            self.stop()
+
+    embed = discord.Embed(
+        title="🔘 اضغط الزر",
+        description="أول شخص يضغط يفوز!",
+        color=discord.Color.default()
+    )
+
+    await ctx.send(
+        embed=embed,
+        view=ButtonGame()
+    )
+
+
+# اسرع
+@bot.command(name="اسرع")
+async def fastest(ctx):
+
+    answers = [
+        "تفاحة",
+        "سيارة",
+        "قمر",
+        "نجم",
+        "بحر",
+        "كمبيوتر",
+        "ديسكورد"
+    ]
+
+    answer = random.choice(answers)
+
+    await ctx.send(
+        f"⚡ **أسرع!**\n\n"
+        f"أول شخص يكتب:\n"
+        f"## {answer}"
+    )
+
+    def check(message):
+
+        return (
+            message.channel.id == ctx.channel.id
+            and not message.author.bot
+            and message.content.strip() == answer
+        )
+
+    try:
+
+        winner = await bot.wait_for(
+            "message",
+            timeout=15,
+            check=check
+        )
+
+        await ctx.send(
+            f"🏆 أسرع شخص: {winner.author.mention}"
+        )
+
+    except asyncio.TimeoutError:
+
+        await ctx.send(
+            "⌛ انتهى الوقت."
+        )
+
+
+# فكك
+@bot.command(name="فكك")
+async def decompose(ctx):
+
+    word = random.choice([
+        "ديسكورد",
+        "كمبيوتر",
+        "امبراطورية",
+        "سيرفر",
+        "مملكة"
+    ])
+
+    separated = " ".join(word)
+
+    await ctx.send(
+        f"🧩 فكك الكلمة:\n\n"
+        f"## {separated}"
+    )
+
+
+# ادمج
+@bot.command(name="ادمج")
+async def merge(ctx):
+
+    words = random.sample(
+        [
+            "قمر",
+            "بحر",
+            "ليل",
+            "ملك",
+            "ذهب",
+            "نار",
+            "ورد"
+        ],
+        2
+    )
+
+    await ctx.send(
+        f"🔗 ادمج الكلمتين:\n\n"
+        f"**{words[0]} + {words[1]}**"
+    )
+
+
+# اعلام
+@bot.command(name="اعلام")
+async def flags(ctx):
+
+    flags = [
+        "🇸🇦 السعودية",
+        "🇰🇼 الكويت",
+        "🇦🇪 الإمارات",
+        "🇶🇦 قطر",
+        "🇧🇭 البحرين",
+        "🇴🇲 عمان"
+    ]
+
+    selected = random.choice(flags)
+
+    await ctx.send(
+        f"🏳️ علمك هو:\n\n"
+        f"## {selected}"
+    )
+
+
+# اعكس
+@bot.command(name="اعكس")
+async def reverse_word(ctx):
+
+    word = random.choice([
+        "ديسكورد",
+        "امبراطورية",
+        "سيرفر",
+        "كمبيوتر",
+        "مملكة"
+    ])
+
+    await ctx.send(
+        f"🔄 اعكس الكلمة:\n\n"
+        f"## {word}"
+    )
+
+
+# حرف
+@bot.command(name="حرف")
+async def random_letter(ctx):
+
+    letters = list(
+        "ابتثجحخدذرزسشصضطظعغفقكلمنهوي"
+    )
+
+    letter = random.choice(letters)
+
+    await ctx.send(
+        f"🔤 الحرف المختار:\n\n"
+        f"## {letter}"
+    )
+
+
+# صحح
+@bot.command(name="صحح")
+async def correct(ctx):
+
+    sentences = [
+        "انا ذهبت المدرسه",
+        "هو يلعب لعبه",
+        "نحن ذهبنا الى البيت",
+        "انا احب الالعاب"
+    ]
+
+    sentence = random.choice(sentences)
+
+    await ctx.send(
+        f"✏️ صحح الجملة:\n\n"
+        f"**{sentence}**"
+    )
+
+
+# ترتيب
+@bot.command(name="ترتيب")
+async def order_game(ctx):
+
+    numbers = random.sample(
+        range(1, 11),
+        5
+    )
+
+    numbers_text = " - ".join(
+        str(number)
+        for number in numbers
+    )
+
+    await ctx.send(
+        f"🔢 رتب الأرقام من الأصغر إلى الأكبر:\n\n"
+        f"## {numbers_text}"
+    )
+
+
+# الوان
+@bot.command(name="الوان")
+async def colors_game(ctx):
+
+    colors = [
+        "🔴 أحمر",
+        "🔵 أزرق",
+        "🟢 أخضر",
+        "🟡 أصفر",
+        "🟣 بنفسجي",
+        "🟠 برتقالي",
+        "⚫ أسود",
+        "⚪ أبيض"
+    ]
+
+    selected = random.choice(colors)
+
+    await ctx.send(
+        f"🎨 اللون المختار:\n\n"
+        f"## {selected}"
+    )
+
+
+# ايموجي
+@bot.command(name="ايموجي")
+async def emoji_game(ctx):
+
+    emojis = [
+        "😀",
+        "😂",
+        "🔥",
+        "👑",
+        "🎮",
+        "⚡",
+        "🐺",
+        "🦅",
+        "💎",
+        "🚀"
+    ]
+
+    selected = random.choice(emojis)
+
+    await ctx.send(
+        f"😀 الإيموجي المختار:\n\n"
+        f"## {selected}"
+    )
+
+
+# اكشف
+@bot.command(name="اكشف")
+async def reveal(ctx):
+
+    things = [
+        "🎁 جائزة سرية",
+        "💎 ألماسة",
+        "👑 تاج",
+        "💰 كنز",
+        "⚔️ سلاح أسطوري",
+        "🏆 كأس"
+    ]
+
+    selected = random.choice(things)
+
+    await ctx.send(
+        f"🔎 فتحت الصندوق...\n\n"
+        f"## {selected}"
+    )
+
+
+# =========================================================
+# قائمة الألعاب
+# =========================================================
 
 @bot.command(name="العاب")
 async def games_list(ctx):
 
     embed = discord.Embed(
         title="🎮 مركز الألعاب",
-        description="اختر اللعبة واستخدم أمرها من القائمة:",
-        color=discord.Color.blurple()
+        description=(
+            "اختر اللعبة واستخدم أمرها.\n"
+            "الألعاب الجماعية تبدأ بلوبي مدته **30 ثانية**."
+        ),
+        color=discord.Color.default()
     )
 
     embed.add_field(
@@ -803,874 +2267,13 @@ async def games_list(ctx):
         inline=False
     )
 
-    await ctx.send(embed=embed)
-
-
-# =========================================================
-# Lobby
-# =========================================================
-
-class LobbyView(View):
-
-    def __init__(self, ctx, game_name, max_players=20, min_players=2):
-        super().__init__(timeout=None)
-
-        self.ctx = ctx
-        self.game_name = game_name
-        self.max_players = max_players
-        self.min_players = min_players
-        self.players = []
-        self.message = None
-        self.started = False
-
-        self.task = asyncio.create_task(self.auto_start())
-
-    async def auto_start(self):
-
-        await asyncio.sleep(30)
-
-        if self.started:
-            return
-
-        self.started = True
-
-        for item in self.children:
-            item.disabled = True
-
-        if self.message:
-            try:
-                await self.message.edit(
-                    content=f"🎮 **{self.game_name}**\nانتهى وقت الدخول.",
-                    view=self
-                )
-            except:
-                pass
-
-        if len(self.players) < self.min_players:
-
-            if self.message:
-                await self.message.edit(
-                    content=(
-                        f"❌ انتهى الوقت.\n"
-                        f"احتجنا على الأقل **{self.min_players} لاعبين**."
-                    ),
-                    view=self
-                )
-
-            self.stop()
-            return
-
-        await self.start_game()
-
-    @discord.ui.button(
-        label="دخول",
-        style=discord.ButtonStyle.green,
-        emoji="🎮"
-    )
-    async def join(self, interaction: discord.Interaction, button: Button):
-
-        if self.started:
-            await interaction.response.send_message(
-                "❌ اللعبة بدأت.",
-                ephemeral=True
-            )
-            return
-
-        if interaction.user in self.players:
-            await interaction.response.send_message(
-                "⚠️ أنت داخل اللعبة أصلًا.",
-                ephemeral=True
-            )
-            return
-
-        if len(self.players) >= self.max_players:
-            await interaction.response.send_message(
-                "❌ اللعبة ممتلئة.",
-                ephemeral=True
-            )
-            return
-
-        self.players.append(interaction.user)
-
-        names = "\n".join(
-            f"{i+1}. {user.mention}"
-            for i, user in enumerate(self.players)
-        )
-
-        embed = discord.Embed(
-            title=f"🎮 {self.game_name}",
-            description=(
-                "اضغط **دخول** للمشاركة.\n"
-                "⏱️ تبدأ اللعبة تلقائيًا بعد **30 ثانية**.\n\n"
-                f"**اللاعبون ({len(self.players)}/{self.max_players})**\n"
-                f"{names}"
-            ),
-            color=discord.Color.blurple()
-        )
-
-        await interaction.response.edit_message(embed=embed)
-
-    async def start_game(self):
-        pass
-
-
-# =========================================================
-# روليت
-# =========================================================
-
-class RouletteView(LobbyView):
-
-    async def start_game(self):
-
-        winner = random.choice(self.players)
-
-        embed = discord.Embed(
-            title="🎰 الروليت",
-            description=(
-                f"عدد اللاعبين: **{len(self.players)}**\n\n"
-                f"💥 خرجت الرصاصة على:\n"
-                f"## {winner.mention}"
-            ),
-            color=discord.Color.red()
-        )
-
-        await self.message.edit(embed=embed, view=self)
-        self.stop()
-
-
-@bot.command(name="روليت")
-async def roulette(ctx):
-
-    view = RouletteView(ctx, "🎰 الروليت", max_players=20)
-
-    embed = discord.Embed(
-        title="🎰 الروليت",
-        description=(
-            "اضغط **دخول** للمشاركة.\n"
-            "⏱️ عند انتهاء الـ30 ثانية تبدأ اللعبة تلقائيًا.\n\n"
-            "👥 الحد الأقصى: **20 لاعب**"
-        ),
-        color=discord.Color.red()
-    )
-
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-# =========================================================
-# نرد
-# =========================================================
-
-class DiceView(LobbyView):
-
-    async def start_game(self):
-
-        rolls = []
-
-        for player in self.players:
-            number = random.randint(1, 6)
-            rolls.append((player, number))
-
-        rolls.sort(key=lambda x: x[1], reverse=True)
-
-        text = "\n".join(
-            f"🎲 {player.mention} — **{number}**"
-            for player, number in rolls
-        )
-
-        winner = rolls[0][0]
-
-        embed = discord.Embed(
-            title="🎲 النرد",
-            description=(
-                f"{text}\n\n"
-                f"🏆 الفائز: {winner.mention}"
-            ),
-            color=discord.Color.gold()
-        )
-
-        await self.message.edit(embed=embed, view=self)
-        self.stop()
-
-
-@bot.command(name="نرد")
-async def dice(ctx):
-
-    view = DiceView(ctx, "🎲 النرد")
-
-    embed = discord.Embed(
-        title="🎲 النرد",
-        description="اضغط **دخول** للمشاركة.\n⏱️ تبدأ بعد 30 ثانية.",
-        color=discord.Color.gold()
-    )
-
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-# =========================================================
-# عجلة
-# =========================================================
-
-class WheelView(LobbyView):
-
-    async def start_game(self):
-
-        await self.message.edit(
-            content="🎡 جاري تدوير العجلة...",
-            embed=None,
-            view=None
-        )
-
-        await asyncio.sleep(2)
-
-        winner = random.choice(self.players)
-
-        embed = discord.Embed(
-            title="🎡 العجلة",
-            description=f"🎉 الفائز هو {winner.mention}!",
-            color=discord.Color.green()
-        )
-
-        await self.message.edit(content=None, embed=embed)
-        self.stop()
-
-
-@bot.command(name="عجلة")
-async def wheel(ctx):
-
-    view = WheelView(ctx, "🎡 العجلة")
-
-    embed = discord.Embed(
-        title="🎡 العجلة",
-        description="اضغط **دخول** للمشاركة.\n⏱️ تبدأ بعد 30 ثانية.",
-        color=discord.Color.green()
-    )
-
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-# =========================================================
-# كراسي
-# =========================================================
-
-class ChairsView(LobbyView):
-
-    async def start_game(self):
-
-        players = self.players.copy()
-
-        while len(players) > 1:
-
-            await asyncio.sleep(1)
-
-            eliminated = random.choice(players)
-            players.remove(eliminated)
-
-            embed = discord.Embed(
-                title="🪑 لعبة الكراسي",
-                description=(
-                    f"💺 انتهت الجولة!\n"
-                    f"❌ خرج {eliminated.mention}\n\n"
-                    f"👥 المتبقين: **{len(players)}**"
-                ),
-                color=discord.Color.orange()
-            )
-
-            await self.message.edit(embed=embed)
-
-        winner = players[0]
-
-        embed = discord.Embed(
-            title="🪑 لعبة الكراسي",
-            description=f"🏆 آخر شخص بقي هو {winner.mention}!",
-            color=discord.Color.green()
-        )
-
-        await self.message.edit(embed=embed, view=self)
-        self.stop()
-
-
-@bot.command(name="كراسي")
-async def chairs(ctx):
-
-    view = ChairsView(ctx, "🪑 الكراسي")
-
-    embed = discord.Embed(
-        title="🪑 لعبة الكراسي",
-        description="اضغط **دخول** للمشاركة.\n⏱️ تبدأ بعد 30 ثانية.",
-        color=discord.Color.orange()
-    )
-
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-# =========================================================
-# حجرة
-# =========================================================
-
-class RPSView(LobbyView):
-
-    async def start_game(self):
-
-        choices = ["✊ حجر", "📄 ورقة", "✂️ مقص"]
-
-        results = []
-
-        for player in self.players:
-            choice = random.choice(choices)
-            results.append((player, choice))
-
-        text = "\n".join(
-            f"{player.mention} → **{choice}**"
-            for player, choice in results
-        )
-
-        winner = random.choice(self.players)
-
-        embed = discord.Embed(
-            title="✊ حجرة ورقة مقص",
-            description=(
-                f"{text}\n\n"
-                f"🏆 الفائز: {winner.mention}"
-            ),
-            color=discord.Color.blurple()
-        )
-
-        await self.message.edit(embed=embed, view=self)
-        self.stop()
-
-
-@bot.command(name="حجرة")
-async def rps(ctx):
-
-    view = RPSView(ctx, "✊ حجرة ورقة مقص")
-
-    embed = discord.Embed(
-        title="✊ حجرة ورقة مقص",
-        description="اضغط **دخول** للمشاركة.\n⏱️ تبدأ بعد 30 ثانية.",
-        color=discord.Color.blurple()
-    )
-
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-# =========================================================
-# XO
-# =========================================================
-
-class XOBoard(View):
-
-    def __init__(self, message, players):
-        super().__init__(timeout=120)
-
-        self.message = message
-        self.players = players
-        self.board = [""] * 9
-        self.turn = 0
-        self.symbols = {
-            players[0]: "❌",
-            players[1]: "⭕"
-        }
-
-        for i in range(9):
-            self.add_item(XOButton(i, self))
-
-    def check_winner(self):
-
-        wins = [
-            (0,1,2),(3,4,5),(6,7,8),
-            (0,3,6),(1,4,7),(2,5,8),
-            (0,4,8),(2,4,6)
-        ]
-
-        for a,b,c in wins:
-            if (
-                self.board[a]
-                and self.board[a] == self.board[b]
-                and self.board[a] == self.board[c]
-            ):
-                return self.board[a]
-
-        if all(self.board):
-            return "draw"
-
-        return None
-
-
-class XOButton(Button):
-
-    def __init__(self, index, game):
-        super().__init__(
-            label="ㅤ",
-            style=discord.ButtonStyle.secondary,
-            row=index // 3
-        )
-
-        self.index = index
-        self.game = game
-
-    async def callback(self, interaction):
-
-        game = self.game
-
-        current_player = game.players[game.turn]
-
-        if interaction.user != current_player:
-            await interaction.response.send_message(
-                "⏳ مو دورك.",
-                ephemeral=True
-            )
-            return
-
-        if game.board[self.index]:
-            await interaction.response.send_message(
-                "❌ هذا المكان مأخوذ.",
-                ephemeral=True
-            )
-            return
-
-        symbol = game.symbols[interaction.user]
-
-        game.board[self.index] = symbol
-        self.label = symbol
-        self.disabled = True
-
-        winner = game.check_winner()
-
-        if winner:
-
-            if winner == "draw":
-                text = "🤝 تعادل!"
-            else:
-                winner_user = next(
-                    user for user in game.players
-                    if game.symbols[user] == winner
-                )
-                text = f"🏆 الفائز: {winner_user.mention}"
-
-            for child in game.children:
-                child.disabled = True
-
-            await interaction.response.edit_message(
-                content=text,
-                view=game
-            )
-
-            game.stop()
-            return
-
-        game.turn = 1 - game.turn
-
-        await interaction.response.edit_message(
-            content=(
-                f"❌ {game.players[0].mention}\n"
-                f"⭕ {game.players[1].mention}\n\n"
-                f"🎯 الدور: {game.players[game.turn].mention}"
-            ),
-            view=game
-        )
-
-
-class XOLobby(LobbyView):
-
-    async def start_game(self):
-
-        board = XOBoard(
-            self.message,
-            self.players
-        )
-
-        await self.message.edit(
-            content=(
-                f"❌ {self.players[0].mention}\n"
-                f"⭕ {self.players[1].mention}\n\n"
-                f"🎯 الدور: {self.players[0].mention}"
-            ),
-            view=board
-        )
-
-
-@bot.command(name="xo")
-async def xo(ctx):
-
-    view = XOLobby(
-        ctx,
-        "❌⭕ XO",
-        max_players=2,
-        min_players=2
-    )
-
-    embed = discord.Embed(
-        title="❌⭕ XO",
-        description=(
-            "لاعبين فقط.\n"
-            "اضغط **دخول** للمشاركة.\n"
-            "⏱️ تبدأ اللعبة بعد 30 ثانية."
-        ),
-        color=discord.Color.blurple()
-    )
-
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-# =========================================================
-# ألعاب جماعية بسيطة
-# =========================================================
-
-class SimpleRandomGame(LobbyView):
-
-    def __init__(self, ctx, game_name, emoji, color):
-        super().__init__(ctx, game_name)
-        self.emoji = emoji
-        self.color = color
-
-    async def start_game(self):
-
-        winner = random.choice(self.players)
-
-        embed = discord.Embed(
-            title=f"{self.emoji} {self.game_name}",
-            description=(
-                f"👥 المشاركون: **{len(self.players)}**\n\n"
-                f"🏆 الفائز العشوائي:\n"
-                f"## {winner.mention}"
-            ),
-            color=self.color
-        )
-
-        await self.message.edit(embed=embed, view=self)
-        self.stop()
-
-
-@bot.command(name="مافيا")
-async def mafia(ctx):
-
-    if ctx.guild is None:
-        return
-
-    view = SimpleRandomGame(
-        ctx,
-        "مافيا",
-        "🔪",
-        discord.Color.dark_red()
-    )
-
-    embed = discord.Embed(
-        title="🔪 المافيا",
-        description="اضغط **دخول** للمشاركة.\n⏱️ تبدأ بعد 30 ثانية.",
-        color=discord.Color.dark_red()
-    )
-
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-@bot.command(name="غميضة")
-async def hide_seek(ctx):
-
-    view = SimpleRandomGame(
-        ctx,
-        "غميضة",
-        "🙈",
-        discord.Color.green()
-    )
-
-    embed = discord.Embed(
-        title="🙈 غميضة",
-        description="اضغط **دخول** للمشاركة.\n⏱️ تبدأ بعد 30 ثانية.",
-        color=discord.Color.green()
-    )
-
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-@bot.command(name="ريبلكا")
-async def replica(ctx):
-
-    view = SimpleRandomGame(
-        ctx,
-        "ريبلكا",
-        "⚡",
-        discord.Color.purple()
-    )
-
-    embed = discord.Embed(
-        title="⚡ ريبلكا",
-        description="اضغط **دخول** للمشاركة.\n⏱️ تبدأ بعد 30 ثانية.",
-        color=discord.Color.purple()
-    )
-
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-@bot.command(name="خمن")
-async def guess(ctx):
-
-    view = SimpleRandomGame(
-        ctx,
-        "خمن",
-        "🔢",
-        discord.Color.blue()
-    )
-
-    embed = discord.Embed(
-        title="🔢 خمن",
-        description="اضغط **دخول** للمشاركة.\n⏱️ تبدأ بعد 30 ثانية.",
-        color=discord.Color.blue()
-    )
-
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-@bot.command(name="كلمة")
-async def word(ctx):
-
-    view = SimpleRandomGame(
-        ctx,
-        "كلمة",
-        "🔤",
-        discord.Color.orange()
-    )
-
-    embed = discord.Embed(
-        title="🔤 كلمة",
-        description="اضغط **دخول** للمشاركة.\n⏱️ تبدأ بعد 30 ثانية.",
-        color=discord.Color.orange()
-    )
-
-    view.message = await ctx.send(embed=embed, view=view)
-
-
-# =========================================================
-# الألعاب الفردية
-# =========================================================
-
-@bot.command(name="زر")
-async def button_game(ctx):
-
-    embed = discord.Embed(
-        title="🔘 اضغط الزر",
-        description="اضغط الزر بأسرع ما تقدر!",
-        color=discord.Color.green()
-    )
-
-    view = View(timeout=30)
-
-    button = Button(
-        label="اضغط!",
-        style=discord.ButtonStyle.green
-    )
-
-    async def callback(interaction):
-
-        button.disabled = True
-
-        await interaction.response.edit_message(
-            content=f"⚡ {interaction.user.mention} ضغط الزر!",
-            embed=embed,
-            view=view
-        )
-
-        view.stop()
-
-    button.callback = callback
-    view.add_item(button)
-
-    await ctx.send(embed=embed, view=view)
-
-
-@bot.command(name="اسرع")
-async def fastest(ctx):
-
-    answer = random.choice([
-        "تفاحة",
-        "سيارة",
-        "مطر",
-        "قمر",
-        "نجم",
-        "بحر"
-    ])
-
     await ctx.send(
-        f"⚡ أول شخص يكتب:\n"
-        f"**{answer}**\n"
-        f"هو الفائز!"
-    )
-
-    def check(m):
-        return (
-            m.channel == ctx.channel
-            and not m.author.bot
-            and m.content.strip() == answer
-        )
-
-    try:
-        winner = await bot.wait_for(
-            "message",
-            timeout=15,
-            check=check
-        )
-
-        await ctx.send(
-            f"🏆 أسرع واحد: {winner.author.mention}"
-        )
-
-    except asyncio.TimeoutError:
-        await ctx.send("⌛ انتهى الوقت.")
-
-
-@bot.command(name="فكك")
-async def decompose(ctx):
-
-    word = random.choice([
-        "ديسكورد",
-        "كمبيوتر",
-        "سيارة",
-        "مملكة",
-        "امبراطورية"
-    ])
-
-    spaced = " ".join(word)
-
-    await ctx.send(
-        f"🧩 فكك الكلمة:\n\n"
-        f"**{spaced}**"
-    )
-
-
-@bot.command(name="ادمج")
-async def merge(ctx):
-
-    words = random.sample(
-        ["قمر", "بحر", "ليل", "ملك", "ذهب", "نار"],
-        2
-    )
-
-    await ctx.send(
-        f"🔗 ادمج الكلمتين:\n"
-        f"**{words[0]} + {words[1]}**"
-    )
-
-
-@bot.command(name="اعلام")
-async def flags(ctx):
-
-    flags = [
-        "🇸🇦 السعودية",
-        "🇰🇼 الكويت",
-        "🇦🇪 الإمارات",
-        "🇶🇦 قطر",
-        "🇴🇲 عمان",
-        "🇧🇭 البحرين"
-    ]
-
-    await ctx.send(
-        f"🏳️ العلم:\n\n"
-        f"**{random.choice(flags)}**"
-    )
-
-
-@bot.command(name="اعكس")
-async def reverse(ctx):
-
-    word = random.choice([
-        "ديسكورد",
-        "مازن",
-        "امبراطورية",
-        "سيرفر"
-    ])
-
-    await ctx.send(
-        f"🔄 اعكس الكلمة:\n"
-        f"**{word}**"
-    )
-
-
-@bot.command(name="حرف")
-async def letter(ctx):
-
-    letter = random.choice(list("ابتثجحخدذرزسشصضطظعغفقكلمنهوي"))
-
-    await ctx.send(
-        f"🔤 حرفك هو:\n## {letter}"
-    )
-
-
-@bot.command(name="صحح")
-async def correct(ctx):
-
-    text = random.choice([
-        "انا ذهبت المدرسه",
-        "هو يلعب لعبه",
-        "نحن ذهبنا الى البيت"
-    ])
-
-    await ctx.send(
-        f"✏️ صحح الجملة:\n\n"
-        f"**{text}**"
-    )
-
-
-@bot.command(name="ترتيب")
-async def order(ctx):
-
-    numbers = random.sample(range(1, 6), 5)
-
-    await ctx.send(
-        f"🔢 رتب الأرقام من الأصغر للأكبر:\n\n"
-        f"**{' - '.join(map(str, numbers))}**"
-    )
-
-
-@bot.command(name="الوان")
-async def colors(ctx):
-
-    colors = [
-        "🔴 أحمر",
-        "🔵 أزرق",
-        "🟢 أخضر",
-        "🟡 أصفر",
-        "🟣 بنفسجي",
-        "🟠 برتقالي"
-    ]
-
-    await ctx.send(
-        f"🎨 اللون المختار:\n\n"
-        f"## {random.choice(colors)}"
-    )
-
-
-@bot.command(name="ايموجي")
-async def emoji_game(ctx):
-
-    emojis = [
-        "😀", "😂", "🔥", "👑",
-        "🎮", "⚡", "🐺", "🦅"
-    ]
-
-    await ctx.send(
-        f"😀 إيموجيك:\n\n"
-        f"## {random.choice(emojis)}"
-    )
-
-
-@bot.command(name="اكشف")
-async def reveal(ctx):
-
-    things = [
-        "🎁 جائزة سرية",
-        "💎 ألماسة",
-        "👑 تاج",
-        "💰 كنز",
-        "⚔️ سلاح أسطوري"
-    ]
-
-    await ctx.send(
-        f"🔎 فتحت الصندوق...\n\n"
-        f"## {random.choice(things)}"
+        embed=embed
     )
 
 
 # =========================================================
-# تشغيل الأوامر الإدارية بدون نقطة
+# منع تكرار الأوامر الإدارية مع أوامر الألعاب
 # =========================================================
 
 @bot.event
@@ -1686,16 +2289,26 @@ async def on_message(message):
 
 
 # =========================================================
-# تشغيل البوت
+# عند تشغيل البوت
 # =========================================================
 
 @bot.event
 async def on_ready():
 
     print("=" * 50)
-    print(f"تم تشغيل البوت: {bot.user}")
-    print(f"ID: {bot.user.id}")
+    print(f"✅ تم تشغيل البوت: {bot.user}")
+    print(f"🆔 ID: {bot.user.id}")
     print("=" * 50)
 
+
+# =========================================================
+# تشغيل البوت
+# =========================================================
+
+if not TOKEN:
+
+    raise RuntimeError(
+        "❌ لم يتم العثور على DISCORD_TOKEN في Environment Variables."
+    )
 
 bot.run(TOKEN)
