@@ -2310,5 +2310,21 @@ if not TOKEN:
     raise RuntimeError(
         "❌ لم يتم العثور على DISCORD_TOKEN في Environment Variables."
     )
+import os
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is active 24/7!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
+    server.serve_forever()
+
+# تشغيل خادم الويب في الخلفية قبل تشغيل البوت
+threading.Thread(target=run_web_server, daemon=True).start()
 bot.run(TOKEN)
