@@ -287,7 +287,7 @@ class TicTacToeView(discord.ui.View):
         return all(all(cell for cell in row) for row in self.board)
 
 
-@bot.command(name="اكسو", aliases=["xo"])
+@bot.command(name="xo")
 async def xo_cmd(ctx: commands.Context, opponent: discord.Member):
     if opponent.bot or opponent == ctx.author:
         await ctx.send("⚠️ اختر عضو ثاني حقيقي غيرك.")
@@ -416,17 +416,59 @@ class RouletteView(discord.ui.View):
         return callback
 
 
+class RouletteLobbyView(discord.ui.View):
+    """غرفة انتظار: أعضاء ينضمون بزر، والمضيف يبدأ اللعبة بزر."""
+
+    def __init__(self, host: discord.Member):
+        super().__init__(timeout=120)
+        self.host = host
+        self.players: list[discord.Member] = [host]
+
+    def _status_text(self) -> str:
+        names = "، ".join(m.mention for m in self.players)
+        return (
+            f"🎡 **لعبة الروليت — بانتظار اللاعبين**\n"
+            f"منضمين ({len(self.players)}): {names}\n\n"
+            f"اضغط 🎮 **انضمام** للدخول — أو المضيف {self.host.mention} يضغط ▶️ **بدء اللعبة** (لازم 3 لاعبين فأكثر)"
+        )
+
+    @discord.ui.button(label="🎮 انضمام", style=discord.ButtonStyle.success)
+    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.bot:
+            await interaction.response.send_message("⚠️ البوتات ما تنلعب.", ephemeral=True)
+            return
+        if interaction.user in self.players:
+            await interaction.response.send_message("✅ أنت منضم مسبقًا.", ephemeral=True)
+            return
+        self.players.append(interaction.user)
+        await interaction.response.edit_message(content=self._status_text(), view=self)
+
+    @discord.ui.button(label="▶️ بدء اللعبة", style=discord.ButtonStyle.primary)
+    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.host:
+            await interaction.response.send_message("⚠️ بس المضيف يقدر يبدأ اللعبة.", ephemeral=True)
+            return
+        if len(self.players) < 3:
+            await interaction.response.send_message("⚠️ لازم 3 لاعبين على الأقل قبل البدء.", ephemeral=True)
+            return
+
+        game_view = RouletteView(self.players)
+        game_view.chosen = random.choice(self.players)
+        game_view._build_buttons()
+        names = "، ".join(m.mention for m in self.players)
+        await interaction.response.edit_message(
+            content=f"🎡 **بدأت اللعبة!**\n{names}\n\n🎯 دور {game_view.chosen.mention} يختار وحد يطلعه!",
+            view=game_view,
+        )
+        self.stop()
+
+
 @bot.command(name="روليت")
-async def roulette_cmd(ctx: commands.Context, *members: discord.Member):
-    players = list(dict.fromkeys(m for m in members if not m.bot))
-    if len(players) < 3:
-        await ctx.send("⚠️ لازم 3 أعضاء على الأقل: `!روليت @a @b @c`")
+async def roulette_cmd(ctx: commands.Context):
+    if ctx.author.bot:
         return
-    view = RouletteView(players)
-    view.chosen = random.choice(players)
-    view._build_buttons()
-    names = "، ".join(m.mention for m in players)
-    await ctx.send(f"🎡 **بدأت لعبة الروليت!**\n{names}\n\n🎯 دور {view.chosen.mention} يختار!", view=view)
+    view = RouletteLobbyView(ctx.author)
+    await ctx.send(view._status_text(), view=view)
 
 
 # ============================================================
@@ -930,12 +972,12 @@ async def on_message(message: discord.Message):
     await bot.process_commands(message)
 
 
+@bot.event
 async def on_ready():
     print(f"✅ تم تسجيل الدخول باسم {bot.user}")
     if not every_five_minutes.is_running():
         every_five_minutes.start()
 
-# --- 3) نقطة التشغيل النهائية ---
 if __name__ == "__main__":
     keep_alive()
- bot.run(DISCORD_TOKEN)
+    bot.run(DISCORD_TOKEN)
