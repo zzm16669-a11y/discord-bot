@@ -32,13 +32,21 @@ import aiohttp
 import asyncio
 import itertools
 import json
+import math
 import os
 import re
 import random
 import threading
+from io import BytesIO
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
 
 load_dotenv()
 
@@ -1100,6 +1108,92 @@ async def spin_wheel_on(msg: discord.Message, players: list, prefix: str = ""):
     return players[winner_idx]
 
 
+# ---------- عجلة دائرية حقيقية (سهم ثابت + عجلة أرقام تدور) — خاصة بالروليت بس ----------
+def _draw_wheel_frame(numbers: list[int], rotation_deg: float, size: int = 420) -> BytesIO:
+    """يرسم عجلة دائرية مقسّمة بعدد اللاعبين، بألوان عادية (رمادي متبادل)، وسهم أحمر ثابت فوق يشاور تحت."""
+    img = Image.new("RGBA", (size, size + 40), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    top_margin = 40
+    center = size // 2
+    cy = top_margin + center
+    radius = size // 2 - 8
+    n = len(numbers)
+    sector = 360 / n
+    ring_colors = ["#4F545C", "#5A5F68"]  # لون عادي رمادي متبادل (بدون أحمر/أخضر)
+    try:
+        font = ImageFont.load_default(size=22)
+    except TypeError:
+        font = ImageFont.load_default()
+
+    bbox_box = [center - radius, cy - radius, center + radius, cy + radius]
+    for i, num in enumerate(numbers):
+        start_angle = rotation_deg + i * sector
+        end_angle = start_angle + sector
+        color = ring_colors[i % 2]
+        draw.pieslice(bbox_box, start_angle, end_angle, fill=color, outline="#2C2F33", width=2)
+        mid_angle = math.radians(start_angle + sector / 2)
+        text_radius = radius * 0.72
+        tx = center + text_radius * math.cos(mid_angle)
+        ty = cy + text_radius * math.sin(mid_angle)
+        text = str(num)
+        tb = draw.textbbox((0, 0), text, font=font)
+        w, h = tb[2] - tb[0], tb[3] - tb[1]
+        draw.text((tx - w / 2 - tb[0], ty - h / 2 - tb[1]), text, fill="#FFFFFF", font=font)
+
+    # إطار خارجي للعجلة
+    draw.ellipse(bbox_box, outline="#23272A", width=4)
+    # مركز العجلة
+    draw.ellipse([center - 10, cy - 10, center + 10, cy + 10], fill="#23272A")
+    # السهم الثابت فوق العجلة يشاور تحت (نفس اللون بكل الإطارات — عادي مو أحمر/أخضر)
+    arrow = [(center - 14, 6), (center + 14, 6), (center, 34)]
+    draw.polygon(arrow, fill="#B9BBBE")
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
+async def _spin_wheel_image(msg: discord.Message, numbers: list[int], winner_number: int,
+                             header: str = "🎡 العجلة تدور...") -> None:
+    """يدوّر عجلة دائرية فيها سهم ثابت بالتعديل على مرفق الرسالة، لين توقف بالضبط عند رقم الفايز."""
+    n = len(numbers)
+    winner_index = numbers.index(winner_number)
+    sector = 360 / n
+    # السهم فوق العجلة = زاوية 270 بنظام الرسم (pieslice تبدأ من 3 الساعة وتزيد باتجاه عقارب الساعة)
+    target_offset = (270 - (winner_index * sector + sector / 2)) % 360
+    total_spin = 360 * random.randint(3, 5) + target_offset
+    frames = 16
+    for f in range(1, frames + 1):
+        progress = f / frames
+        eased = 1 - (1 - progress) ** 3  # تباطؤ تدريجي (ease-out)
+        angle = total_spin * eased
+        buf = _draw_wheel_frame(numbers, angle)
+        file = discord.File(buf, filename="wheel.png")
+        try:
+            await msg.edit(content=header, attachments=[file])
+        except discord.NotFound:
+            return
+        await asyncio.sleep(0.12 + 0.23 * progress)
+
+
+async def spin_and_choose(msg: discord.Message, players: list[discord.Member],
+                           header: str = "🎡 العجلة تدور تختار...") -> discord.Member:
+    """يدوّر عجلة دائرية بأرقام تمثل اللاعبين (1..ن) وسهم ثابت، ويرجع اللاعب اللي وقف عليه السهم.
+    لو Pillow مو متوفرة، يرجع لأسلوب العجلة النصية القديم تلقائيًا."""
+    if not players:
+        return None
+    n = len(players)
+    winner_idx = random.randrange(n)
+    if PIL_AVAILABLE:
+        try:
+            numbers = list(range(1, n + 1))
+            await _spin_wheel_image(msg, numbers, numbers[winner_idx], header=header)
+            return players[winner_idx]
+        except Exception as e:
+            print(f"[روليت] تعذّر رسم العجلة الدائرية، رجعنا لأسلوب النص: {e}")
+    return await spin_wheel_on(msg, players, prefix=header + "\n")
+
+
 # ---------- روليت روسي ----------
 class RouletteView(discord.ui.View):
     def __init__(self, players: list[discord.Member]):
@@ -1114,7 +1208,7 @@ class RouletteView(discord.ui.View):
         for member in self.remaining:
             if member == self.chosen:
                 continue
-            btn = discord.ui.Button(label=member.display_name, style=discord.ButtonStyle.danger)
+            btn = discord.ui.Button(label=member.display_name, style=discord.ButtonStyle.secondary)
             btn.callback = self._make_callback(member)
             self.add_item(btn)
 
@@ -1138,23 +1232,144 @@ class RouletteView(discord.ui.View):
                 self.stop()
                 return
 
-            # العجلة تدور وتختار مين دوره يطلع وحد
+            # العجلة الدائرية تدور وتختار مين دوره يطلع وحد
             self.spinning = True
             prefix = f"💀 تم إقصاء {target.mention}!\n\n"
             await interaction.response.edit_message(content=prefix + "🎡 العجلة تدور...", view=None)
             msg = interaction.message
             try:
-                chosen = await spin_wheel_on(msg, self.remaining, prefix=prefix)
+                legend = "\n".join(f"`{i + 1}` {m.mention}" for i, m in enumerate(self.remaining))
+                chosen = await spin_and_choose(msg, self.remaining, header=prefix + "🎡 العجلة تدور...")
                 self.chosen = chosen
                 self._build_buttons()
-                names = "، ".join(m.mention for m in self.remaining)
                 await msg.edit(
-                    content=f"{prefix}🎡 الباقين: {names}\n🎯 دور {chosen.mention} يختار!", view=self)
+                    content=f"{prefix}{legend}\n\n🎯 دور {chosen.mention} يختار!", view=self)
             except discord.NotFound:
                 self.stop()
             finally:
                 self.spinning = False
         return callback
+
+
+# ---------- نظام دخول الروليت بالمقاعد المرقّمة (1 إلى 20) — خاص بالروليت بس ----------
+class RouletteSeatButton(discord.ui.Button):
+    def __init__(self, seat_number: int):
+        super().__init__(label=str(seat_number), style=discord.ButtonStyle.secondary,
+                          row=(seat_number - 1) // 5)
+        self.seat_number = seat_number
+        self.occupant: discord.Member | None = None
+
+    async def callback(self, interaction: discord.Interaction):
+        view: RouletteSeatLobbyView = self.view
+        user = interaction.user
+        if user.bot:
+            await interaction.response.send_message("⚠️ البوتات ما تنلعب.", ephemeral=True)
+            return
+
+        if self.occupant is not None:
+            if self.occupant.id == user.id:
+                # يقعد بنفس مقعده مرة ثانية = يطلع منه
+                self.occupant = None
+                self.label = str(self.seat_number)
+                view.seats.pop(self.seat_number, None)
+                await interaction.response.edit_message(content=view.status_text(), view=view)
+            else:
+                await interaction.response.send_message("❌ هذا المقعد محجوز لعضو ثاني.", ephemeral=True)
+            return
+
+        if user.id in view.taken_by_user:
+            # عنده مقعد ثاني مسبقًا — نطلعه منه ونحجز له هذا
+            old_seat_number = view.taken_by_user[user.id]
+            old_btn = view.seat_buttons.get(old_seat_number)
+            if old_btn:
+                old_btn.occupant = None
+                old_btn.label = str(old_seat_number)
+            view.seats.pop(old_seat_number, None)
+
+        if len(view.seats) >= view.max_seats:
+            await interaction.response.send_message("⚠️ كل المقاعد محجوزة.", ephemeral=True)
+            return
+
+        self.occupant = user
+        self.label = str(self.seat_number)
+        view.seats[self.seat_number] = user
+        view.taken_by_user[user.id] = self.seat_number
+        await interaction.response.edit_message(content=view.status_text(), view=view)
+
+
+class RouletteSeatLobbyView(discord.ui.View):
+    """لوبي دخول الروليت بمقاعد مرقّمة من 1 إلى 20 (زر لكل رقم، بدون ألوان تحذيرية)."""
+
+    def __init__(self, host: discord.Member, min_players: int = 3, max_seats: int = 20, countdown: int = 30):
+        super().__init__(timeout=countdown + 30)
+        self.host = host
+        self.min_players = min_players
+        self.max_seats = max_seats
+        self.countdown = countdown
+        self.seats: dict[int, discord.Member] = {}
+        self.taken_by_user: dict[int, int] = {}
+        self.seat_buttons: dict[int, RouletteSeatButton] = {}
+        self.start_event = asyncio.Event()
+        self.started = False
+
+        for n in range(1, max_seats + 1):
+            btn = RouletteSeatButton(n)
+            self.seat_buttons[n] = btn
+            self.add_item(btn)
+
+        # يحجز المضيف مقعد رقم 1 تلقائيًا
+        first_btn = self.seat_buttons[1]
+        first_btn.occupant = host
+        first_btn.label = "1"
+        self.seats[1] = host
+        self.taken_by_user[host.id] = 1
+
+    def status_text(self) -> str:
+        taken = "، ".join(f"[{n}] {m.mention}" for n, m in sorted(self.seats.items()))
+        return (
+            f"🎡 **الروليت الروسي — اختر مقعدك** ({len(self.seats)}/{self.max_seats})\n"
+            f"{taken if taken else 'ما فيه أحد لسا'}\n\n"
+            f"اضغط على رقم عشان تحجز مقعدك، واضغطه مرة ثانية عشان تطلع منه.\n"
+            f"المضيف {self.host.mention} يقدر يضغط ▶️ يبدأ عشان يبدأ مبكرًا (أدنى عدد: {self.min_players}).\n"
+            f"⏳ تبدأ تلقائيًا خلال {self.countdown} ثانية."
+        )
+
+    @discord.ui.button(label="▶️ يبدأ", style=discord.ButtonStyle.primary, row=4)
+    async def start_now(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.host:
+            await interaction.response.send_message("⚠️ بس المضيف يقدر يبدأ مبكرًا.", ephemeral=True)
+            return
+        if len(self.seats) < self.min_players:
+            await interaction.response.send_message(f"⚠️ لازم {self.min_players} لاعبين على الأقل.", ephemeral=True)
+            return
+        for c in self.children:
+            c.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.started = True
+        self.start_event.set()
+
+
+async def run_roulette_seat_lobby(ctx: commands.Context, min_players: int = 3,
+                                   max_seats: int = 20, countdown: int = 30):
+    """يفتح لوبي الروليت بنظام المقاعد المرقّمة، ويرجع قائمة اللاعبين لو اكتمل العدد الأدنى، وإلا None."""
+    if ctx.author.bot:
+        return None
+    lobby = RouletteSeatLobbyView(ctx.author, min_players, max_seats, countdown)
+    msg = await ctx.send(lobby.status_text(), view=lobby)
+    try:
+        await asyncio.wait_for(lobby.start_event.wait(), timeout=countdown)
+    except asyncio.TimeoutError:
+        pass
+    for c in lobby.children:
+        c.disabled = True
+    try:
+        await msg.edit(content=lobby.status_text(), view=lobby)
+    except discord.NotFound:
+        pass
+    if len(lobby.seats) < min_players:
+        await ctx.send(f"❌ ما اكتمل العدد الأدنى ({min_players} لاعبين) — تم إلغاء الروليت.")
+        return None
+    return [m for _, m in sorted(lobby.seats.items())]
 
 
 @bot.command(name="روليت")
@@ -1164,17 +1379,17 @@ async def roulette_cmd(ctx: commands.Context):
         return
     mark_busy(ctx.channel.id, "روليت")
     try:
-        players = await run_lobby(ctx, "🎡 الروليت الروسي", min_players=3, max_players=20, countdown=30)
+        players = await run_roulette_seat_lobby(ctx, min_players=3, max_seats=20, countdown=30)
         if not players:
             return
         view = RouletteView(players)
-        names = "، ".join(p.mention for p in players)
-        prefix = f"🎡 **بدأت اللعبة!**\n{names}\n\n"
-        msg = await ctx.send(prefix + "🎡 العجلة تدور تختار مين يبدأ...")
-        chosen = await spin_wheel_on(msg, players, prefix=prefix)
+        legend = "\n".join(f"`{i + 1}` {p.mention}" for i, p in enumerate(players))
+        header = "🎡 **بدأت اللعبة!** العجلة تدور تختار مين يبدأ..."
+        msg = await ctx.send(header)
+        chosen = await spin_and_choose(msg, players, header=header)
         view.chosen = chosen
         view._build_buttons()
-        await msg.edit(content=f"{prefix}🎯 دور {chosen.mention} يختار وحد يطلعه!", view=view)
+        await msg.edit(content=f"{header}\n{legend}\n\n🎯 دور {chosen.mention} يختار وحد يطلعه!", view=view)
         await view.wait()
     finally:
         unmark_busy(ctx.channel.id)
