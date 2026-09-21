@@ -1353,29 +1353,31 @@ class RouletteView(discord.ui.View):
                 await interaction.response.send_message("⚠️ مو دورك!", ephemeral=True)
                 return
             self.remaining.remove(target)
+            elim_text = f"💀 {interaction.user.mention} أقصى {target.mention} من اللعبة!"
             if len(self.remaining) == 1:
                 winner = self.remaining[0]
                 for c in self.children:
                     c.disabled = True
                 add_balance(interaction.guild.id, winner.id, 100)
                 await interaction.response.edit_message(
-                    content=f"💀 {interaction.user.mention} أقصى {target.mention} من اللعبة!\n\n🏆 الناجي: {winner.mention}! (+100 نقطة) 🎉", view=self
+                    content=f"🏆 الناجي: {winner.mention}! (+100 نقطة) 🎉", view=self
                 )
+                await interaction.channel.send(elim_text)
                 self.stop()
                 return
 
             # العجلة الدائرية تدور وتختار مين دوره يطلع وحد
             self.spinning = True
-            prefix = f"💀 {interaction.user.mention} أقصى {target.mention} من اللعبة!\n\n"
-            await interaction.response.edit_message(content=prefix + "🎡 العجلة تدور...", view=None)
+            await interaction.response.edit_message(content="🎡 العجلة تدور...", view=None)
             msg = interaction.message
             try:
+                await interaction.channel.send(elim_text)   # تطلع تحت رسالة الأزرار
                 legend = "\n".join(f"`{i + 1}` {m.mention}" for i, m in enumerate(self.remaining))
-                chosen = await spin_and_choose(msg, self.remaining, header=prefix + "🎡 العجلة تدور...")
+                chosen = await spin_and_choose(msg, self.remaining, header="🎡 العجلة تدور...")
                 self.chosen = chosen
                 self._build_buttons()
                 await msg.edit(
-                    content=f"{prefix}{legend}\n\n🎯 دور {chosen.mention} يختار!", view=self)
+                    content=f"{legend}\n\n🎯 دور {chosen.mention} يختار!", view=self)
             except discord.NotFound:
                 self.stop()
             finally:
@@ -1467,8 +1469,6 @@ class RouletteSeatLobbyView(discord.ui.View):
     def status_text(self) -> str:
         return (
             f"🎡 **الروليت الروسي — اختر مقعدك** ({len(self.seats)}/{self.max_seats})\n\n"
-            f"اضغط على رقم عشان تحجز مقعدك (يطلع اسمك على الزر)، وإذا تبي تنسحب اضغط 🚪 خروج.\n"
-            f"المضيف {self.host.mention} يقدر يضغط ▶️ يبدأ عشان يبدأ مبكرًا (أدنى عدد: {self.min_players}).\n"
             f"⏳ تبدأ تلقائيًا خلال {self.countdown} ثانية."
         )
 
@@ -2213,7 +2213,7 @@ async def cmd_purge(message: discord.Message, args: str):
     amount_text = args.strip().split()[0] if args.strip() else "50"
     amount = int(amount_text) if amount_text.isdigit() else 50
     amount = min(amount, 200)
-    await message.delete()
+    await cleanup(message)
     deleted = await message.channel.purge(limit=amount)
     await reply(message, f"🧹 تم حذف {len(deleted)} رسالة.")
 
@@ -2413,7 +2413,6 @@ async def try_dispatch_admin_command(message: discord.Message) -> bool:
         if content == trigger or content.startswith(trigger + " "):
             allowed_roles, handler = ADMIN_COMMANDS[trigger]
             if not isinstance(message.author, discord.Member) or not has_role(message.author, allowed_roles):
-                await cleanup(message)
                 await reply(message, f"{message.author.mention} ❌ ما عندك صلاحية لهذا الأمر.")
                 return True
             args = content[len(trigger):].strip()
