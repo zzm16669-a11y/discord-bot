@@ -1,4 +1,17 @@
-"""
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is active and running!")
+
+def run_web_server():
+    server_address = ('0.0.0.0', 10000)
+    httpd = HTTPServer(server_address, SimpleHandler)
+    httpd.serve_forever()
 بوت ديسكورد شامل — نسخة كاملة مدموجة (مع مركز الألعاب الموسّع)
 =====================================================================
 الأقسام:
@@ -50,13 +63,14 @@ ROLES_REMOVED_FILE = "removed_roles.json"
 
 JAIL_ROLE_NAME = "Jailed"
 MUTE_ROLE_NAME = "Muted"
+WARN_LOG_CHANNEL_NAMES = ["warn-log", "توثيق-التنبيهات", "سجل-التنبيهات", "تنبيهات-اللوق", "log-تنبيهات"]
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 intents.voice_states = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix=".", intents=intents)
 
 
 # ============================================================
@@ -103,29 +117,60 @@ def get_warn_count(guild_id: int, member_id: int) -> int:
     return len(data.get(str(guild_id), {}).get(str(member_id), []))
 
 
-async def send_warn_log(target, moderator, reason, warn_number, channel_name):
-    if not WARN_LOG_WEBHOOK_URL:
-        return
-    embed = {
-        "title": "⚠️ تم تسجيل تنبيه رسمي",
-        "color": 0xE67E22,
-        "fields": [
-            {"name": "العضو", "value": target.mention, "inline": True},
-            {"name": "بواسطة", "value": moderator.mention, "inline": True},
-            {"name": "رقم التنبيه", "value": f"#{warn_number}", "inline": True},
-            {"name": "السبب", "value": reason or "لم يُذكر سبب", "inline": False},
-            {"name": "القناة", "value": f"#{channel_name}", "inline": True},
-        ],
-        "footer": {"text": f"معرف العضو: {target.id}"},
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+def find_warn_log_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    """يدور على روم مخصص للوق التنبيهات بالاسم (يتحمل حروف كبيرة/صغيرة ومسافات/شرطات)."""
+    for ch in guild.text_channels:
+        normalized_name = ch.name.lower().replace("_", "-")
+        for target_name in WARN_LOG_CHANNEL_NAMES:
+            if target_name.lower() in normalized_name:
+                return ch
+    return None
+
+
+async def send_warn_log(guild: discord.Guild, target, moderator, reason, warn_number, channel_name):
+    """يرسل لوق التنبيه لروم مخصص — عبر الويب هوك أولًا، وإذا ما نجح يرسله مباشرة عبر البوت لروم اللوق."""
+    embed = discord.Embed(
+        title="⚠️ تم تسجيل تنبيه رسمي",
+        color=discord.Color.orange(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="العضو", value=target.mention, inline=True)
+    embed.add_field(name="بواسطة", value=moderator.mention, inline=True)
+    embed.add_field(name="رقم التنبيه", value=f"#{warn_number}", inline=True)
+    embed.add_field(name="السبب", value=reason or "لم يُذكر سبب", inline=False)
+    embed.add_field(name="القناة", value=f"#{channel_name}", inline=True)
+    embed.set_footer(text=f"معرف العضو: {target.id}")
     if target.display_avatar:
-        embed["thumbnail"] = {"url": target.display_avatar.url}
-    payload = {"username": "نظام التنبيهات", "embeds": [embed]}
-    async with aiohttp.ClientSession() as session:
-        async with session.post(WARN_LOG_WEBHOOK_URL, json=payload) as resp:
-            if resp.status not in (200, 204):
-                print(f"[WarnSystem] فشل إرسال الويب هوك: {resp.status}")
+        embed.set_thumbnail(url=target.display_avatar.url)
+
+    delivered = False
+
+    if WARN_LOG_WEBHOOK_URL:
+        payload = {
+            "username": "نظام التنبيهات",
+            "embeds": [embed.to_dict()],
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(WARN_LOG_WEBHOOK_URL, json=payload) as resp:
+                    if resp.status in (200, 204):
+                        delivered = True
+                    else:
+                        print(f"[WarnSystem] فشل إرسال الويب هوك: {resp.status}")
+        except Exception as e:
+            print(f"[WarnSystem] خطأ بالويب هوك: {e}")
+
+    if not delivered:
+        log_channel = find_warn_log_channel(guild)
+        if log_channel:
+            try:
+                await log_channel.send(embed=embed)
+                delivered = True
+            except discord.Forbidden:
+                print("[WarnSystem] ما عندي صلاحية أرسل بروم اللوق.")
+
+    if not delivered:
+        print("[WarnSystem] ⚠️ ما قدرت أوصل لوق التنبيه — لا الويب هوك اشتغل ولا لقيت روم اسمه warn-log.")
 
 
 async def handle_warn_command(message: discord.Message):
@@ -160,7 +205,7 @@ async def handle_warn_command(message: discord.Message):
         pass
 
     warn_number = add_warn(message.guild.id, target.id, reason, author.id)
-    await send_warn_log(target, author, reason, warn_number, message.channel.name)
+    await send_warn_log(message.guild, target, author, reason, warn_number, message.channel.name)
     await message.channel.send(f"✅ تسجل تنبيه رقم **#{warn_number}** بحق {target.mention}", delete_after=6)
 
 
@@ -252,18 +297,40 @@ def normalize(text: str) -> str:
 active_rounds: dict[int, dict] = {}   # channel_id -> بيانات الجولة الحالية
 _round_id_counter = itertools.count()
 
+# ---------- قفل عام يمنع تداخل الألعاب: روم واحد = لعبة وحدة بنفس اللحظة ----------
+active_channel_games: dict[int, str] = {}  # channel_id -> اسم اللعبة الشغالة
+
+
+def is_channel_busy(channel_id: int) -> bool:
+    return channel_id in active_channel_games
+
+
+def mark_busy(channel_id: int, game_name: str) -> None:
+    active_channel_games[channel_id] = game_name
+
+
+def unmark_busy(channel_id: int) -> None:
+    active_channel_games.pop(channel_id, None)
+
+
+async def warn_busy(ctx: commands.Context) -> None:
+    name = active_channel_games.get(ctx.channel.id, "لعبة")
+    await ctx.send(f"⚠️ فيه **{name}** شغالة بهذا الروم حاليًا، خلصوها الأول قبل لعبة ثانية.")
+
 
 async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 40),
                        allowed_ids: set | None = None, timeout: int = 45, reveal: str = ""):
     """يبدأ جولة سؤال/جواب بالروم. أول رسالة تطابق checker تفوز."""
-    if channel.id in active_rounds:
-        await channel.send("⚠️ فيه لعبة شغالة بهذا الروم حاليًا، خلصوها الأول.")
+    if channel.id in active_rounds or is_channel_busy(channel.id):
+        busy_name = active_channel_games.get(channel.id, title)
+        await channel.send(f"⚠️ فيه **{busy_name}** شغالة بهذا الروم حاليًا، خلصوها الأول.")
         return
     token = next(_round_id_counter)
     active_rounds[channel.id] = {
         "checker": checker, "reward": reward,
         "allowed_ids": allowed_ids, "token": token, "reveal": reveal,
     }
+    mark_busy(channel.id, title)
     await channel.send(f"🎯 **{title}**\n{prompt}")
 
     async def _timeout_watcher():
@@ -271,6 +338,7 @@ async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 
         current = active_rounds.get(channel.id)
         if current and current.get("token") == token:
             del active_rounds[channel.id]
+            unmark_busy(channel.id)
             extra = f" الإجابة كانت: **{reveal}**" if reveal else ""
             await channel.send(f"⏳ خلص الوقت!{extra}")
 
@@ -464,14 +532,15 @@ active_guess_games: dict[int, dict] = {}
 
 @bot.command(name="خمن", aliases=["تخمين"])
 async def guess_start(ctx: commands.Context, max_number: int = 100):
-    if ctx.channel.id in active_guess_games:
-        await ctx.send("⚠️ فيه لعبة تخمين شغالة هنا.")
+    if ctx.channel.id in active_guess_games or is_channel_busy(ctx.channel.id):
+        await warn_busy(ctx)
         return
     if max_number < 10:
         await ctx.send("⚠️ اختر رقم أقصى 10 أو أكثر.")
         return
     number = random.randint(1, max_number)
     active_guess_games[ctx.channel.id] = {"number": number, "max": max_number}
+    mark_busy(ctx.channel.id, "خمن (تخمين رقم)")
     await ctx.send(f"🔢 اخترت رقم سري بين **1** و **{max_number}**! اكتبوا تخمينكم.")
 
 
@@ -511,20 +580,27 @@ class ReflexView(discord.ui.View):
 
 @bot.command(name="زر")
 async def button_game_cmd(ctx: commands.Context):
-    view = ReflexView()
-    msg = await ctx.send("🔴 استعدوا... اضغطوا الزر أول ما يصير أخضر!", view=view)
-    await asyncio.sleep(random.uniform(2, 6))
-    if view.is_finished():
+    if is_channel_busy(ctx.channel.id):
+        await warn_busy(ctx)
         return
-    view.ready = True
-    view.ready_time = datetime.now(timezone.utc)
-    view.button.disabled = False
-    view.button.label = "🟢 اضغط الآن!"
-    view.button.style = discord.ButtonStyle.success
+    mark_busy(ctx.channel.id, "زر السرعة")
     try:
-        await msg.edit(content="🟢 دورك! اضغط بسرعة!", view=view)
-    except discord.NotFound:
-        pass
+        view = ReflexView()
+        msg = await ctx.send("🔴 استعدوا... اضغطوا الزر أول ما يصير أخضر!", view=view)
+        await asyncio.sleep(random.uniform(2, 6))
+        if not view.is_finished():
+            view.ready = True
+            view.ready_time = datetime.now(timezone.utc)
+            view.button.disabled = False
+            view.button.label = "🟢 اضغط الآن!"
+            view.button.style = discord.ButtonStyle.success
+            try:
+                await msg.edit(content="🟢 دورك! اضغط بسرعة!", view=view)
+            except discord.NotFound:
+                pass
+        await view.wait()
+    finally:
+        unmark_busy(ctx.channel.id)
 
 
 class MemoryButton(discord.ui.Button):
@@ -594,13 +670,77 @@ class MemoryView(discord.ui.View):
 
 @bot.command(name="اكشف")
 async def memory_game_cmd(ctx: commands.Context):
-    view = MemoryView(ctx.author)
-    await ctx.send(f"🧠 {ctx.author.mention} لعبة الذاكرة! دور بطاقتين متطابقتين لين تلقى كل الأزواج.", view=view)
+    if is_channel_busy(ctx.channel.id):
+        await warn_busy(ctx)
+        return
+    mark_busy(ctx.channel.id, "اكشف (لعبة الذاكرة)")
+    try:
+        view = MemoryView(ctx.author)
+        await ctx.send(f"🧠 {ctx.author.mention} لعبة الذاكرة! دور بطاقتين متطابقتين لين تلقى كل الأزواج.", view=view)
+        await view.wait()
+    finally:
+        unmark_busy(ctx.channel.id)
 
 
 # ============================================================
-# 7) ألعاب التحدي المباشر (شخص ضد شخص)
+# 7) ألعاب التحدي المباشر (شخص ضد شخص) — تبدأ بدعوة قبول/رفض
 # ============================================================
+class ChallengeView(discord.ui.View):
+    """رسالة تحدي فيها زرين: موافقة / رفض، موجهة للخصم المذكور بس."""
+
+    def __init__(self, host: discord.Member, opponent: discord.Member, game_name: str):
+        super().__init__(timeout=60)
+        self.host = host
+        self.opponent = opponent
+        self.game_name = game_name
+        self.result: bool | None = None  # None = ما رد بعد، True = وافق، False = رفض
+        self.message: discord.Message | None = None
+
+    @discord.ui.button(label="✅ موافقة", style=discord.ButtonStyle.success)
+    async def accept(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.opponent:
+            await interaction.response.send_message("⚠️ هذا التحدي مو لك.", ephemeral=True)
+            return
+        self.result = True
+        for c in self.children:
+            c.disabled = True
+        await interaction.response.edit_message(
+            content=f"✅ {self.opponent.mention} وافق على تحدي **{self.game_name}**! يبدأ الحين...", view=self)
+        self.stop()
+
+    @discord.ui.button(label="❌ رفض", style=discord.ButtonStyle.danger)
+    async def decline(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.opponent:
+            await interaction.response.send_message("⚠️ هذا التحدي مو لك.", ephemeral=True)
+            return
+        self.result = False
+        for c in self.children:
+            c.disabled = True
+        await interaction.response.edit_message(
+            content=f"❌ {self.opponent.mention} رفض تحدي **{self.game_name}**.", view=self)
+        self.stop()
+
+    async def on_timeout(self):
+        if self.result is None and self.message:
+            for c in self.children:
+                c.disabled = True
+            try:
+                await self.message.edit(
+                    content=f"⏳ خلص الوقت! {self.opponent.mention} ما رد على تحدي **{self.game_name}**.", view=self)
+            except discord.NotFound:
+                pass
+
+
+async def send_challenge(ctx: commands.Context, opponent: discord.Member, game_name: str) -> bool:
+    """يرسل دعوة تحدي للخصم وينتظر رده. يرجع True لو وافق، False لو رفض أو ما رد."""
+    view = ChallengeView(ctx.author, opponent, game_name)
+    msg = await ctx.send(
+        f"⚔️ {ctx.author.mention} يتحداك يا {opponent.mention} بلعبة **{game_name}**! تبي تلعب؟", view=view)
+    view.message = msg
+    await view.wait()
+    return view.result is True
+
+
 class TicTacToeButton(discord.ui.Button):
     def __init__(self, x: int, y: int):
         super().__init__(style=discord.ButtonStyle.secondary, label="\u200b", row=y)
@@ -671,8 +811,21 @@ async def xo_cmd(ctx: commands.Context, opponent: discord.Member):
     if opponent.bot or opponent == ctx.author:
         await ctx.send("⚠️ اختر عضو ثاني حقيقي غيرك.")
         return
-    view = TicTacToeView(ctx.author, opponent)
-    await ctx.send(f"🎮 **XO**: {ctx.author.mention} (X) ضد {opponent.mention} (O)\n🎯 دور {ctx.author.mention}", view=view)
+    if is_channel_busy(ctx.channel.id):
+        await warn_busy(ctx)
+        return
+    mark_busy(ctx.channel.id, "XO")
+    try:
+        accepted = await send_challenge(ctx, opponent, "XO")
+        if not accepted:
+            return
+        view = TicTacToeView(ctx.author, opponent)
+        await ctx.send(
+            f"🎮 **XO**: {ctx.author.mention} (X) ضد {opponent.mention} (O)\n🎯 دور {ctx.author.mention}", view=view
+        )
+        await view.wait()
+    finally:
+        unmark_busy(ctx.channel.id)
 
 
 class RPSView(discord.ui.View):
@@ -733,8 +886,21 @@ async def rps_cmd(ctx: commands.Context, opponent: discord.Member):
     if opponent.bot or opponent == ctx.author:
         await ctx.send("⚠️ اختر عضو ثاني حقيقي غيرك.")
         return
-    view = RPSView(ctx.author, opponent)
-    await ctx.send(f"✂️ **حجرة ورقة مقص**: {ctx.author.mention} ضد {opponent.mention}\nكل واحد يضغط بالخفاء 👇", view=view)
+    if is_channel_busy(ctx.channel.id):
+        await warn_busy(ctx)
+        return
+    mark_busy(ctx.channel.id, "حجرة ورقة مقص")
+    try:
+        accepted = await send_challenge(ctx, opponent, "حجرة ورقة مقص")
+        if not accepted:
+            return
+        view = RPSView(ctx.author, opponent)
+        await ctx.send(
+            f"✂️ **حجرة ورقة مقص**: {ctx.author.mention} ضد {opponent.mention}\nكل واحد يضغط بالخفاء 👇", view=view
+        )
+        await view.wait()
+    finally:
+        unmark_busy(ctx.channel.id)
 
 
 # ============================================================
@@ -873,50 +1039,83 @@ class RouletteView(discord.ui.View):
 
 @bot.command(name="روليت")
 async def roulette_cmd(ctx: commands.Context):
-    players = await run_lobby(ctx, "🎡 الروليت الروسي", min_players=3, max_players=20, countdown=30)
-    if not players:
+    if is_channel_busy(ctx.channel.id):
+        await warn_busy(ctx)
         return
-    view = RouletteView(players)
-    view.chosen = random.choice(players)
-    view._build_buttons()
-    names = "، ".join(p.mention for p in players)
-    await ctx.send(f"🎡 **بدأت اللعبة!**\n{names}\n\n🎯 دور {view.chosen.mention} يختار وحد يطلعه!", view=view)
+    mark_busy(ctx.channel.id, "روليت")
+    try:
+        players = await run_lobby(ctx, "🎡 الروليت الروسي", min_players=3, max_players=20, countdown=30)
+        if not players:
+            return
+        view = RouletteView(players)
+        view.chosen = random.choice(players)
+        view._build_buttons()
+        names = "، ".join(p.mention for p in players)
+        await ctx.send(f"🎡 **بدأت اللعبة!**\n{names}\n\n🎯 دور {view.chosen.mention} يختار وحد يطلعه!", view=view)
+        await view.wait()
+    finally:
+        unmark_busy(ctx.channel.id)
 
 
 # ---------- نرد ----------
 @bot.command(name="نرد")
 async def dice_cmd(ctx: commands.Context):
-    players = await run_lobby(ctx, "🎲 لعبة النرد", min_players=2, max_players=20, countdown=30)
-    if not players:
+    if is_channel_busy(ctx.channel.id):
+        await warn_busy(ctx)
         return
-    rolls = {p: random.randint(1, 6) for p in players}
-    top = max(rolls.values())
-    winners = [p for p in players if rolls[p] == top]
-    lines = "\n".join(f"{p.mention}: 🎲 {rolls[p]}" for p in players)
-    for w in winners:
-        add_balance(ctx.guild.id, w.id, 60)
-    winners_text = " و ".join(w.mention for w in winners)
-    extra = " لكل واحد" if len(winners) > 1 else ""
-    await ctx.send(f"🎲 **نتائج الرمي:**\n{lines}\n\n🏆 الفائز: {winners_text} (+60 نقطة{extra})")
+    mark_busy(ctx.channel.id, "نرد")
+    try:
+        players = await run_lobby(ctx, "🎲 لعبة النرد", min_players=2, max_players=20, countdown=30)
+        if not players:
+            return
+        rolls = {p: random.randint(1, 6) for p in players}
+        top = max(rolls.values())
+        winners = [p for p in players if rolls[p] == top]
+        lines = "\n".join(f"{p.mention}: 🎲 {rolls[p]}" for p in players)
+        for w in winners:
+            add_balance(ctx.guild.id, w.id, 60)
+        winners_text = " و ".join(w.mention for w in winners)
+        extra = " لكل واحد" if len(winners) > 1 else ""
+        await ctx.send(f"🎲 **نتائج الرمي:**\n{lines}\n\n🏆 الفائز: {winners_text} (+60 نقطة{extra})")
+    finally:
+        unmark_busy(ctx.channel.id)
 
 
 # ---------- عجلة الحظ ----------
 @bot.command(name="عجلة")
 async def wheel_cmd(ctx: commands.Context):
-    players = await run_lobby(ctx, "🎡 عجلة الحظ", min_players=2, max_players=20, countdown=30)
-    if not players:
+    if is_channel_busy(ctx.channel.id):
+        await warn_busy(ctx)
         return
-    msg = await ctx.send("🎡 العجلة تدور...")
-    await asyncio.sleep(2)
-    winner = random.choice(players)
-    pts = random.randint(50, 150)
-    add_balance(ctx.guild.id, winner.id, pts)
-    await msg.edit(content=f"🎡 توقفت العجلة عند... 🎉 {winner.mention}! (+{pts} نقطة)")
+    mark_busy(ctx.channel.id, "عجلة الحظ")
+    try:
+        players = await run_lobby(ctx, "🎡 عجلة الحظ", min_players=2, max_players=20, countdown=30)
+        if not players:
+            return
+        msg = await ctx.send("🎡 العجلة تدور...")
+        await asyncio.sleep(2)
+        winner = random.choice(players)
+        pts = random.randint(50, 150)
+        add_balance(ctx.guild.id, winner.id, pts)
+        await msg.edit(content=f"🎡 توقفت العجلة عند... 🎉 {winner.mention}! (+{pts} نقطة)")
+    finally:
+        unmark_busy(ctx.channel.id)
 
 
 # ---------- غميضة ----------
 @bot.command(name="غميضة")
 async def hideseek_cmd(ctx: commands.Context):
+    if is_channel_busy(ctx.channel.id):
+        await warn_busy(ctx)
+        return
+    mark_busy(ctx.channel.id, "غميضة")
+    try:
+        await _run_hideseek(ctx)
+    finally:
+        unmark_busy(ctx.channel.id)
+
+
+async def _run_hideseek(ctx: commands.Context):
     players = await run_lobby(ctx, "🙈 غميضة", min_players=3, max_players=20, countdown=30)
     if not players:
         return
@@ -964,8 +1163,13 @@ async def hideseek_cmd(ctx: commands.Context):
 # ---------- ريبلكا (احفظ الترتيب) ----------
 @bot.command(name="ريبلكا")
 async def replica_cmd(ctx: commands.Context):
+    if is_channel_busy(ctx.channel.id):
+        await warn_busy(ctx)
+        return
+    mark_busy(ctx.channel.id, "ريبلكا (احفظ الترتيب)")
     players = await run_lobby(ctx, "🔁 ريبلكا (احفظ الترتيب)", min_players=2, max_players=20, countdown=30)
     if not players:
+        unmark_busy(ctx.channel.id)
         return
     pool = ["🔥", "💧", "🌪️", "🌙", "⭐", "🍀", "⚡", "🎵", "🎯", "🧩"]
     sequence = random.sample(pool, k=5)
@@ -977,6 +1181,7 @@ async def replica_cmd(ctx: commands.Context):
     except discord.NotFound:
         pass
     allowed = {p.id for p in players}
+    unmark_busy(ctx.channel.id)  # نسلّم القفل لنظام الجولة اللي بيدير حالته بنفسه لين الحل أو انتهاء الوقت
     await start_round(ctx.channel, title="ريبلكا", prompt="اكتبوا الترتيب اللي حفظتوه 👆",
                        checker=lambda c: normalize(c) == normalize(seq_text),
                        reward=(60, 100), allowed_ids=allowed, timeout=30, reveal=seq_text)
@@ -985,6 +1190,17 @@ async def replica_cmd(ctx: commands.Context):
 # ---------- مافيا (نسخة مبسطة: جولة تصويت وحدة) ----------
 @bot.command(name="مافيا")
 async def mafia_cmd(ctx: commands.Context):
+    if is_channel_busy(ctx.channel.id):
+        await warn_busy(ctx)
+        return
+    mark_busy(ctx.channel.id, "مافيا")
+    try:
+        await _run_mafia(ctx)
+    finally:
+        unmark_busy(ctx.channel.id)
+
+
+async def _run_mafia(ctx: commands.Context):
     players = await run_lobby(ctx, "🕵️ مافيا", min_players=4, max_players=20, countdown=30)
     if not players:
         return
@@ -1075,6 +1291,17 @@ class ChairsView(discord.ui.View):
 
 @bot.command(name="كراسي")
 async def chairs_cmd(ctx: commands.Context):
+    if is_channel_busy(ctx.channel.id):
+        await warn_busy(ctx)
+        return
+    mark_busy(ctx.channel.id, "كراسي")
+    try:
+        await _run_chairs(ctx)
+    finally:
+        unmark_busy(ctx.channel.id)
+
+
+async def _run_chairs(ctx: commands.Context):
     players = await run_lobby(ctx, "🪑 الكراسي الموسيقية", min_players=3, max_players=20, countdown=30)
     if not players:
         return
@@ -1108,31 +1335,31 @@ async def chairs_cmd(ctx: commands.Context):
 # ============================================================
 GAME_LIST = {
     "جماعية": [
-        ("!روليت", "روليت روسي: يقصّون بعض لين يبقى ناجي وحد."),
-        ("!xo @خصمك", "اكس أو بينك وبين خصم تحدده."),
-        ("!مافيا", "مافيا مبسّطة: تصويت جولة وحدة تحدد الفايز."),
-        ("!كراسي", "الكراسي الموسيقية بالأزرار."),
-        ("!حجرة @خصمك", "حجرة ورقة مقص بينك وبين خصم."),
-        ("!نرد", "كل واحد يرمي نرد، الأعلى يفوز."),
-        ("!عجلة", "عجلة حظ تختار فايز عشوائي."),
-        ("!غميضة", "وحد يبحث عن الباقين المختبئين بأرقام."),
-        ("!ريبلكا", "احفظوا ترتيب الرموز واكتبوه صح."),
-        ("!خمن [أقصى رقم]", "تخمين رقم سري بالشات."),
-        ("!كلمة", "قول كلمة تبدأ بآخر حرف من الكلمة المعطاة."),
+        (".روليت", "روليت روسي: يقصّون بعض لين يبقى ناجي وحد."),
+        (".xo @خصمك", "اكس أو بينك وبين خصم تحدده."),
+        (".مافيا", "مافيا مبسّطة: تصويت جولة وحدة تحدد الفايز."),
+        (".كراسي", "الكراسي الموسيقية بالأزرار."),
+        (".حجرة @خصمك", "حجرة ورقة مقص بينك وبين خصم."),
+        (".نرد", "كل واحد يرمي نرد، الأعلى يفوز."),
+        (".عجلة", "عجلة حظ تختار فايز عشوائي."),
+        (".غميضة", "وحد يبحث عن الباقين المختبئين بأرقام."),
+        (".ريبلكا", "احفظوا ترتيب الرموز واكتبوه صح."),
+        (".خمن [أقصى رقم]", "تخمين رقم سري بالشات."),
+        (".كلمة", "قول كلمة تبدأ بآخر حرف من الكلمة المعطاة."),
     ],
     "فردية": [
-        ("!زر", "اضغط الزر أول ما يصير أخضر."),
-        ("!اسرع", "أعد كتابة الجملة بأسرع وقت."),
-        ("!فكك", "رتب حروف الكلمة المبعثرة."),
-        ("!ادمج", "خمن الكلمة من دمج رمزين."),
-        ("!اعلام", "خمن الدولة من علمها."),
-        ("!اعكس", "اكتب الكلمة بالعكس."),
-        ("!حرف", "اذكر كلمة بالفئة المطلوبة تبدأ بحرف معين."),
-        ("!صحح", "صحح الكلمة المكتوبة غلط."),
-        ("!ترتيب", "رتب الأرقام تصاعديًا."),
-        ("!الوان", "خمن اللون من الرمز."),
-        ("!ايموجي", "خمن الكلمة من الرمز التعبيري."),
-        ("!اكشف", "لعبة الذاكرة، طابق البطاقات."),
+        (".زر", "اضغط الزر أول ما يصير أخضر."),
+        (".اسرع", "أعد كتابة الجملة بأسرع وقت."),
+        (".فكك", "رتب حروف الكلمة المبعثرة."),
+        (".ادمج", "خمن الكلمة من دمج رمزين."),
+        (".اعلام", "خمن الدولة من علمها."),
+        (".اعكس", "اكتب الكلمة بالعكس."),
+        (".حرف", "اذكر كلمة بالفئة المطلوبة تبدأ بحرف معين."),
+        (".صحح", "صحح الكلمة المكتوبة غلط."),
+        (".ترتيب", "رتب الأرقام تصاعديًا."),
+        (".الوان", "خمن اللون من الرمز."),
+        (".ايموجي", "خمن الكلمة من الرمز التعبيري."),
+        (".اكشف", "لعبة الذاكرة، طابق البطاقات."),
     ],
 }
 
@@ -1171,19 +1398,19 @@ async def games_list_cmd(ctx: commands.Context):
     lines.append("\n__ألعاب فردية__")
     for cmd, desc in GAME_LIST["فردية"]:
         lines.append(f"`{cmd}` — {desc}")
-    lines.append("\n⭐ اكتب `!نقاطي` عشان تشوف رصيدك.")
-    lines.append("📖 اكتب `!شرح اسم_اللعبة` (بدون علامة !) عشان أشرحلك أي لعبة بالتفصيل.")
+    lines.append("\n⭐ اكتب `.نقاطي` عشان تشوف رصيدك.")
+    lines.append("📖 اكتب `.شرح اسم_اللعبة` (بدون النقطة داخل الاسم) عشان أشرحلك أي لعبة بالتفصيل.")
     await ctx.send("\n".join(lines))
 
 
 @bot.command(name="شرح")
 async def explain_cmd(ctx: commands.Context, *, game_name: str = None):
     if not game_name:
-        await ctx.send("⚠️ اكتب: `!شرح اسم اللعبة` — مثال: `!شرح روليت`")
+        await ctx.send("⚠️ اكتب: `.شرح اسم اللعبة` — مثال: `.شرح روليت`")
         return
     key = game_name.strip()
     if key not in GAME_HELP:
-        await ctx.send("⚠️ ما لقيت هذي اللعبة بالاسم ذا، اكتب `!العاب` عشان تشوف القائمة والأسماء الصحيحة.")
+        await ctx.send("⚠️ ما لقيت هذي اللعبة بالاسم ذا، اكتب `.العاب` عشان تشوف القائمة والأسماء الصحيحة.")
         return
     await ctx.send(f"📖 **{key}**:\n{GAME_HELP[key]}")
 
@@ -1682,6 +1909,7 @@ async def on_message(message: discord.Message):
             add_balance(message.guild.id, message.author.id, reward)
             await message.channel.send(f"🎉 {message.author.mention} عرف الرقم **{game['number']}**! (+{reward} نقطة)")
             del active_guess_games[message.channel.id]
+            unmark_busy(message.channel.id)
         elif 0 < guess < game["number"]:
             await message.add_reaction("⬆️")
         elif guess > game["number"]:
@@ -1698,6 +1926,7 @@ async def on_message(message: discord.Message):
                 is_correct = False
             if is_correct and active_rounds.get(message.channel.id, {}).get("token") == round_info["token"]:
                 del active_rounds[message.channel.id]
+                unmark_busy(message.channel.id)
                 lo, hi = round_info["reward"]
                 pts = random.randint(lo, hi)
                 add_balance(message.guild.id, message.author.id, pts)
@@ -1718,7 +1947,7 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
     if isinstance(error, commands.MemberNotFound):
         await ctx.send("⚠️ ما لقيت هذا العضو — تأكد إنك تعمل منشن حقيقي (@) من قائمة الاقتراحات.")
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"⚠️ ناقص معطى بالأمر. مثال صحيح: `!{ctx.command.name} @عضو`")
+        await ctx.send(f"⚠️ ناقص معطى بالأمر. مثال صحيح: `.{ctx.command.name} @عضو`")
     elif isinstance(error, commands.BadArgument):
         await ctx.send("⚠️ صيغة الأمر غلط، تأكد من كتابته صح.")
     elif isinstance(error, commands.CommandNotFound):
@@ -1726,25 +1955,6 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
     else:
         print(f"[خطأ غير متوقع] {error}")
         await ctx.send("❌ صار خطأ غير متوقع أثناء تنفيذ الأمر.")
-
-
-# ============================================================
-# خادم الويب الوهمي لمنصة Render (لبقاء البوت شغالاً 24/7)
-# ============================================================
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
-
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"Bot is active and running!")
-
-def run_web_server():
-    server_address = ('0.0.0.0', 10000)
-    httpd = HTTPServer(server_address, SimpleHandler)
-    httpd.serve_forever()
 
 
 if __name__ == "__main__":
