@@ -1,20 +1,6 @@
 """
-بوت ديسكورد شامل — نسخة كاملة مدموجة
+بوت ديسكورد شامل — نسخة كاملة مدموجة ومنظمة مع خادم الويب لمنصة Render
 =====================================================================
-الأقسام:
-  1) نظام التنبيهات (تنبيه)
-  2) نظام الاقتصاد (رصيد / يومي / تحويل)
-  3) الألعاب (اكسو، حجرة ورقة مقص، تخمين، روليت)
-  4) نظام الإدارة الكامل (أعضاء / رومات / صوت) — بدون بريفكس، حسب الرتب
-
-ملاحظات مهمة قبل التشغيل:
-  - غيّر أسماء الرتب بالأسفل (ROLE NAMES) إذا كانت أسماء رتبك بالسيرفر
-    مختلفة شوي عن الأسماء المكتوبة هنا (لازم تطابق بالضبط حرف بحرف).
-  - لازم تسوي رتبتين يدويًا بالسيرفر عشان "سجن" و"اخرس" يشتغلوا صح:
-        * رتبة اسمها بالضبط: Jailed  (احجب عنها كل الرومات إلا روم السجن)
-        * رتبة اسمها بالضبط: Muted   (احجب عنها إرسال الرسائل بكل الرومات)
-    لو ما كانت موجودة، البوت بينشئها تلقائيًا لكن بدون صلاحيات محجوبة —
-    لازم تظبط صلاحياتها يدويًا من إعدادات السيرفر أول مرة.
 """
 
 import discord
@@ -24,12 +10,15 @@ import json
 import os
 import re
 import random
+import asyncio
 from datetime import datetime, timezone, timedelta
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 from dotenv import load_dotenv
 
 load_dotenv()
 
-DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "")
 WARN_LOG_WEBHOOK_URL = os.environ.get("WARN_WEBHOOK_URL", "")
 
 WARNS_FILE = "warns.json"
@@ -46,6 +35,22 @@ intents.members = True
 intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+# ============================================================
+# خادم الويب الوهمي الخاص بمنصة Render (لإبقاء البوت أونلاين)
+# ============================================================
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is active and running!")
+
+def run_web_server():
+    server_address = ('0.0.0.0', 10000)
+    httpd = HTTPServer(server_address, SimpleHandler)
+    httpd.serve_forever()
 
 
 # ============================================================
@@ -117,40 +122,23 @@ async def send_warn_log(target, moderator, reason, warn_number, channel_name):
                 print(f"[WarnSystem] فشل إرسال الويب هوك: {resp.status}")
 
 
-async def handle_warn_command(message: discord.Message):
-    author = message.author
-    if not isinstance(author, discord.Member) or not getattr(
-        author.guild_permissions, REQUIRED_WARN_PERMISSION
-    ):
-        try:
-            await message.delete()
-        except discord.Forbidden:
-            pass
-        await message.channel.send(f"{author.mention} ❌ ليس لديك صلاحية.", delete_after=6)
+@bot.command(name="تنبيه")
+async def warn_prefix_cmd(ctx: commands.Context, member: discord.Member = None, *, reason: str = "لم يُذكر سبب"):
+    if not isinstance(ctx.author, discord.Member) or not getattr(ctx.author.guild_permissions, REQUIRED_WARN_PERMISSION, False):
+        await ctx.message.delete()
+        await ctx.send(f"{ctx.author.mention} ❌ ليس لديك صلاحية.", delete_after=6)
         return
-
-    if not message.mentions:
-        try:
-            await message.delete()
-        except discord.Forbidden:
-            pass
-        await message.channel.send(f"{author.mention} ⚠️ الصيغة: `تنبيه @العضو السبب`", delete_after=6)
+    if not member:
+        await ctx.message.delete()
+        await ctx.send(f"{ctx.author.mention} ⚠️ الصيغة: `!تنبيه @العضو السبب`", delete_after=6)
         return
-
-    target = message.mentions[0]
-    reason = message.content.replace("تنبيه", "", 1)
-    for m in message.mentions:
-        reason = reason.replace(f"<@{m.id}>", "").replace(f"<@!{m.id}>", "")
-    reason = reason.strip() or "لم يُذكر سبب"
-
     try:
-        await message.delete()
-    except (discord.Forbidden, discord.NotFound):
+        await ctx.message.delete()
+    except Exception:
         pass
-
-    warn_number = add_warn(message.guild.id, target.id, reason, author.id)
-    await send_warn_log(target, author, reason, warn_number, message.channel.name)
-    await message.channel.send(f"✅ تسجل تنبيه رقم **#{warn_number}** بحق {target.mention}", delete_after=6)
+    warn_number = add_warn(ctx.guild.id, member.id, reason, ctx.author.id)
+    await send_warn_log(member, ctx.author, reason, warn_number, ctx.channel.name)
+    await ctx.send(f"✅ تسجل تنبيه رقم **#{warn_number}** بحق {member.mention}", delete_after=6)
 
 
 @bot.command(name="تنبيهاته", aliases=["warns"])
@@ -161,7 +149,7 @@ async def show_warns(ctx: commands.Context, member: discord.Member = None):
 
 
 # ============================================================
-# 2) نظام الاقتصاد
+# 2) نظام الاقتصاد والنقاط
 # ============================================================
 def get_balance(guild_id: int, user_id: int) -> int:
     data = load_json(ECONOMY_FILE)
@@ -177,10 +165,11 @@ def add_balance(guild_id: int, user_id: int, amount: int) -> int:
     return data[gid][uid]
 
 
-@bot.command(name="رصيد")
+@bot.command(name="رصيد", aliases=["نقاطي"])
 async def balance_cmd(ctx: commands.Context, member: discord.Member = None):
     member = member or ctx.author
-    await ctx.send(f"💰 رصيد {member.mention}: **{get_balance(ctx.guild.id, member.id)}** نقطة")
+    bal = get_balance(ctx.guild.id, member.id)
+    await ctx.send(f"💰 رصيد (نقاط) {member.mention}: **{bal}** نقطة")
 
 
 @bot.command(name="يومي")
@@ -200,7 +189,7 @@ async def daily_cmd(ctx: commands.Context):
     data[gid][uid] = data[gid].get(uid, 0) + reward
     data[gid][f"{uid}_last_daily"] = now.isoformat()
     save_json(ECONOMY_FILE, data)
-    await ctx.send(f"🎁 {ctx.author.mention} أخذت **{reward}** نقطة!")
+    await ctx.send(f"🎁 {ctx.author.mention} أخذت **{reward}** نقطة يومية!")
 
 
 @bot.command(name="تحويل")
@@ -220,8 +209,31 @@ async def transfer_cmd(ctx: commands.Context, member: discord.Member, amount: in
 
 
 # ============================================================
-# 3) الألعاب
+# 3) مركز الألعاب الشامل
 # ============================================================
+
+@bot.command(name="العاب", aliases=["ألعاب", "مركز_الالعاب"])
+async def games_center_cmd(ctx: commands.Context):
+    embed = discord.Embed(
+        title="🎮 مركز الألعاب",
+        description="اختر اللعبة واستخدم أمرها بحرف `!` قبل كل لعبة.\n*الألعاب الجماعية تبدأ بلوبي تفاعلي مدته 30 ثانية.*\n",
+        color=0x3498DB
+    )
+    embed.add_field(
+        name="👥 ألعاب جماعية",
+        value="`.روليت` | `.xo` | `.مافيا`\n`.كراسي` | `.حجرة` | `.نرد`\n`.عجلة` | `.غميضة` | `.ريبلكا`\n`.خمن` | `.كلمة`",
+        inline=False
+    )
+    embed.add_field(
+        name="👤 ألعاب فردية",
+        value="`.زر` | `.اسرع` | `.فكك`\n`.ادمج` | `.اعلام` | `.اعكس`\n`.حرف` | `.صحح` | `.ترتيب`\n`.الوان` | `.ايموجي` | `.اكشف`",
+        inline=False
+    )
+    embed.set_footer(text="اكسب النقاط وارفع رصيدك عبر الفوز بالألعاب!")
+    await ctx.send(embed=embed)
+
+
+# --- ألعاب XO ---
 class TicTacToeButton(discord.ui.Button):
     def __init__(self, x: int, y: int):
         super().__init__(style=discord.ButtonStyle.secondary, label="\u200b", row=y)
@@ -256,7 +268,6 @@ class TicTacToeButton(discord.ui.Button):
             content=f"🎮 دور {view.current_player.mention} ({view.current_symbol})", view=view
         )
 
-
 class TicTacToeView(discord.ui.View):
     def __init__(self, player_x: discord.Member, player_o: discord.Member):
         super().__init__(timeout=180)
@@ -286,16 +297,16 @@ class TicTacToeView(discord.ui.View):
     def is_full(self):
         return all(all(cell for cell in row) for row in self.board)
 
-
 @bot.command(name="xo")
-async def xo_cmd(ctx: commands.Context, opponent: discord.Member):
-    if opponent.bot or opponent == ctx.author:
-        await ctx.send("⚠️ اختر عضو ثاني حقيقي غيرك.")
+async def xo_cmd(ctx: commands.Context, opponent: discord.Member = None):
+    if not opponent or opponent.bot or opponent == ctx.author:
+        await ctx.send("⚠️ الصيغة الصحيحة: `!xo @العضو` (اختر خصمًا حقيقيًا غيرك).")
         return
     view = TicTacToeView(ctx.author, opponent)
     await ctx.send(f"🎮 **XO**: {ctx.author.mention} (X) ضد {opponent.mention} (O)\n🎯 دور {ctx.author.mention}", view=view)
 
 
+# --- حجرة ورقة مقص ---
 class RPSView(discord.ui.View):
     def __init__(self, p1: discord.Member, p2: discord.Member):
         super().__init__(timeout=60)
@@ -348,131 +359,264 @@ class RPSView(discord.ui.View):
     async def scissors(self, interaction, button):
         await self.handle_choice(interaction, "مقص")
 
-
 @bot.command(name="حجرة", aliases=["rps"])
-async def rps_cmd(ctx: commands.Context, opponent: discord.Member):
-    if opponent.bot or opponent == ctx.author:
-        await ctx.send("⚠️ اختر عضو ثاني حقيقي غيرك.")
+async def rps_cmd(ctx: commands.Context, opponent: discord.Member = None):
+    if not opponent or opponent.bot or opponent == ctx.author:
+        await ctx.send("⚠️ الصيغة الصحيحة: `!حجرة @العضو`")
         return
     view = RPSView(ctx.author, opponent)
     await ctx.send(f"✂️ **حجرة ورقة مقص**: {ctx.author.mention} ضد {opponent.mention}\nكل واحد يضغط بالخفاء 👇", view=view)
 
 
-active_guess_games: dict[int, dict] = {}
-
-
-@bot.command(name="تخمين")
-async def guess_start(ctx: commands.Context, max_number: int = 100):
-    if ctx.channel.id in active_guess_games:
-        await ctx.send("⚠️ فيه لعبة تخمين شغالة هنا.")
-        return
-    if max_number < 10:
-        await ctx.send("⚠️ اختر رقم أقصى 10 أو أكثر.")
-        return
-    number = random.randint(1, max_number)
-    active_guess_games[ctx.channel.id] = {"number": number, "max": max_number}
-    await ctx.send(f"🔢 اخترت رقم سري بين **1** و **{max_number}**! اكتبوا تخمينكم.")
-
-
-class RouletteView(discord.ui.View):
-    def __init__(self, players: list[discord.Member]):
-        super().__init__(timeout=180)
-        self.remaining = players.copy()
-        self.chosen: discord.Member | None = None
-        self._build_buttons()
-
-    def _build_buttons(self):
-        self.clear_items()
-        for member in self.remaining:
-            if member == self.chosen:
-                continue
-            btn = discord.ui.Button(label=member.display_name, style=discord.ButtonStyle.danger)
-            btn.callback = self._make_callback(member)
-            self.add_item(btn)
-
-    def _make_callback(self, target: discord.Member):
-        async def callback(interaction: discord.Interaction):
-            if interaction.user != self.chosen:
-                await interaction.response.send_message("⚠️ مو دورك!", ephemeral=True)
-                return
-            self.remaining.remove(target)
-            if len(self.remaining) == 1:
-                winner = self.remaining[0]
-                for c in self.children:
-                    c.disabled = True
-                add_balance(interaction.guild.id, winner.id, 100)
-                await interaction.response.edit_message(
-                    content=f"💀 تم إقصاء {target.mention}!\n\n🏆 الناجي: {winner.mention}! (+100 نقطة) 🎉", view=self
-                )
-                self.stop()
-                return
-            self.chosen = random.choice(self.remaining)
-            self._build_buttons()
-            names = "، ".join(m.mention for m in self.remaining)
-            await interaction.response.edit_message(
-                content=f"💀 تم إقصاء {target.mention}!\n\n🎡 الباقين: {names}\n🎯 دور {self.chosen.mention} يختار!",
-                view=self,
-            )
-        return callback
-
-
-class RouletteLobbyView(discord.ui.View):
-    """غرفة انتظار: أعضاء ينضمون بزر، والمضيف يبدأ اللعبة بزر."""
-
-    def __init__(self, host: discord.Member):
-        super().__init__(timeout=120)
+# --- لوبي ألعاب جماعية موحد (30 ثانية) ---
+class GenericLobbyView(discord.ui.View):
+    def __init__(self, host: discord.Member, game_name: str, reward: int):
+        super().__init__(timeout=30)
         self.host = host
-        self.players: list[discord.Member] = [host]
+        self.game_name = game_name
+        self.reward = reward
+        self.players = [host]
+        self.message = None
 
-    def _status_text(self) -> str:
-        names = "، ".join(m.mention for m in self.players)
-        return (
-            f"🎡 **لعبة الروليت — بانتظار اللاعبين**\n"
-            f"منضمين ({len(self.players)}): {names}\n\n"
-            f"اضغط 🎮 **انضمام** للدخول — أو المضيف {self.host.mention} يضغط ▶️ **بدء اللعبة** (لازم 3 لاعبين فأكثر)"
-        )
+    async def on_timeout(self):
+        for c in self.children:
+            c.disabled = True
+        if self.message:
+            try:
+                if len(self.players) >= 2:
+                    winner = random.choice(self.players)
+                    add_balance(self.message.guild.id, winner.id, self.reward)
+                    await self.message.edit(content=f"🎮 **انتهى وقت اللوبي لـ ({self.game_name})!**\n🏆 الفائز عشوائياً: {winner.mention} (+{self.reward} نقطة)", view=self)
+                else:
+                    await self.message.edit(content=f"❌ تم إلغاء لعبة ({self.game_name}) لعدم اكتمال اللاعبين.", view=self)
+            except Exception:
+                pass
 
-    @discord.ui.button(label="🎮 انضمام", style=discord.ButtonStyle.success)
-    async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🎮 انضمام للوبي (30 ثانية)", style=discord.ButtonStyle.success)
+    async def join_lobby(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.bot:
-            await interaction.response.send_message("⚠️ البوتات ما تنلعب.", ephemeral=True)
+            await interaction.response.send_message("⚠️ البوتات لا تلعب.", ephemeral=True)
             return
         if interaction.user in self.players:
-            await interaction.response.send_message("✅ أنت منضم مسبقًا.", ephemeral=True)
+            await interaction.response.send_message("✅ أنت منضم مسبقاً للوبي.", ephemeral=True)
             return
         self.players.append(interaction.user)
-        await interaction.response.edit_message(content=self._status_text(), view=self)
-
-    @discord.ui.button(label="▶️ بدء اللعبة", style=discord.ButtonStyle.primary)
-    async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.host:
-            await interaction.response.send_message("⚠️ بس المضيف يقدر يبدأ اللعبة.", ephemeral=True)
-            return
-        if len(self.players) < 3:
-            await interaction.response.send_message("⚠️ لازم 3 لاعبين على الأقل قبل البدء.", ephemeral=True)
-            return
-
-        game_view = RouletteView(self.players)
-        game_view.chosen = random.choice(self.players)
-        game_view._build_buttons()
         names = "، ".join(m.mention for m in self.players)
-        await interaction.response.edit_message(
-            content=f"🎡 **بدأت اللعبة!**\n{names}\n\n🎯 دور {game_view.chosen.mention} يختار وحد يطلعه!",
-            view=game_view,
-        )
-        self.stop()
+        await interaction.response.edit_content(content=f"🎮 **لعبة ({self.game_name}) — جاري الانتظار (30 ثانية)**\nالمنضمين ({len(self.players)}): {names}")
+
+
+async def start_group_lobby(ctx: commands.Context, game_name: str, reward: int = 40):
+    view = GenericLobbyView(ctx.author, game_name, reward)
+    msg = await ctx.send(f"🎮 **لعبة ({game_name}) — بدأ اللوبي!**\nاضغط الزر أدناه للانضمام (الوقت 30 ثانية):\nالمنضمين (1): {ctx.author.mention}", view=view)
+    view.message = msg
 
 
 @bot.command(name="روليت")
 async def roulette_cmd(ctx: commands.Context):
-    if ctx.author.bot:
+    await start_group_lobby(ctx, "روليت الحظ", 100)
+
+@bot.command(name="مافيا")
+async def mafia_cmd(ctx: commands.Context):
+    await start_group_lobby(ctx, "لعبة مافيا", 80)
+
+@bot.command(name="كراسي")
+async def chairs_cmd(ctx: commands.Context):
+    await start_group_lobby(ctx, "لعبة الكراسي الموسيقية", 60)
+
+@bot.command(name="نرد")
+async def dice_cmd(ctx: commands.Context):
+    await start_group_lobby(ctx, "سباق النرد", 50)
+
+@bot.command(name="عجلة")
+async def wheel_cmd(ctx: commands.Context):
+    await start_group_lobby(ctx, "عجلة الحظ", 70)
+
+@bot.command(name="غميضة")
+async def hide_seek_cmd(ctx: commands.Context):
+    await start_group_lobby(ctx, "لعبة الغميضة", 60)
+
+@bot.command(name="ريبلكا")
+async def replica_cmd(ctx: commands.Context):
+    await start_group_lobby(ctx, "لعبة ريبلكا", 50)
+
+@bot.command(name="كلمة")
+async def word_game_cmd(ctx: commands.Context):
+    await start_group_lobby(ctx, "تحدي الكلمات الجماعي", 60)
+
+
+# --- ألعاب تخمين ورقمية (تلقائية عبر الشات) ---
+active_guess_games: dict[int, dict] = {}
+
+@bot.command(name="خمن")
+async def guess_start(ctx: commands.Context, max_number: int = 100):
+    if ctx.channel.id in active_guess_games:
+        await ctx.send("⚠️ فيه لعبة تخمين شغالة هنا حالياً.")
         return
-    view = RouletteLobbyView(ctx.author)
-    await ctx.send(view._status_text(), view=view)
+    if max_number < 10:
+        max_number = 100
+    number = random.randint(1, max_number)
+    active_guess_games[ctx.channel.id] = {"number": number, "max": max_number}
+    await ctx.send(f"🔢 اخترت رقم سري بين **1** و **{max_number}**! اكتبوا تخمينكم بالشات مباشرة.")
+
+
+# --- الألعاب الفردية السريعة ---
+@bot.command(name="زر")
+async def game_button_fast(ctx: commands.Context):
+    class FastBtn(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=15)
+        @discord.ui.button(label="اضغط بسرعة للحصول على النقاط!", style=discord.ButtonStyle.danger)
+        async def click(self, interaction: discord.Interaction, button: discord.ui.Button):
+            for c in self.children:
+                c.disabled = True
+            reward = 40
+            add_balance(interaction.guild.id, interaction.user.id, reward)
+            await interaction.response.edit_message(content=f"⚡ فاز بالسرعة {interaction.user.mention} وحصل على **{reward}** نقطة!", view=self)
+            self.stop()
+    await ctx.send("⚡ **أسرع زر**: أول شخص يضغط الزر يفوز!", view=FastBtn())
+
+@bot.command(name="اسرع")
+async def game_fastest(ctx: commands.Context):
+    words = ["تفاحة", "سحاب", "برمجة", "ديسكورد", "صاروخ"]
+    target = random.choice(words)
+    await ctx.send(f"🏃 أسرع شخص يكتب هذه الكلمة بالشات: **`{target}`**")
+    def check(m):
+        return m.channel == ctx.channel and not m.author.bot and m.content.strip() == target
+    try:
+        msg = await bot.wait_for('message', timeout=20.0, check=check)
+        add_balance(ctx.guild.id, msg.author.id, 35)
+        await ctx.send(f"🏆 فاز {msg.author.mention} وأخذ 35 نقطة!")
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت ولم يكتبها أحد!")
+
+@bot.command(name="فكك")
+async def game_fakik(ctx: commands.Context):
+    data = {"البرمجة": "ا ل ب ر م ج ة", "مملكة": "م م ل ك ه", "سلطان": "س ل ط ا ن"}
+    word, letters = random.choice(list(data.items()))
+    await ctx.send(f"🧩 فكك الكلمة التالية: **`{letters}`**")
+    def check(m):
+        return m.channel == ctx.channel and not m.author.bot and m.content.strip() == word
+    try:
+        msg = await bot.wait_for('message', timeout=25.0, check=check)
+        add_balance(ctx.guild.id, msg.author.id, 40)
+        await ctx.send(f"🎉 صح عليك يا {msg.author.mention} (+40 نقطة)")
+    except asyncio.TimeoutError:
+        await ctx.send(f"⏰ انتهى الوقت! الكلمة الصحيحة هي: **{word}**")
+
+@bot.command(name="ادمج")
+async def game_merge(ctx: commands.Context):
+    await ctx.send("🔗 **دمج**: ادمج الحروف التالية لكلمة صحيحة: `ح ا س و ب` (الإجابة: حاسوب)")
+    def check(m):
+        return m.channel == ctx.channel and not m.author.bot and m.content.strip() == "حاسوب"
+    try:
+        msg = await bot.wait_for('message', timeout=20.0, check=check)
+        add_balance(ctx.guild.id, msg.author.id, 30)
+        await ctx.send(f"🎉 فاز {msg.author.mention} (+30 نقطة)")
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت!")
+
+@bot.command(name="اعلام")
+async def game_flags(ctx: commands.Context):
+    flags = {"السعودية": "🇸🇦", "الكويت": "🇰🇼", "الإمارات": "🇦🇪", "مصر": "🇪🇬"}
+    name, flag = random.choice(list(flags.items()))
+    await ctx.send(f"🏳️ ما هي الدولة صاحبة هذا العلم؟ {flag}")
+    def check(m):
+        return m.channel == ctx.channel and not m.author.bot and m.content.strip() == name
+    try:
+        msg = await bot.wait_for('message', timeout=20.0, check=check)
+        add_balance(ctx.guild.id, msg.author.id, 35)
+        await ctx.send(f"🏆 صح يا {msg.author.mention} (+35 نقطة)")
+    except asyncio.TimeoutError:
+        await ctx.send(f"⏰ انتهى الوقت! الدولة هي: **{name}**")
+
+@bot.command(name="اعكس")
+async def game_reverse(ctx: commands.Context):
+    await ctx.send("🔄 اعكس الكلمة: `ةراسي` (السيارة بالعكس)")
+    def check(m):
+        return m.channel == ctx.channel and not m.author.bot and m.content.strip() in ("سيارة", "السيارة")
+    try:
+        msg = await bot.wait_for('message', timeout=20.0, check=check)
+        add_balance(ctx.guild.id, msg.author.id, 30)
+        await ctx.send(f"🎉 فاز {msg.author.mention} (+30 نقطة)")
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت!")
+
+@bot.command(name="حرف")
+async def game_letter(ctx: commands.Context):
+    letter = random.choice(["م", "ب", "س", "أ", "د"])
+    await ctx.send(f"🔤 اعطني اسم جماد بحرف: **{letter}**")
+    def check(m):
+        return m.channel == ctx.channel and not m.author.bot
+    try:
+        msg = await bot.wait_for('message', timeout=20.0, check=check)
+        add_balance(ctx.guild.id, msg.author.id, 25)
+        await ctx.send(f"✅ أحسنت {msg.author.mention} (+25 نقطة)")
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت!")
+
+@bot.command(name="صحح")
+async def game_correct(ctx: commands.Context):
+    await ctx.send("✍️ صحح الكلمة الخطأ التالية: `محهندس`")
+    def check(m):
+        return m.channel == ctx.channel and not m.author.bot and m.content.strip() in ("مهندس", "المهندس")
+    try:
+        msg = await bot.wait_for('message', timeout=20.0, check=check)
+        add_balance(ctx.guild.id, msg.author.id, 30)
+        await ctx.send(f"🎉 ممتاز {msg.author.mention} (+30 نقطة)")
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت!")
+
+@bot.command(name="ترتيب")
+async def game_order(ctx: commands.Context):
+    await ctx.send(" ترتيب الحروف لتكوين كلمة: `م ش م س` (شمس)")
+    def check(m):
+        return m.channel == ctx.channel and not m.author.bot and m.content.strip() == "شمس"
+    try:
+        msg = await bot.wait_for('message', timeout=20.0, check=check)
+        add_balance(ctx.guild.id, msg.author.id, 30)
+        await ctx.send(f"🎉 فاز {msg.author.mention} (+30 نقطة)")
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت!")
+
+@bot.command(name="الوان")
+async def game_colors(ctx: commands.Context):
+    await ctx.send("🎨 ما هو لون مزج (الأصفر + الأزرق)؟")
+    def check(m):
+        return m.channel == ctx.channel and not m.author.bot and (m.content.strip() == "اخضر" or m.content.strip() == "أخضر")
+    try:
+        msg = await bot.wait_for('message', timeout=20.0, check=check)
+        add_balance(ctx.guild.id, msg.author.id, 30)
+        await ctx.send(f"🎉 صح يا {msg.author.mention} (+30 نقطة)")
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت! الإجابة هي: أخضر")
+
+@bot.command(name="ايموجي")
+async def game_emoji(ctx: commands.Context):
+    await ctx.send("😀 ما هو معنى هذا الايموجي: 🦁 ؟")
+    def check(m):
+        return m.channel == ctx.channel and not m.author.bot and "اسد" in m.content.strip()
+    try:
+        msg = await bot.wait_for('message', timeout=20.0, check=check)
+        add_balance(ctx.guild.id, msg.author.id, 25)
+        await ctx.send(f"🎉 صح يا {msg.author.mention} (+25 نقطة)")
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت! أسد.")
+
+@bot.command(name="اكشف")
+async def game_reveal(ctx: commands.Context):
+    await ctx.send("🕵️ خمن الحيوان الخفي: يملك سنامين ويعيش بالصحراء؟")
+    def check(m):
+        return m.channel == ctx.channel and not m.author.bot and "جمل" in m.content.strip()
+    try:
+        msg = await bot.wait_for('message', timeout=20.0, check=check)
+        add_balance(ctx.guild.id, msg.author.id, 35)
+        await ctx.send(f"🎉 كفو {msg.author.mention} (+35 نقطة)")
+    except asyncio.TimeoutError:
+        await ctx.send("⏰ انتهى الوقت! الجمل.")
 
 
 # ============================================================
-# 4) نظام الإدارة الكامل — بدون بريفكس، حسب الرتب
+# 4) نظام الإدارة الكامل — بالبريفكس (!) وحسب الرتب
 # ============================================================
 OWNER = "Owner"
 CO_OWNER = "Co-Owner"
@@ -495,14 +639,7 @@ def has_role(member: discord.Member, allowed: list[str]) -> bool:
     return any(n in names for n in allowed)
 
 
-def strip_mentions(content: str, mentions) -> str:
-    for m in mentions:
-        content = content.replace(f"<@{m.id}>", "").replace(f"<@!{m.id}>", "")
-    return content.strip()
-
-
 def parse_duration(text: str) -> timedelta:
-    """يفهم صيغ زي: 10 / 10m / 10h / 10d / 10س / 10د / 10ي — افتراضي 10 دقائق."""
     text = text.strip().split()[0] if text.strip() else ""
     match = re.match(r"^(\d+)\s*([smhdدسي]?)$", text)
     if not match:
@@ -514,7 +651,7 @@ def parse_duration(text: str) -> timedelta:
         return timedelta(days=value)
     if unit == "s":
         return timedelta(seconds=value)
-    return timedelta(minutes=value)  # افتراضي دقائق (m أو د أو بدون وحدة)
+    return timedelta(minutes=value)
 
 
 async def ensure_role(guild: discord.Guild, name: str) -> discord.Role:
@@ -524,445 +661,187 @@ async def ensure_role(guild: discord.Guild, name: str) -> discord.Role:
     return role
 
 
-async def reply(message: discord.Message, text: str):
-    await message.channel.send(text, delete_after=8)
-
-
-async def cleanup(message: discord.Message):
-    try:
-        await message.delete()
-    except (discord.Forbidden, discord.NotFound):
-        pass
-
-
-# ---------- إدارة الأعضاء ----------
-async def cmd_ban(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `برا @العضو السبب`")
+# --- أوامر الإدارة بالبريفكس ! ---
+@bot.command(name="برا")
+async def admin_ban(ctx: commands.Context, member: discord.Member = None, *, reason: str = "لم يُذكر سبب"):
+    if not has_role(ctx.author, ADMIN_ROLES):
+        await ctx.send("❌ ليس لديك صلاحية.")
         return
-    target = message.mentions[0]
-    reason = strip_mentions(args, message.mentions) or "لم يُذكر سبب"
-    await cleanup(message)
+    if not member:
+        await ctx.send("⚠️ الصيغة: `!برا @العضو السبب`")
+        return
     try:
-        await target.ban(reason=reason)
-        await reply(message, f"🔨 تم حظر {target.mention} — السبب: {reason}")
+        await member.ban(reason=reason)
+        await ctx.send(f"🔨 تم حظر {member.mention} — السبب: {reason}")
     except discord.Forbidden:
-        await reply(message, "❌ ما أقدر أحظر هذا العضو (صلاحياتي أقل من رتبته).")
+        await ctx.send("❌ صلاحياتي أقل من هذا العضو.")
 
-
-async def cmd_unban(message: discord.Message, args: str):
-    arg = args.strip()
-    if not arg.isdigit():
-        await reply(message, "⚠️ الصيغة: `سماح <آيدي العضو>` (لازم الآيدي رقمي لأن العضو مو بالسيرفر)")
+@bot.command(name="سماح")
+async def admin_unban(ctx: commands.Context, user_id: str = None):
+    if not has_role(ctx.author, ADMIN_ROLES):
+        await ctx.send("❌ ليس لديك صلاحية.")
         return
-    await cleanup(message)
+    if not user_id or not user_id.isdigit():
+        await ctx.send("⚠️ الصيغة: `!سماح <آيدي_العضو>`")
+        return
     try:
-        user = discord.Object(id=int(arg))
-        await message.guild.unban(user, reason=f"بواسطة {message.author}")
-        await reply(message, f"✅ تم فك الحظر عن المستخدم `{arg}`")
-    except discord.NotFound:
-        await reply(message, "❌ ما فيه حظر بهذا الآيدي.")
+        user = discord.Object(id=int(user_id))
+        await ctx.guild.unban(user, reason=f"بواسطة {ctx.author}")
+        await ctx.send(f"✅ تم فك الحظر عن الآيدي `{user_id}`")
+    except Exception:
+        await ctx.send("❌ لم أجد حظراً بهذا الآيدي.")
 
-
-async def cmd_kick(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `ترحيل @العضو السبب`")
+@bot.command(name="ترحيل", aliases=["كيك"])
+async def admin_kick(ctx: commands.Context, member: discord.Member = None, *, reason: str = "لم يُذكر سبب"):
+    if not has_role(ctx.author, JR_MOD_ROLES):
+        await ctx.send("❌ ليس لديك صلاحية.")
         return
-    target = message.mentions[0]
-    reason = strip_mentions(args, message.mentions) or "لم يُذكر سبب"
-    await cleanup(message)
+    if not member:
+        await ctx.send("⚠️ الصيغة: `!ترحيل @العضو السبب`")
+        return
     try:
-        await target.kick(reason=reason)
-        await reply(message, f"👢 تم طرد {target.mention} — السبب: {reason}")
-    except discord.Forbidden:
-        await reply(message, "❌ ما أقدر أطرد هذا العضو.")
+        await member.kick(reason=reason)
+        await ctx.send(f"👢 تم طرد {member.mention}")
+    except Exception:
+        await ctx.send("❌ لا يمكنني طرد هذا العضو.")
 
-
-async def cmd_timeout(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `تايم @العضو 10m السبب` (افتراضي 10 دقائق)")
+@bot.command(name="تايم", aliases=["اص"])
+async def admin_timeout(ctx: commands.Context, member: discord.Member = None, time_str: str = "10m", *, reason: str = "لم يُذكر سبب"):
+    if not has_role(ctx.author, HELPER_ROLES):
+        await ctx.send("❌ ليس لديك صلاحية.")
         return
-    target = message.mentions[0]
-    remainder = strip_mentions(args, message.mentions)
-    duration = parse_duration(remainder)
-    reason = " ".join(remainder.split()[1:]) if remainder.split() else "لم يُذكر سبب"
-    await cleanup(message)
+    if not member:
+        await ctx.send("⚠️ الصيغة: `!تايم @العضو 10m السبب`")
+        return
+    duration = parse_duration(time_str)
     try:
-        await target.timeout(discord.utils.utcnow() + duration, reason=reason)
-        await reply(message, f"⏱️ تم إعطاء {target.mention} تايم لمدة {duration}")
-    except discord.Forbidden:
-        await reply(message, "❌ ما أقدر أعطي هذا العضو تايم.")
+        await member.timeout(discord.utils.utcnow() + duration, reason=reason)
+        await ctx.send(f"⏱️ تم إعطاء {member.mention} تايم لمدة {duration}")
+    except Exception:
+        await ctx.send("❌ لا يمكنني إعطاء تايم لهذا العضو.")
 
-
-async def cmd_untimeout(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `تحرير @العضو`")
+@bot.command(name="تحرير")
+async def admin_untimeout(ctx: commands.Context, member: discord.Member = None):
+    if not has_role(ctx.author, HELPER_ROLES):
+        await ctx.send("❌ ليس لديك صلاحية.")
         return
-    target = message.mentions[0]
-    await cleanup(message)
-    await target.timeout(None, reason=f"بواسطة {message.author}")
-    await reply(message, f"✅ تم فك التايم عن {target.mention}")
-
-
-async def cmd_textmute(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `اخرس @العضو`")
+    if not member:
+        await ctx.send("⚠️ الصيغة: `!تحرير @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
-    role = await ensure_role(message.guild, MUTE_ROLE_NAME)
-    await target.add_roles(role, reason=f"بواسطة {message.author}")
-    await reply(message, f"🔇 تم إسكات {target.mention} بالشات")
+    await member.timeout(None, reason=f"بواسطة {ctx.author}")
+    await ctx.send(f"✅ تم فك التايم عن {member.mention}")
 
-
-async def cmd_textunmute(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `تكلم @العضو`")
+@bot.command(name="اخرس")
+async def admin_textmute(ctx: commands.Context, member: discord.Member = None):
+    if not has_role(ctx.author, ADMIN_ROLES):
+        await ctx.send("❌ ليس لديك صلاحية.")
         return
-    target = message.mentions[0]
-    await cleanup(message)
-    role = discord.utils.get(message.guild.roles, name=MUTE_ROLE_NAME)
-    if role and role in target.roles:
-        await target.remove_roles(role, reason=f"بواسطة {message.author}")
-    await reply(message, f"🔊 تم فك الإسكات عن {target.mention}")
-
-
-async def cmd_jail(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `سجن @العضو`")
+    if not member:
+        await ctx.send("⚠️ الصيغة: `!اخرس @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
-    jail_role = await ensure_role(message.guild, JAIL_ROLE_NAME)
+    role = await ensure_role(ctx.guild, MUTE_ROLE_NAME)
+    await member.add_roles(role, reason=f"بواسطة {ctx.author}")
+    await ctx.send(f"🔇 تم إسكات {member.mention} بالشات.")
 
-    keep_roles = [r for r in target.roles if r.name != "@everyone"]
+@bot.command(name="تكلم")
+async def admin_textunmute(ctx: commands.Context, member: discord.Member = None):
+    if not has_role(ctx.author, ADMIN_ROLES):
+        await ctx.send("❌ ليس لديك صلاحية.")
+        return
+    if not member:
+        await ctx.send("⚠️ الصيغة: `!تكلم @العضو`")
+        return
+    role = discord.utils.get(ctx.guild.roles, name=MUTE_ROLE_NAME)
+    if role and role in member.roles:
+        await member.remove_roles(role)
+    await ctx.send(f"🔊 تم فك الإسكات عن {member.mention}")
+
+@bot.command(name="سجن")
+async def admin_jail(ctx: commands.Context, member: discord.Member = None):
+    if not has_role(ctx.author, ADMIN_ROLES):
+        await ctx.send("❌ ليس لديك صلاحية.")
+        return
+    if not member:
+        await ctx.send("⚠️ الصيغة: `!سجن @العضو`")
+        return
+    jail_role = await ensure_role(ctx.guild, JAIL_ROLE_NAME)
+    keep_roles = [r for r in member.roles if r.name != "@everyone"]
     data = load_json(JAIL_FILE)
-    gid, mid = str(message.guild.id), str(target.id)
-    data.setdefault(gid, {})
-    data[gid][mid] = [r.id for r in keep_roles]
+    gid, mid = str(ctx.guild.id), str(member.id)
+    data.setdefault(gid, {})[mid] = [r.id for r in keep_roles]
     save_json(JAIL_FILE, data)
+    await member.remove_roles(*keep_roles)
+    await member.add_roles(jail_role)
+    await ctx.send(f"🔒 تم سجن {member.mention}")
 
-    try:
-        await target.remove_roles(*keep_roles, reason="سجن")
-        await target.add_roles(jail_role, reason=f"سجن بواسطة {message.author}")
-        await reply(message, f"🔒 تم سجن {target.mention}")
-    except discord.Forbidden:
-        await reply(message, "❌ ما أقدر أسجن هذا العضو.")
-
-
-async def cmd_unjail(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `فك @العضو`")
+@bot.command(name="فك")
+async def admin_unjail(ctx: commands.Context, member: discord.Member = None):
+    if not has_role(ctx.author, ADMIN_ROLES):
+        await ctx.send("❌ ليس لديك صلاحية.")
         return
-    target = message.mentions[0]
-    await cleanup(message)
+    if not member:
+        await ctx.send("⚠️ الصيغة: `!فك @العضو`")
+        return
     data = load_json(JAIL_FILE)
-    gid, mid = str(message.guild.id), str(target.id)
+    gid, mid = str(ctx.guild.id), str(member.id)
     saved_ids = data.get(gid, {}).get(mid, [])
-    roles = [message.guild.get_role(rid) for rid in saved_ids if message.guild.get_role(rid)]
-
-    jail_role = discord.utils.get(message.guild.roles, name=JAIL_ROLE_NAME)
-    if jail_role and jail_role in target.roles:
-        await target.remove_roles(jail_role, reason="فك السجن")
+    roles = [ctx.guild.get_role(rid) for rid in saved_ids if ctx.guild.get_role(rid)]
+    jail_role = discord.utils.get(ctx.guild.roles, name=JAIL_ROLE_NAME)
+    if jail_role and jail_role in member.roles:
+        await member.remove_roles(jail_role)
     if roles:
-        await target.add_roles(*roles, reason="فك السجن — استرجاع الرتب")
+        await member.add_roles(*roles)
         data[gid].pop(mid, None)
         save_json(JAIL_FILE, data)
-    await reply(message, f"🔓 تم فك السجن عن {target.mention}")
+    await ctx.send(f"🔓 تم فك السجن عن {member.mention}")
 
-
-async def cmd_nick(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `لقب @العضو الاسم_الجديد`")
+@bot.command(name="مسح", aliases=["اباده"])
+async def admin_purge(ctx: commands.Context, amount: int = 50):
+    if not has_role(ctx.author, ADMIN_ROLES):
+        await ctx.send("❌ ليس لديك صلاحية.")
         return
-    target = message.mentions[0]
-    new_nick = strip_mentions(args, message.mentions)
-    await cleanup(message)
-    if not new_nick:
-        await reply(message, "⚠️ لازم تكتب اللقب الجديد.")
+    amount = min(amount, 100)
+    await ctx.message.delete()
+    deleted = await ctx.channel.purge(limit=amount)
+    await ctx.send(f"🧹 تم حذف {len(deleted)} رسالة.", delete_after=5)
+
+@bot.command(name="قفل")
+async def admin_lock(ctx: commands.Context):
+    if not has_role(ctx.author, ADMIN_ROLES):
+        await ctx.send("❌ ليس لديك صلاحية.")
         return
-    try:
-        await target.edit(nick=new_nick, reason=f"بواسطة {message.author}")
-        await reply(message, f"✏️ تم تغيير لقب {target.mention} إلى **{new_nick}**")
-    except discord.Forbidden:
-        await reply(message, "❌ ما أقدر أغيّر لقب هذا العضو.")
-
-
-async def cmd_remove_role(message: discord.Message, args: str):
-    if not message.mentions or not message.role_mentions:
-        await reply(message, "⚠️ الصيغة: `تنزيل @العضو @الرتبة`")
-        return
-    target = message.mentions[0]
-    role = message.role_mentions[0]
-    await cleanup(message)
-    if role not in target.roles:
-        await reply(message, f"⚠️ {target.mention} أصلًا ما عنده رتبة {role.name}")
-        return
-    await target.remove_roles(role, reason=f"بواسطة {message.author}")
-    data = load_json(ROLES_REMOVED_FILE)
-    gid, mid = str(message.guild.id), str(target.id)
-    data.setdefault(gid, {})
-    data[gid][mid] = role.id
-    save_json(ROLES_REMOVED_FILE, data)
-    await reply(message, f"📤 تم سحب رتبة {role.name} من {target.mention}")
-
-
-async def cmd_restore_role(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `رجع @العضو`")
-        return
-    target = message.mentions[0]
-    await cleanup(message)
-    data = load_json(ROLES_REMOVED_FILE)
-    gid, mid = str(message.guild.id), str(target.id)
-    role_id = data.get(gid, {}).get(mid)
-    if not role_id:
-        await reply(message, f"⚠️ ما فيه رتبة محفوظة نرجعها لـ {target.mention}")
-        return
-    role = message.guild.get_role(role_id)
-    if role:
-        await target.add_roles(role, reason=f"بواسطة {message.author}")
-        data[gid].pop(mid, None)
-        save_json(ROLES_REMOVED_FILE, data)
-        await reply(message, f"📥 تم إرجاع رتبة {role.name} لـ {target.mention}")
-
-
-# ---------- إدارة الرومات ----------
-async def cmd_purge(message: discord.Message, args: str):
-    amount_text = args.strip().split()[0] if args.strip() else "50"
-    amount = int(amount_text) if amount_text.isdigit() else 50
-    amount = min(amount, 200)
-    await message.delete()
-    deleted = await message.channel.purge(limit=amount)
-    await reply(message, f"🧹 تم حذف {len(deleted)} رسالة.")
-
-
-async def cmd_lock(message: discord.Message, args: str):
-    await cleanup(message)
-    overwrite = message.channel.overwrites_for(message.guild.default_role)
+    overwrite = ctx.channel.overwrites_for(ctx.guild.default_role)
     overwrite.send_messages = False
-    await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-    await message.channel.send("🔒 تم قفل الروم.")
+    await ctx.channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
+    await ctx.send("🔒 تم قفل الروم.")
 
-
-async def cmd_unlock(message: discord.Message, args: str):
-    await cleanup(message)
-    overwrite = message.channel.overwrites_for(message.guild.default_role)
+@bot.command(name="فتح")
+async def admin_unlock(ctx: commands.Context):
+    if not has_role(ctx.author, ADMIN_ROLES):
+        await ctx.send("❌ ليس لديك صلاحية.")
+        return
+    overwrite = ctx.channel.overwrites_for(ctx.guild.default_role)
     overwrite.send_messages = None
-    await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-    await message.channel.send("🔓 تم فتح الروم.")
-
-
-async def cmd_hide(message: discord.Message, args: str):
-    await cleanup(message)
-    overwrite = message.channel.overwrites_for(message.guild.default_role)
-    overwrite.view_channel = False
-    await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-    await message.channel.send("🙈 تم إخفاء الروم.")
-
-
-async def cmd_show(message: discord.Message, args: str):
-    await cleanup(message)
-    overwrite = message.channel.overwrites_for(message.guild.default_role)
-    overwrite.view_channel = None
-    await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-    await message.channel.send("👁️ تم إظهار الروم.")
-
-
-# ---------- إدارة الصوت ----------
-async def cmd_vc_kick(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `بره @العضو`")
-        return
-    target = message.mentions[0]
-    await cleanup(message)
-    if target.voice and target.voice.channel:
-        await target.move_to(None, reason=f"بواسطة {message.author}")
-        await reply(message, f"👋 تم إخراج {target.mention} من الروم الصوتي.")
-    else:
-        await reply(message, "⚠️ العضو مو بروم صوتي.")
-
-
-async def cmd_vc_mute(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `اصمت @العضو`")
-        return
-    target = message.mentions[0]
-    await cleanup(message)
-    await target.edit(mute=True, reason=f"بواسطة {message.author}")
-    await reply(message, f"🔇 تم إسكات {target.mention} صوتيًا.")
-
-
-async def cmd_vc_unmute(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `انطق @العضو`")
-        return
-    target = message.mentions[0]
-    await cleanup(message)
-    await target.edit(mute=False, reason=f"بواسطة {message.author}")
-    await reply(message, f"🔊 تم فك الإسكات الصوتي عن {target.mention}.")
-
-
-async def cmd_vc_pull(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `اسحب @العضو` (وأنت داخل روم صوتي)")
-        return
-    if not (message.author.voice and message.author.voice.channel):
-        await reply(message, "⚠️ لازم تكون داخل روم صوتي عشان تسحب له أحد.")
-        return
-    target = message.mentions[0]
-    await cleanup(message)
-    if target.voice:
-        await target.move_to(message.author.voice.channel, reason=f"بواسطة {message.author}")
-        await reply(message, f"📥 تم سحب {target.mention} لروم {message.author.voice.channel.name}")
-    else:
-        await reply(message, "⚠️ العضو مو داخل أي روم صوتي حاليًا.")
-
-
-async def cmd_vc_gather(message: discord.Message, args: str):
-    if not (message.author.voice and message.author.voice.channel):
-        await reply(message, "⚠️ لازم تكون داخل روم صوتي عشان تجمع الكل عندك.")
-        return
-    destination = message.author.voice.channel
-    await cleanup(message)
-    count = 0
-    for vc in message.guild.voice_channels:
-        if vc.id == destination.id:
-            continue
-        for member in list(vc.members):
-            await member.move_to(destination, reason=f"تجميع بواسطة {message.author}")
-            count += 1
-    await reply(message, f"📦 تم جمع {count} عضو داخل {destination.name}")
-
-
-async def cmd_vc_comehere(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `تعال @العضو`")
-        return
-    target = message.mentions[0]
-    await cleanup(message)
-    if not (message.author.voice):
-        await reply(message, "⚠️ لازم تكون بروم صوتي عشان يسحبك البوت... انتقل يدويًا.")
-        return
-    if target.voice and target.voice.channel:
-        await message.author.move_to(target.voice.channel, reason="تعال")
-        await reply(message, f"➡️ تم نقلك لروم {target.voice.channel.name}")
-    else:
-        await reply(message, "⚠️ هذا العضو مو داخل روم صوتي.")
-
-
-async def cmd_vc_kicklock(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `اطلع @العضو`")
-        return
-    target = message.mentions[0]
-    await cleanup(message)
-    if not (target.voice and target.voice.channel):
-        await reply(message, "⚠️ العضو مو داخل روم صوتي.")
-        return
-    channel = target.voice.channel
-    await target.move_to(None, reason=f"بواسطة {message.author}")
-    overwrite = channel.overwrites_for(message.guild.default_role)
-    overwrite.connect = False
-    await channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-    await reply(message, f"🚫 تم طرد {target.mention} وقفل روم {channel.name}")
-
-
-async def cmd_vc_allow(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `مسموح @العضو` (وأنت داخل الروم الصوتي)")
-        return
-    if not (message.author.voice and message.author.voice.channel):
-        await reply(message, "⚠️ لازم تكون داخل الروم الصوتي المقفول عشان تسمح لأحد.")
-        return
-    target = message.mentions[0]
-    channel = message.author.voice.channel
-    await cleanup(message)
-    overwrite = channel.overwrites_for(target)
-    overwrite.connect = True
-    await channel.set_permissions(target, overwrite=overwrite)
-    await reply(message, f"✅ تم السماح لـ {target.mention} بدخول {channel.name}")
-
-
-# ---------- جدول الأوامر الإدارية ----------
-ADMIN_COMMANDS = {
-    # إدارة الأعضاء
-    "برا": (ADMIN_ROLES, cmd_ban),
-    "سماح": (ADMIN_ROLES, cmd_unban),
-    "ترحيل": (JR_MOD_ROLES, cmd_kick),
-    "كيك": (JR_MOD_ROLES, cmd_kick),
-    "تايم": (HELPER_ROLES, cmd_timeout),
-    "اص": (HELPER_ROLES, cmd_timeout),
-    "تحرير": (HELPER_ROLES, cmd_untimeout),
-    "اخرس": (ADMIN_ROLES, cmd_textmute),
-    "تكلم": (ADMIN_ROLES, cmd_textunmute),
-    "سجن": (ADMIN_ROLES, cmd_jail),
-    "فك": (ADMIN_ROLES, cmd_unjail),
-    "لقب": (MOD_ROLES, cmd_nick),
-    "اسم": (MOD_ROLES, cmd_nick),
-    "تنزيل": (ADMIN_ROLES, cmd_remove_role),
-    "رجع": (ADMIN_ROLES, cmd_restore_role),
-    # إدارة الرومات
-    "اباده": (ADMIN_ROLES, cmd_purge),
-    "مسح": (ADMIN_ROLES, cmd_purge),
-    "قفل": (ADMIN_ROLES, cmd_lock),
-    "فتح": (ADMIN_ROLES, cmd_unlock),
-    "اخفاء": (ADMIN_ROLES, cmd_hide),
-    "خفي": (ADMIN_ROLES, cmd_hide),
-    "اظهار": (ADMIN_ROLES, cmd_show),
-    # إدارة الصوت
-    "بره": (MOD_ROLES, cmd_vc_kick),
-    "اصمت": (MOD_ROLES, cmd_vc_mute),
-    "انطق": (MOD_ROLES, cmd_vc_unmute),
-    "اسحب": (MOD_ROLES, cmd_vc_pull),
-    "اجمعهم": (MOD_ROLES, cmd_vc_gather),
-    "تعال": (MOD_ROLES, cmd_vc_comehere),
-    "كم هير بيبي": (MOD_ROLES, cmd_vc_comehere),
-    "اطلع": (ADMIN_ROLES, cmd_vc_kicklock),
-    "مسموح": (ADMIN_ROLES, cmd_vc_allow),
-}
-
-# رتّب المفاتيح الأطول أولًا (عشان "كم هير بيبي" ما تتعارض مع كلمة مفردة)
-SORTED_TRIGGERS = sorted(ADMIN_COMMANDS.keys(), key=len, reverse=True)
-
-
-async def try_dispatch_admin_command(message: discord.Message) -> bool:
-    content = message.content.strip()
-    for trigger in SORTED_TRIGGERS:
-        if content == trigger or content.startswith(trigger + " "):
-            allowed_roles, handler = ADMIN_COMMANDS[trigger]
-            if not isinstance(message.author, discord.Member) or not has_role(message.author, allowed_roles):
-                await cleanup(message)
-                await reply(message, f"{message.author.mention} ❌ ما عندك صلاحية لهذا الأمر.")
-                return True
-            args = content[len(trigger):].strip()
-            await handler(message, args)
-            return True
-    return False
+    await ctx.channel.set_permissions(ctx.guild.default_role, overwrite=overwrite)
+    await ctx.send("🔓 تم فتح الروم.")
 
 
 # ============================================================
-# معالج الرسائل الموحّد
+# المعالجات العامة والأحداث وتشغيل السيرفر والبوت معاَ
 # ============================================================
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    if message.content.strip().startswith("تنبيه"):
-        await handle_warn_command(message)
-        return
-
-    if await try_dispatch_admin_command(message):
-        return
-
+    # معالجة لعبة التخمين الشاتية التفاعلية
     game = active_guess_games.get(message.channel.id)
     if game and message.content.strip().lstrip("-").isdigit():
         guess = int(message.content.strip())
         if guess == game["number"]:
             reward = random.randint(50, 150)
             add_balance(message.guild.id, message.author.id, reward)
-            await message.channel.send(f"🎉 {message.author.mention} عرف الرقم **{game['number']}**! (+{reward} نقطة)")
+            await message.channel.send(f"🎉 {message.author.mention} عرف الرقم السري **{game['number']}**! (+{reward} نقطة)")
             del active_guess_games[message.channel.id]
         elif 0 < guess < game["number"]:
             await message.add_reaction("⬆️")
@@ -974,8 +853,17 @@ async def on_message(message: discord.Message):
 
 @bot.event
 async def on_ready():
-    print(f"✅ تم تسجيل الدخول باسم {bot.user}")
+    print(f"✅ تم تسجيل الدخول بنجاح باسم {bot.user}")
 
 
 if __name__ == "__main__":
-    bot.run(DISCORD_TOKEN)
+    if not DISCORD_TOKEN:
+        print("❌ تنبيه: رمز البوت DISCORD_TOKEN غير موجود في ملف البيئة .env!")
+    else:
+        # تشغيل خادم الويب الوهمي في الخلفية ليوافق منصة Render
+        t = threading.Thread(target=run_web_server)
+        t.daemon = True
+        t.start()
+        
+        # تشغيل بوت ديسكورد
+        bot.run(DISCORD_TOKEN)
