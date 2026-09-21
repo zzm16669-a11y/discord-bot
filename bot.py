@@ -1,4 +1,17 @@
-"""
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
+
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Bot is active and running!")
+
+def run_web_server():
+    server_address = ('0.0.0.0', 10000)
+    httpd = HTTPServer(server_address, SimpleHandler)
+    httpd.serve_forever()"""
 بوت ديسكورد شامل — نسخة كاملة مدموجة (مع مركز الألعاب الموسّع)
 =====================================================================
 الأقسام:
