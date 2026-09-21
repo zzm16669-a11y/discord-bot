@@ -1,17 +1,4 @@
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
-
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"Bot is active and running!")
-
-def run_web_server():
-    server_address = ('0.0.0.0', 10000)
-    httpd = HTTPServer(server_address, SimpleHandler)
-    httpd.serve_forever()
+"""
 بوت ديسكورد شامل — نسخة كاملة مدموجة (مع مركز الألعاب الموسّع)
 =====================================================================
 الأقسام:
@@ -48,6 +35,8 @@ import json
 import os
 import re
 import random
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
@@ -1979,9 +1968,35 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
         await ctx.send("❌ صار خطأ غير متوقع أثناء تنفيذ الأمر.")
 
 
+# ============================================================
+# ويب سيرفر صغير (عشان Render يشوف بورت مفتوح ويبقي البوت شغال)
+# ============================================================
+class SimpleHandler(BaseHTTPRequestHandler):
+    def _ok(self, body: bool = True):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        if body:
+            self.wfile.write(b"Bot is active and running!")
+
+    def do_GET(self):
+        self._ok()
+
+    def do_HEAD(self):  # بعض مواقع المراقبة (زي UptimeRobot) تستخدم HEAD
+        self._ok(body=False)
+
+    def log_message(self, format, *args):  # يمنع سبام اللوق مع كل بينق
+        return
+
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))  # Render يعطيك البورت بمتغير PORT
+    httpd = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    httpd.serve_forever()
+
+
 if __name__ == "__main__":
-    t = threading.Thread(target=run_web_server)
-    t.daemon = True
+    t = threading.Thread(target=run_web_server, daemon=True)
     t.start()
-    
+
     bot.run(DISCORD_TOKEN)
