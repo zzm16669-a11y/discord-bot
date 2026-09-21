@@ -1071,12 +1071,42 @@ async def run_lobby(ctx: commands.Context, game_title: str, min_players: int = 3
 # ============================================================
 # 9) الألعاب الجماعية (تعتمد على اللوبي)
 # ============================================================
+# ---------- عجلة حقيقية (شريط أسماء يدور ويبطّئ لين يوقف على واحد) ----------
+async def spin_wheel_on(msg: discord.Message, players: list, prefix: str = ""):
+    """يدوّر عجلة بالتعديل على رسالة: الأسماء تلف بسرعة وتبطّئ تدريجيًا لين توقف على لاعب.
+    يرجع اللاعب اللي وقفت عليه العجلة."""
+    n = len(players)
+    names = [p.display_name[:16] for p in players]
+    winner_idx = random.randrange(n)
+    frames = random.randint(12, 16)
+    idx = (winner_idx - frames) % n   # بعد عدد الخطوات هذا توقف بالضبط على الفايز
+
+    def render(i: int, header: str) -> str:
+        rows = []
+        for off in (-2, -1, 0, 1, 2):
+            name = names[(i + off) % n]
+            rows.append(f"➡️ **{name}** ⬅️" if off == 0 else f"⚪ {name}")
+        return f"{prefix}{header}\n" + "\n".join(rows)
+
+    try:
+        await msg.edit(content=render(idx, "🎡 العجلة تدور..."))
+        for step in range(frames):
+            idx = (idx + 1) % n
+            await asyncio.sleep(0.7 + 0.7 * step / (frames - 1))   # تبطّئ من 0.7 لين 1.4 ثانية
+            await msg.edit(content=render(idx, "🎡 العجلة تدور..."))
+    except discord.NotFound:
+        pass
+    await asyncio.sleep(0.8)
+    return players[winner_idx]
+
+
 # ---------- روليت روسي ----------
 class RouletteView(discord.ui.View):
     def __init__(self, players: list[discord.Member]):
         super().__init__(timeout=180)
         self.remaining = players.copy()
         self.chosen: discord.Member | None = None
+        self.spinning = False
         self._build_buttons()
 
     def _build_buttons(self):
@@ -1090,6 +1120,9 @@ class RouletteView(discord.ui.View):
 
     def _make_callback(self, target: discord.Member):
         async def callback(interaction: discord.Interaction):
+            if self.spinning:
+                await interaction.response.send_message("⏳ العجلة تدور، انتظر...", ephemeral=True)
+                return
             if interaction.user != self.chosen:
                 await interaction.response.send_message("⚠️ مو دورك!", ephemeral=True)
                 return
@@ -1104,13 +1137,23 @@ class RouletteView(discord.ui.View):
                 )
                 self.stop()
                 return
-            self.chosen = random.choice(self.remaining)
-            self._build_buttons()
-            names = "، ".join(m.mention for m in self.remaining)
-            await interaction.response.edit_message(
-                content=f"💀 تم إقصاء {target.mention}!\n\n🎡 الباقين: {names}\n🎯 دور {self.chosen.mention} يختار!",
-                view=self,
-            )
+
+            # العجلة تدور وتختار مين دوره يطلع وحد
+            self.spinning = True
+            prefix = f"💀 تم إقصاء {target.mention}!\n\n"
+            await interaction.response.edit_message(content=prefix + "🎡 العجلة تدور...", view=None)
+            msg = interaction.message
+            try:
+                chosen = await spin_wheel_on(msg, self.remaining, prefix=prefix)
+                self.chosen = chosen
+                self._build_buttons()
+                names = "، ".join(m.mention for m in self.remaining)
+                await msg.edit(
+                    content=f"{prefix}🎡 الباقين: {names}\n🎯 دور {chosen.mention} يختار!", view=self)
+            except discord.NotFound:
+                self.stop()
+            finally:
+                self.spinning = False
         return callback
 
 
@@ -1125,10 +1168,13 @@ async def roulette_cmd(ctx: commands.Context):
         if not players:
             return
         view = RouletteView(players)
-        view.chosen = random.choice(players)
-        view._build_buttons()
         names = "، ".join(p.mention for p in players)
-        await ctx.send(f"🎡 **بدأت اللعبة!**\n{names}\n\n🎯 دور {view.chosen.mention} يختار وحد يطلعه!", view=view)
+        prefix = f"🎡 **بدأت اللعبة!**\n{names}\n\n"
+        msg = await ctx.send(prefix + "🎡 العجلة تدور تختار مين يبدأ...")
+        chosen = await spin_wheel_on(msg, players, prefix=prefix)
+        view.chosen = chosen
+        view._build_buttons()
+        await msg.edit(content=f"{prefix}🎯 دور {chosen.mention} يختار وحد يطلعه!", view=view)
         await view.wait()
     finally:
         unmark_busy(ctx.channel.id)
