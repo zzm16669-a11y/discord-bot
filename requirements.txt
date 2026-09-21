@@ -1,5 +1,5 @@
-discord.py
+discord.py>=2.3
 aiohttp
 python-dotenv
 google-generativeai
-Pillow
+Pillow>=10.1
