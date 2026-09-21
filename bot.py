@@ -1020,12 +1020,12 @@ class GameLobby(discord.ui.View):
 
     def status_text(self) -> str:
         names = "، ".join(m.mention for m in self.players)
+        countdown_text = self.host_countdown_text if hasattr(self, 'host_countdown_text') else '30'
         return (
             f"🎮 **{self.game_title} — بانتظار اللاعبين** ({len(self.players)}/{self.max_players})\n"
             f"{names}\n\n"
-            f"اضغط 🎮 **انضمام** للدخول، 🚪 **خروج** للانسحاب، "
-            f"أو المضيف {self.host.mention} يضغط ▶️ **بدء الآن** (أدنى عدد: {self.min_players})\n"
-            f"⏳ تبدأ تلقائيًا خلال {self.host_countdown_text if hasattr(self, 'host_countdown_text') else '30'} ثانية."
+            f"أدنى عدد: {self.min_players}\n"
+            f"⏳ تبدأ تلقائيًا خلال {countdown_text} ثانية."
         )
 
     @discord.ui.button(label="🎮 انضمام", style=discord.ButtonStyle.success)
@@ -1592,17 +1592,54 @@ async def wheel_cmd(ctx: commands.Context):
         players = await run_lobby(ctx, "🎡 عجلة الحظ", min_players=2, max_players=20, countdown=30)
         if not players:
             return
-        msg = await ctx.send("🎡 العجلة تدور...")
-        await asyncio.sleep(2)
-        winner = random.choice(players)
+        msg = await ctx.send("🎡 **العجلة تدور تختار الفايز...**")
         pts = random.randint(50, 150)
+        winner = await spin_and_choose(msg, players, header="🎡 **العجلة تدور تختار الفايز...**")
         add_balance(ctx.guild.id, winner.id, pts)
-        await msg.edit(content=f"🎡 توقفت العجلة عند... 🎉 {winner.mention}! (+{pts} نقطة)")
+        await ctx.send(f"🎉 الفايز: {winner.mention}! (+{pts} نقطة)")
     finally:
         unmark_busy(ctx.channel.id)
 
 
 # ---------- غميضة ----------
+class HideSeekButton(discord.ui.Button):
+    def __init__(self, number: int):
+        super().__init__(label=str(number), style=discord.ButtonStyle.secondary, row=(number - 1) // 5)
+        self.number = number
+
+    async def callback(self, interaction: discord.Interaction):
+        view: HideSeekView = self.view
+        if interaction.user != view.seeker:
+            await interaction.response.send_message("⚠️ أنت مو الباحث بهذي اللعبة.", ephemeral=True)
+            return
+        if self.disabled:
+            await interaction.response.send_message("✅ هذا الرقم انفتح مسبقًا.", ephemeral=True)
+            return
+        found_player = view.spots[self.number]
+        self.disabled = True
+        self.label = f"✅ {found_player.display_name[:12]}"
+        self.style = discord.ButtonStyle.success
+        view.found.add(found_player.id)
+        add_balance(interaction.guild.id, view.seeker.id, 20)
+        await interaction.response.edit_message(view=view)
+        await interaction.channel.send(f"🎯 لقيت {found_player.mention}!")
+        if len(view.found) >= len(view.spots):
+            view.all_found.set()
+
+
+class HideSeekView(discord.ui.View):
+    def __init__(self, seeker: discord.Member, hiders: list[discord.Member]):
+        super().__init__(timeout=90)
+        self.seeker = seeker
+        numbers = list(range(1, len(hiders) + 1))
+        random.shuffle(numbers)
+        self.spots: dict[int, discord.Member] = {num: p for num, p in zip(numbers, hiders)}
+        self.found: set[int] = set()
+        self.all_found = asyncio.Event()
+        for n in range(1, len(hiders) + 1):
+            self.add_item(HideSeekButton(n))
+
+
 @bot.command(name="غميضة")
 async def hideseek_cmd(ctx: commands.Context):
     if is_channel_busy(ctx.channel.id):
@@ -1620,44 +1657,27 @@ async def _run_hideseek(ctx: commands.Context):
     if not players:
         return
     seeker = random.choice(players)
-    hiders = [p for p in players if p != seeker][:10]
-    spots = list(range(1, 11))
-    random.shuffle(spots)
-    hidden_spots = {p: spots[i] for i, p in enumerate(hiders)}
-    found = set()
-    attempts = len(hidden_spots) + 4
+    hiders = [p for p in players if p != seeker]
+    view = HideSeekView(seeker, hiders)
     await ctx.send(
-        f"🙈 {seeker.mention} هو الباحث! الباقين مختبئين بأرقام من 1 إلى 10.\n"
-        f"اكتب رقم للبحث فيه (عندك {attempts} محاولة)."
+        f"🙈 {seeker.mention} هو الباحث! الباقين مختبئين بأرقام من 1 إلى {len(hiders)}.\n"
+        f"اضغط على رقم عشان تبحث فيه 👇", view=view
     )
-    for _ in range(attempts):
-        def check(m: discord.Message):
-            return m.channel == ctx.channel and m.author == seeker and m.content.strip().isdigit()
-
-        try:
-            m = await bot.wait_for("message", check=check, timeout=20)
-        except asyncio.TimeoutError:
-            await ctx.send("⏳ خلص وقت الباحث!")
-            break
-        guess = int(m.content.strip())
-        hit = None
-        for p, spot in hidden_spots.items():
-            if spot == guess and p not in found:
-                hit = p
-                break
-        if hit:
-            found.add(hit)
-            add_balance(ctx.guild.id, seeker.id, 20)
-            await ctx.send(f"🎯 لقيت {hit.mention}!")
-            if len(found) == len(hidden_spots):
-                break
-        else:
-            await ctx.send("❌ ما فيه أحد بهذا الرقم.")
-    for p in hidden_spots:
-        if p not in found:
+    try:
+        await asyncio.wait_for(view.all_found.wait(), timeout=90)
+    except asyncio.TimeoutError:
+        pass
+    for c in view.children:
+        c.disabled = True
+    try:
+        await ctx.send("🏁 خلص وقت البحث!" if len(view.found) < len(hiders) else "🏁 لقاهم كلهم!")
+    except discord.NotFound:
+        pass
+    for p in hiders:
+        if p.id not in view.found:
             add_balance(ctx.guild.id, p.id, 40)
-    remaining = len(hidden_spots) - len(found)
-    await ctx.send(f"🏁 انتهت اللعبة! {seeker.mention} لقى **{len(found)}** وبقي **{remaining}** مختبئين ماله دري عنهم.")
+    remaining = len(hiders) - len(view.found)
+    await ctx.send(f"📊 {seeker.mention} لقى **{len(view.found)}** وبقي **{remaining}** ماله دري عنهم.")
 
 
 # ---------- ريبلكا (احفظ الترتيب) ----------
@@ -1764,8 +1784,9 @@ class ChairsView(discord.ui.View):
         super().__init__(timeout=15)
         self.remaining = players.copy()
         self.taken: set[int] = set()
-        chairs = max(1, len(players) - 1)
-        for i in range(chairs):
+        self.done = asyncio.Event()
+        self.chairs = max(1, len(players) - 1)
+        for i in range(self.chairs):
             btn = discord.ui.Button(label=f"🪑 كرسي {i + 1}", style=discord.ButtonStyle.secondary)
             btn.callback = self._make_cb(btn)
             self.add_item(btn)
@@ -1786,6 +1807,8 @@ class ChairsView(discord.ui.View):
             btn.style = discord.ButtonStyle.success
             self.taken.add(interaction.user.id)
             await interaction.response.edit_message(view=self)
+            if len(self.taken) >= self.chairs:
+                self.done.set()
         return cb
 
 
@@ -1811,7 +1834,10 @@ async def _run_chairs(ctx: commands.Context):
         msg = await ctx.send(
             f"🪑 **الجولة {round_num}**: {len(players)} لاعبين و {max(1, len(players) - 1)} كرسي! بسرعة اقعدوا 👇",
             view=view)
-        await asyncio.sleep(12)
+        try:
+            await asyncio.wait_for(view.done.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            pass
         for c in view.children:
             c.disabled = True
         try:
@@ -1842,7 +1868,7 @@ GAME_LIST = {
         (".حجرة @خصمك", "حجرة ورقة مقص بينك وبين خصم."),
         (".نرد", "كل واحد يرمي نرد، الأعلى يفوز."),
         (".عجلة", "عجلة حظ تختار فايز عشوائي."),
-        (".غميضة", "وحد يبحث عن الباقين المختبئين بأرقام."),
+        (".غميضة", "وحد يبحث عن الباقين المختبئين بأزرار مرقّمة."),
         (".ريبلكا", "احفظوا ترتيب الرموز واكتبوه صح."),
         (".خمن [أقصى رقم]", "تخمين رقم سري بالشات."),
         (".كلمة", "قول كلمة تبدأ بآخر حرف من الكلمة المعطاة."),
@@ -1872,7 +1898,7 @@ GAME_HELP = {
     "حجرة": "حجرة ورقة مقص بينك وبين خصم، كل واحد يختار بالخفاء والنتيجة تبان بعد اختيار الاثنين.",
     "نرد": "كل لاعب يرمي نرد تلقائيًا، وصاحب أعلى رقم يفوز بالنقاط.",
     "عجلة": "بعد ما يكتمل اللوبي، العجلة تدور وتختار فايز عشوائي من المنضمين.",
-    "غميضة": "لاعب وحد يصير الباحث، والباقين يتوزعون على أرقام من 1-10 بالخفاء، والباحث يخمن الأرقام يلقاهم.",
+    "غميضة": "لاعب وحد يصير الباحث، والباقين يتوزعون سرًا على أرقام حسب عددهم، والباحث يضغط الأزرار عشان يلقاهم.",
     "ريبلكا": "تشوفون ترتيب رموز لمدة 5 ثواني، وبعدها لازم تكتبونه بنفس الترتيب بالضبط، أول وحد يجاوب صح يفوز.",
     "خمن": "البوت يختار رقم سري بين 1 والرقم اللي تحدده، واكتبوا تخمينكم بالشات وبيعطيكم تلميح فوق/تحت.",
     "كلمة": "يعطيكم البوت كلمة، وأول وحد يكتب كلمة تبدأ بآخر حرف منها يفوز بالنقاط.",
