@@ -1109,6 +1109,15 @@ async def spin_wheel_on(msg: discord.Message, players: list, prefix: str = ""):
 
 
 # ---------- عجلة دائرية حقيقية (سهم ثابت + عجلة صور بروفايل اللاعبين تدور) — خاصة بالروليت بس ----------
+# ألوان الأقسام: كل لاعب ياخذ لون عشوائي مختلف عن الباقين (24 لون، والحد الأقصى 20 لاعب)
+WHEEL_COLORS = [
+    "#E74C3C", "#E67E22", "#F1C40F", "#2ECC71", "#1ABC9C", "#3498DB", "#9B59B6", "#E91E63",
+    "#00BCD4", "#8BC34A", "#FF5722", "#673AB7", "#009688", "#FFC107", "#03A9F4", "#CDDC39",
+    "#FF4081", "#795548", "#FF6F61", "#6A5ACD", "#20B2AA", "#FF8C00", "#4169E1", "#C71585",
+]
+WHEEL_BG = (49, 51, 56)   # خلفية الـGIF (نفس لون خلفية ديسكورد الداكن)
+
+
 async def _get_avatar_circle(member: discord.Member, size: int = 160):
     """يحمّل أفتار العضو ويرجعه كصورة دائرية جاهزة للّصق. يرجع None لو فشل التحميل."""
     try:
@@ -1124,57 +1133,62 @@ async def _get_avatar_circle(member: discord.Member, size: int = 160):
         return None
 
 
-def _draw_wheel_frame(avatars: list, names: list, rotation_deg: float, size: int = 420) -> BytesIO:
-    """يرسم عجلة دائرية مقسّمة بعدد اللاعبين، وبكل قسم صورة بروفايل العضو (أو حروف اسمه لو ما قدرنا نحمّل الصورة)،
-    وسهم ثابت فوق العجلة يشاور تحت."""
-    img = Image.new("RGBA", (size, size + 40), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    top_margin = 40
-    center = size // 2
-    cy = top_margin + center
+def _prepare_wheel_assets(avatars: list, names: list, size: int = 420) -> list:
+    """يجهّز صورة كل لاعب (الأفتار بإطار أبيض، أو حروف الاسم لو ما قدرنا نحمّل الصورة) مرة وحدة،
+    عشان رسم الفريمات يكون سريع وسلس."""
     radius = size // 2 - 8
-    n = len(avatars)
-    sector = 360 / n
-    ring_colors = ["#4F545C", "#5A5F68"]  # لون عادي رمادي متبادل (بدون أحمر/أخضر)
+    avatar_size = max(28, int(radius * 0.34))
+    ring_size = avatar_size + 6
     try:
         font = ImageFont.load_default(size=20)
     except TypeError:
         font = ImageFont.load_default()
-
-    bbox_box = [center - radius, cy - radius, center + radius, cy + radius]
-    avatar_size = max(28, int(radius * 0.34))
-
-    for i in range(n):
-        start_angle = rotation_deg + i * sector
-        end_angle = start_angle + sector
-        color = ring_colors[i % 2]
-        draw.pieslice(bbox_box, start_angle, end_angle, fill=color, outline="#2C2F33", width=2)
-
-    for i in range(n):
-        start_angle = rotation_deg + i * sector
-        mid_angle = math.radians(start_angle + sector / 2)
-        text_radius = radius * 0.68
-        tx = center + text_radius * math.cos(mid_angle)
-        ty = cy + text_radius * math.sin(mid_angle)
-
+    rings = []
+    for i in range(len(avatars)):
         avatar_img = avatars[i]
         if avatar_img is not None:
             av = avatar_img.resize((avatar_size, avatar_size))
-            ring_size = avatar_size + 6
             ring = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
-            ring_draw = ImageDraw.Draw(ring)
-            ring_draw.ellipse((0, 0, ring_size, ring_size), fill=(255, 255, 255, 255))
+            ImageDraw.Draw(ring).ellipse((0, 0, ring_size, ring_size), fill=(255, 255, 255, 255))
             ring.paste(av, (3, 3), av)
-            img.paste(ring, (int(tx - ring_size / 2), int(ty - ring_size / 2)), ring)
         else:
+            ring = Image.new("RGBA", (avatar_size, avatar_size), (0, 0, 0, 0))
+            d = ImageDraw.Draw(ring)
+            d.ellipse((0, 0, avatar_size, avatar_size), fill="#7289DA")
             text = names[i][:2] if names[i] else "?"
-            tb = draw.textbbox((0, 0), text, font=font)
+            tb = d.textbbox((0, 0), text, font=font)
             w, h = tb[2] - tb[0], tb[3] - tb[1]
-            draw.ellipse(
-                (tx - avatar_size / 2, ty - avatar_size / 2, tx + avatar_size / 2, ty + avatar_size / 2),
-                fill="#7289DA",
-            )
-            draw.text((tx - w / 2 - tb[0], ty - h / 2 - tb[1]), text, fill="#FFFFFF", font=font)
+            d.text(((avatar_size - w) / 2 - tb[0], (avatar_size - h) / 2 - tb[1]), text, fill="#FFFFFF", font=font)
+        rings.append(ring)
+    return rings
+
+
+def _draw_wheel_frame(rings: list, colors: list, rotation_deg: float, size: int = 420, bg=None):
+    """يرسم عجلة دائرية مقسّمة بعدد اللاعبين، كل قسم بلون مختلف وبه صورة بروفايل العضو،
+    وسهم ثابت فوق العجلة يشاور تحت."""
+    top_margin = 40
+    center = size // 2
+    cy = top_margin + center
+    radius = size // 2 - 8
+    n = len(rings)
+    sector = 360 / n
+    rotation_deg = rotation_deg % 360
+    img = Image.new("RGBA", (size, size + 40), bg if bg is not None else (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    bbox_box = [center - radius, cy - radius, center + radius, cy + radius]
+
+    for i in range(n):
+        start_angle = rotation_deg + i * sector
+        draw.pieslice(bbox_box, start_angle, start_angle + sector,
+                      fill=colors[i % len(colors)], outline="#2C2F33", width=2)
+
+    for i in range(n):
+        mid_angle = math.radians(rotation_deg + i * sector + sector / 2)
+        text_radius = radius * 0.68
+        tx = center + text_radius * math.cos(mid_angle)
+        ty = cy + text_radius * math.sin(mid_angle)
+        ring = rings[i]
+        img.paste(ring, (int(tx - ring.width / 2), int(ty - ring.height / 2)), ring)
 
     # إطار خارجي للعجلة
     draw.ellipse(bbox_box, outline="#23272A", width=4)
@@ -1183,51 +1197,78 @@ def _draw_wheel_frame(avatars: list, names: list, rotation_deg: float, size: int
     # السهم الثابت فوق العجلة يشاور تحت
     arrow = [(center - 14, 6), (center + 14, 6), (center, 34)]
     draw.polygon(arrow, fill="#B9BBBE")
-    buf = BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return buf
+    return img
+
+
+def _build_wheel_gif(avatars: list, names: list, winner_index: int, colors: list):
+    """يبني GIF واحد سلس للعجلة وهي تدور وتبطّئ لين توقف بالضبط عند الفايز، مع صورة ثابتة للنتيجة.
+    يرجع (gif_bytes, png_bytes, مدة_الـGIF_بالثواني)."""
+    n = len(avatars)
+    sector = 360 / n
+    rings = _prepare_wheel_assets(avatars, names)
+
+    # السهم فوق العجلة = زاوية 270 بنظام الرسم (pieslice تبدأ من 3 الساعة وتزيد باتجاه عقارب الساعة)
+    target_offset = (270 - (winner_index * sector + sector / 2)) % 360
+    start_rotation = random.uniform(0, 360)   # كل لفّة تبدأ من زاوية عشوائية
+    total_spin = ((target_offset - start_rotation) % 360) + 360 * random.randint(2, 3)
+
+    frame_count = 48
+    frames = []
+    for k in range(1, frame_count + 1):
+        progress = k / frame_count
+        eased = 1 - (1 - progress) ** 2.4   # تباطؤ تدريجي (ease-out)
+        rotation = start_rotation + total_spin * eased
+        frames.append(_draw_wheel_frame(rings, colors, rotation, bg=WHEEL_BG).convert("RGB"))
+
+    frames_p = [f.quantize(colors=256, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+                for f in frames]
+    durations = [70] * (frame_count - 1) + [1500]
+    gif_buf = BytesIO()
+    frames_p[0].save(gif_buf, format="GIF", save_all=True, append_images=frames_p[1:],
+                     duration=durations, loop=0)
+
+    final_img = _draw_wheel_frame(rings, colors, start_rotation + total_spin)
+    png_buf = BytesIO()
+    final_img.save(png_buf, format="PNG")
+    return gif_buf.getvalue(), png_buf.getvalue(), sum(durations) / 1000
 
 
 async def _spin_wheel_image(msg: discord.Message, avatars: list, names: list, winner_index: int,
-                             header: str = "🎡 العجلة تدور...") -> None:
-    """يدوّر عجلة دائرية فيها سهم ثابت بالتعديل على مرفق الرسالة، لين توقف بالضبط عند اللاعب الفايز."""
-    n = len(avatars)
-    sector = 360 / n
-    # السهم فوق العجلة = زاوية 270 بنظام الرسم (pieslice تبدأ من 3 الساعة وتزيد باتجاه عقارب الساعة)
-    target_offset = (270 - (winner_index * sector + sector / 2)) % 360
-    total_spin = 360 * random.randint(3, 5) + target_offset
-    frames = 16
-    for f in range(1, frames + 1):
-        progress = f / frames
-        eased = 1 - (1 - progress) ** 3  # تباطؤ تدريجي (ease-out)
-        angle = total_spin * eased
-        buf = _draw_wheel_frame(avatars, names, angle)
-        file = discord.File(buf, filename="wheel.png")
-        try:
-            await msg.edit(content=header, attachments=[file])
-        except discord.NotFound:
-            return
-        await asyncio.sleep(0.12 + 0.23 * progress)
+                             colors: list, header: str = "🎡 العجلة تدور...") -> None:
+    """يدوّر عجلة دائرية فيها سهم ثابت (GIF واحد سلس بدون تقطيع)، لين توقف بالضبط عند اللاعب الفايز."""
+    gif_bytes, png_bytes, secs = await asyncio.to_thread(
+        _build_wheel_gif, avatars, names, winner_index, colors)
+    try:
+        await msg.edit(content=header, attachments=[discord.File(BytesIO(gif_bytes), filename="wheel.gif")])
+        await asyncio.sleep(secs + 1.0)
+        # نثبّت آخر صورة (بدل ما الـGIF يعيد نفسه)
+        await msg.edit(attachments=[discord.File(BytesIO(png_bytes), filename="wheel.png")])
+    except discord.NotFound:
+        return
 
 
 async def spin_and_choose(msg: discord.Message, players: list[discord.Member],
                            header: str = "🎡 العجلة تدور تختار...") -> discord.Member:
     """يدوّر عجلة دائرية فيها صور بروفايل اللاعبين وسهم ثابت، ويرجع اللاعب اللي وقف عليه السهم.
-    لو Pillow مو متوفرة، يرجع لأسلوب العجلة النصية القديم تلقائيًا."""
+    الاختيار عشوائي 100%: ترتيب الأقسام على العجلة يتخربط كل مرة، والفايز يتحدد بعشوائية النظام،
+    ومافيه أي أفضلية للمضيف أو لرقم المقعد. لو Pillow مو متوفرة، يرجع لأسلوب العجلة النصية القديم."""
     if not players:
         return None
-    n = len(players)
-    winner_idx = random.randrange(n)
+    rng = random.SystemRandom()
+    order = list(players)
+    rng.shuffle(order)                       # ترتيب الأقسام على العجلة عشوائي
+    n = len(order)
+    winner_idx = rng.randrange(n)            # الفايز عشوائي
     if PIL_AVAILABLE:
         try:
-            avatars = await asyncio.gather(*(_get_avatar_circle(p) for p in players))
-            names = [p.display_name for p in players]
-            await _spin_wheel_image(msg, list(avatars), names, winner_idx, header=header)
-            return players[winner_idx]
+            avatars = await asyncio.gather(*(_get_avatar_circle(p) for p in order))
+            names = [p.display_name for p in order]
+            colors = rng.sample(WHEEL_COLORS, n) if n <= len(WHEEL_COLORS) else [rng.choice(WHEEL_COLORS) for _ in range(n)]
+            await _spin_wheel_image(msg, list(avatars), names, winner_idx, colors, header=header)
+            return order[winner_idx]
         except Exception as e:
             print(f"[روليت] تعذّر رسم العجلة الدائرية، رجعنا لأسلوب النص: {e}")
-    return await spin_wheel_on(msg, players, prefix=header + "\n")
+    return await spin_wheel_on(msg, order, prefix=header + "\n")
 
 
 # ---------- روليت روسي ----------
@@ -1304,37 +1345,26 @@ class RouletteSeatButton(discord.ui.Button):
 
         if self.occupant is not None:
             if self.occupant.id == user.id:
-                # يقعد بنفس مقعده مرة ثانية = يطلع منه
-                self.occupant = None
-                self.label = str(self.seat_number)
-                view.seats.pop(self.seat_number, None)
-                await interaction.response.edit_message(content=view.status_text(), view=view)
+                await interaction.response.send_message(
+                    "✅ أنت جالس على هذا المقعد أصلًا. اضغط 🚪 خروج لو تبي تطلع.", ephemeral=True)
             else:
                 await interaction.response.send_message("❌ هذا المقعد محجوز لعضو ثاني.", ephemeral=True)
             return
 
-        if user.id in view.taken_by_user:
-            # عنده مقعد ثاني مسبقًا — نطلعه منه ونحجز له هذا
-            old_seat_number = view.taken_by_user[user.id]
-            old_btn = view.seat_buttons.get(old_seat_number)
-            if old_btn:
-                old_btn.occupant = None
-                old_btn.label = str(old_seat_number)
-            view.seats.pop(old_seat_number, None)
-
-        if len(view.seats) >= view.max_seats:
+        if len(view.seats) >= view.max_seats and user.id not in view.taken_by_user:
             await interaction.response.send_message("⚠️ كل المقاعد محجوزة.", ephemeral=True)
             return
 
+        # لو كان جالس بمقعد ثاني، نحرره ونحجز له هذا
+        view.release_seat(user.id)
         self.occupant = user
-        self.label = str(self.seat_number)
         view.seats[self.seat_number] = user
         view.taken_by_user[user.id] = self.seat_number
         await interaction.response.edit_message(content=view.status_text(), view=view)
 
 
 class RouletteSeatLobbyView(discord.ui.View):
-    """لوبي دخول الروليت بمقاعد مرقّمة من 1 إلى 20 (زر لكل رقم، بدون ألوان تحذيرية)."""
+    """لوبي دخول الروليت بمقاعد مرقّمة من 1 إلى 20 (زر لكل رقم)، وتحتها زر يبدأ وزر خروج."""
 
     def __init__(self, host: discord.Member, min_players: int = 3, max_seats: int = 20, countdown: int = 30):
         super().__init__(timeout=countdown + 30)
@@ -1356,16 +1386,27 @@ class RouletteSeatLobbyView(discord.ui.View):
         # يحجز المضيف مقعد رقم 1 تلقائيًا
         first_btn = self.seat_buttons[1]
         first_btn.occupant = host
-        first_btn.label = "1"
         self.seats[1] = host
         self.taken_by_user[host.id] = 1
+
+    def release_seat(self, user_id: int):
+        """يحرر مقعد اللاعب (لو عنده) ويرجع رقمه."""
+        seat = self.taken_by_user.pop(user_id, None)
+        if seat is not None:
+            btn = self.seat_buttons.get(seat)
+            if btn is not None and btn.occupant is not None and btn.occupant.id == user_id:
+                btn.occupant = None
+            occupant = self.seats.get(seat)
+            if occupant is not None and occupant.id == user_id:
+                del self.seats[seat]
+        return seat
 
     def status_text(self) -> str:
         taken = "، ".join(f"[{n}] {m.mention}" for n, m in sorted(self.seats.items()))
         return (
             f"🎡 **الروليت الروسي — اختر مقعدك** ({len(self.seats)}/{self.max_seats})\n"
             f"{taken if taken else 'ما فيه أحد لسا'}\n\n"
-            f"اضغط على رقم عشان تحجز مقعدك، واضغطه مرة ثانية عشان تطلع منه.\n"
+            f"اضغط على رقم عشان تحجز مقعدك، وإذا تبي تنسحب اضغط 🚪 خروج.\n"
             f"المضيف {self.host.mention} يقدر يضغط ▶️ يبدأ عشان يبدأ مبكرًا (أدنى عدد: {self.min_players}).\n"
             f"⏳ تبدأ تلقائيًا خلال {self.countdown} ثانية."
         )
@@ -1383,6 +1424,16 @@ class RouletteSeatLobbyView(discord.ui.View):
         await interaction.response.edit_message(view=self)
         self.started = True
         self.start_event.set()
+
+    @discord.ui.button(label="🚪 خروج", style=discord.ButtonStyle.secondary, row=4)
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in self.taken_by_user:
+            await interaction.response.send_message("⚠️ أنت مو داخل أصلًا.", ephemeral=True)
+            return
+        self.release_seat(interaction.user.id)
+        if interaction.user.id == self.host.id and self.seats:
+            self.host = self.seats[min(self.seats)]   # المضيف طلع → أقل رقم مقعد يصير المضيف
+        await interaction.response.edit_message(content=self.status_text(), view=self)
 
 
 async def run_roulette_seat_lobby(ctx: commands.Context, min_players: int = 3,
