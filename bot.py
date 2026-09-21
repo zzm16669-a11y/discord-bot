@@ -1108,43 +1108,79 @@ async def spin_wheel_on(msg: discord.Message, players: list, prefix: str = ""):
     return players[winner_idx]
 
 
-# ---------- عجلة دائرية حقيقية (سهم ثابت + عجلة أرقام تدور) — خاصة بالروليت بس ----------
-def _draw_wheel_frame(numbers: list[int], rotation_deg: float, size: int = 420) -> BytesIO:
-    """يرسم عجلة دائرية مقسّمة بعدد اللاعبين، بألوان عادية (رمادي متبادل)، وسهم أحمر ثابت فوق يشاور تحت."""
+# ---------- عجلة دائرية حقيقية (سهم ثابت + عجلة صور بروفايل اللاعبين تدور) — خاصة بالروليت بس ----------
+async def _get_avatar_circle(member: discord.Member, size: int = 160):
+    """يحمّل أفتار العضو ويرجعه كصورة دائرية جاهزة للّصق. يرجع None لو فشل التحميل."""
+    try:
+        data = await member.display_avatar.replace(size=128, format="png").read()
+        img = Image.open(BytesIO(data)).convert("RGBA").resize((size, size))
+        mask = Image.new("L", (size, size), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
+        circular = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        circular.paste(img, (0, 0), mask)
+        return circular
+    except Exception as e:
+        print(f"[روليت] تعذّر تحميل أفتار {member}: {e}")
+        return None
+
+
+def _draw_wheel_frame(avatars: list, names: list, rotation_deg: float, size: int = 420) -> BytesIO:
+    """يرسم عجلة دائرية مقسّمة بعدد اللاعبين، وبكل قسم صورة بروفايل العضو (أو حروف اسمه لو ما قدرنا نحمّل الصورة)،
+    وسهم ثابت فوق العجلة يشاور تحت."""
     img = Image.new("RGBA", (size, size + 40), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     top_margin = 40
     center = size // 2
     cy = top_margin + center
     radius = size // 2 - 8
-    n = len(numbers)
+    n = len(avatars)
     sector = 360 / n
     ring_colors = ["#4F545C", "#5A5F68"]  # لون عادي رمادي متبادل (بدون أحمر/أخضر)
     try:
-        font = ImageFont.load_default(size=22)
+        font = ImageFont.load_default(size=20)
     except TypeError:
         font = ImageFont.load_default()
 
     bbox_box = [center - radius, cy - radius, center + radius, cy + radius]
-    for i, num in enumerate(numbers):
+    avatar_size = max(28, int(radius * 0.34))
+
+    for i in range(n):
         start_angle = rotation_deg + i * sector
         end_angle = start_angle + sector
         color = ring_colors[i % 2]
         draw.pieslice(bbox_box, start_angle, end_angle, fill=color, outline="#2C2F33", width=2)
+
+    for i in range(n):
+        start_angle = rotation_deg + i * sector
         mid_angle = math.radians(start_angle + sector / 2)
-        text_radius = radius * 0.72
+        text_radius = radius * 0.68
         tx = center + text_radius * math.cos(mid_angle)
         ty = cy + text_radius * math.sin(mid_angle)
-        text = str(num)
-        tb = draw.textbbox((0, 0), text, font=font)
-        w, h = tb[2] - tb[0], tb[3] - tb[1]
-        draw.text((tx - w / 2 - tb[0], ty - h / 2 - tb[1]), text, fill="#FFFFFF", font=font)
+
+        avatar_img = avatars[i]
+        if avatar_img is not None:
+            av = avatar_img.resize((avatar_size, avatar_size))
+            ring_size = avatar_size + 6
+            ring = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
+            ring_draw = ImageDraw.Draw(ring)
+            ring_draw.ellipse((0, 0, ring_size, ring_size), fill=(255, 255, 255, 255))
+            ring.paste(av, (3, 3), av)
+            img.paste(ring, (int(tx - ring_size / 2), int(ty - ring_size / 2)), ring)
+        else:
+            text = names[i][:2] if names[i] else "?"
+            tb = draw.textbbox((0, 0), text, font=font)
+            w, h = tb[2] - tb[0], tb[3] - tb[1]
+            draw.ellipse(
+                (tx - avatar_size / 2, ty - avatar_size / 2, tx + avatar_size / 2, ty + avatar_size / 2),
+                fill="#7289DA",
+            )
+            draw.text((tx - w / 2 - tb[0], ty - h / 2 - tb[1]), text, fill="#FFFFFF", font=font)
 
     # إطار خارجي للعجلة
     draw.ellipse(bbox_box, outline="#23272A", width=4)
     # مركز العجلة
     draw.ellipse([center - 10, cy - 10, center + 10, cy + 10], fill="#23272A")
-    # السهم الثابت فوق العجلة يشاور تحت (نفس اللون بكل الإطارات — عادي مو أحمر/أخضر)
+    # السهم الثابت فوق العجلة يشاور تحت
     arrow = [(center - 14, 6), (center + 14, 6), (center, 34)]
     draw.polygon(arrow, fill="#B9BBBE")
     buf = BytesIO()
@@ -1153,11 +1189,10 @@ def _draw_wheel_frame(numbers: list[int], rotation_deg: float, size: int = 420) 
     return buf
 
 
-async def _spin_wheel_image(msg: discord.Message, numbers: list[int], winner_number: int,
+async def _spin_wheel_image(msg: discord.Message, avatars: list, names: list, winner_index: int,
                              header: str = "🎡 العجلة تدور...") -> None:
-    """يدوّر عجلة دائرية فيها سهم ثابت بالتعديل على مرفق الرسالة، لين توقف بالضبط عند رقم الفايز."""
-    n = len(numbers)
-    winner_index = numbers.index(winner_number)
+    """يدوّر عجلة دائرية فيها سهم ثابت بالتعديل على مرفق الرسالة، لين توقف بالضبط عند اللاعب الفايز."""
+    n = len(avatars)
     sector = 360 / n
     # السهم فوق العجلة = زاوية 270 بنظام الرسم (pieslice تبدأ من 3 الساعة وتزيد باتجاه عقارب الساعة)
     target_offset = (270 - (winner_index * sector + sector / 2)) % 360
@@ -1167,7 +1202,7 @@ async def _spin_wheel_image(msg: discord.Message, numbers: list[int], winner_num
         progress = f / frames
         eased = 1 - (1 - progress) ** 3  # تباطؤ تدريجي (ease-out)
         angle = total_spin * eased
-        buf = _draw_wheel_frame(numbers, angle)
+        buf = _draw_wheel_frame(avatars, names, angle)
         file = discord.File(buf, filename="wheel.png")
         try:
             await msg.edit(content=header, attachments=[file])
@@ -1178,7 +1213,7 @@ async def _spin_wheel_image(msg: discord.Message, numbers: list[int], winner_num
 
 async def spin_and_choose(msg: discord.Message, players: list[discord.Member],
                            header: str = "🎡 العجلة تدور تختار...") -> discord.Member:
-    """يدوّر عجلة دائرية بأرقام تمثل اللاعبين (1..ن) وسهم ثابت، ويرجع اللاعب اللي وقف عليه السهم.
+    """يدوّر عجلة دائرية فيها صور بروفايل اللاعبين وسهم ثابت، ويرجع اللاعب اللي وقف عليه السهم.
     لو Pillow مو متوفرة، يرجع لأسلوب العجلة النصية القديم تلقائيًا."""
     if not players:
         return None
@@ -1186,8 +1221,9 @@ async def spin_and_choose(msg: discord.Message, players: list[discord.Member],
     winner_idx = random.randrange(n)
     if PIL_AVAILABLE:
         try:
-            numbers = list(range(1, n + 1))
-            await _spin_wheel_image(msg, numbers, numbers[winner_idx], header=header)
+            avatars = await asyncio.gather(*(_get_avatar_circle(p) for p in players))
+            names = [p.display_name for p in players]
+            await _spin_wheel_image(msg, list(avatars), names, winner_idx, header=header)
             return players[winner_idx]
         except Exception as e:
             print(f"[روليت] تعذّر رسم العجلة الدائرية، رجعنا لأسلوب النص: {e}")
