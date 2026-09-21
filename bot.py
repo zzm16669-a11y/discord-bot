@@ -2222,6 +2222,28 @@ async def cmd_restore_role(message: discord.Message, args: str):
         await reply(message, f"📥 تم إرجاع رتبة {role.name} لـ {target.mention}")
 
 
+async def cmd_give_role(message: discord.Message, args: str):
+    if not message.mentions or not message.role_mentions:
+        await reply(message, "⚠️ الصيغة: `رول @العضو @الرتبة`")
+        return
+    target = message.mentions[0]
+    role = message.role_mentions[0]
+    author = message.author
+    await cleanup(message)
+    if role in target.roles:
+        await reply(message, f"⚠️ {target.mention} عنده رتبة {role.name} أصلًا")
+        return
+    # ما أحد يعطي رتبة أعلى من رتبته أو مساوية لها (إلا مالك السيرفر)
+    if author.id != message.guild.owner_id and role >= author.top_role:
+        await reply(message, "❌ ما تقدر تعطي رتبة أعلى من رتبتك أو مساوية لها.")
+        return
+    try:
+        await target.add_roles(role, reason=f"بواسطة {author}")
+        await reply(message, f"📥 تم إعطاء {target.mention} رتبة {role.name}")
+    except discord.Forbidden:
+        await reply(message, "❌ ما أقدر أعطي هذي الرتبة (رتبتي أقل منها).")
+
+
 # ---------- إدارة الرومات ----------
 async def cmd_purge(message: discord.Message, args: str):
     amount_text = args.strip().split()[0] if args.strip() else "50"
@@ -2397,6 +2419,7 @@ ADMIN_COMMANDS = {
     "اسم": (MOD_ROLES, cmd_nick),
     "تنزيل": (ADMIN_ROLES, cmd_remove_role),
     "رجع": (ADMIN_ROLES, cmd_restore_role),
+    "رول": (ADMIN_ROLES, cmd_give_role),
     # إدارة الرومات
     "اباده": (ADMIN_ROLES, cmd_purge),
     "مسح": (ADMIN_ROLES, cmd_purge),
