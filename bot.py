@@ -11,7 +11,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
 def run_web_server():
     server_address = ('0.0.0.0', 10000)
     httpd = HTTPServer(server_address, SimpleHandler)
-    httpd.serve_forever()
+    httpd.serve_forever()"""
 بوت ديسكورد شامل — نسخة كاملة مدموجة (مع مركز الألعاب الموسّع)
 =====================================================================
 الأقسام:
@@ -1958,10 +1958,8 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
 
 
 if __name__ == "__main__":
-    # تشغيل خادم الويب في خلفية منفصلة
     t = threading.Thread(target=run_web_server)
     t.daemon = True
     t.start()
     
-    # تشغيل البوت
     bot.run(DISCORD_TOKEN)
