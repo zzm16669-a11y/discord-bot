@@ -1359,14 +1359,14 @@ class RouletteView(discord.ui.View):
                     c.disabled = True
                 add_balance(interaction.guild.id, winner.id, 100)
                 await interaction.response.edit_message(
-                    content=f"💀 تم إقصاء {target.mention}!\n\n🏆 الناجي: {winner.mention}! (+100 نقطة) 🎉", view=self
+                    content=f"💀 {interaction.user.mention} أقصى {target.mention} من اللعبة!\n\n🏆 الناجي: {winner.mention}! (+100 نقطة) 🎉", view=self
                 )
                 self.stop()
                 return
 
             # العجلة الدائرية تدور وتختار مين دوره يطلع وحد
             self.spinning = True
-            prefix = f"💀 تم إقصاء {target.mention}!\n\n"
+            prefix = f"💀 {interaction.user.mention} أقصى {target.mention} من اللعبة!\n\n"
             await interaction.response.edit_message(content=prefix + "🎡 العجلة تدور...", view=None)
             msg = interaction.message
             try:
