@@ -281,6 +281,21 @@ async def transfer_cmd(ctx: commands.Context, member: discord.Member, amount: in
     await ctx.send(f"✅ تم تحويل **{amount}** نقطة إلى {member.mention}")
 
 
+@bot.command(name="اصدار")
+async def mint_points_cmd(ctx: commands.Context, amount: int):
+    """يضيف نقاط من العدم لرصيد صاحب الأمر — بس لصاحب رول Owner أو مالك السيرفر."""
+    has_owner_role = isinstance(ctx.author, discord.Member) and has_role(ctx.author, [OWNER])
+    is_guild_owner = ctx.guild is not None and ctx.author.id == ctx.guild.owner_id
+    if not (has_owner_role or is_guild_owner):
+        await ctx.send(f"{ctx.author.mention} ❌ ما عندك الصلاحية.", delete_after=8)
+        return
+    if amount <= 0:
+        await ctx.send("⚠️ المبلغ لازم يكون أكبر من صفر.")
+        return
+    new_balance = add_balance(ctx.guild.id, ctx.author.id, amount)
+    await ctx.send(f"💰 {ctx.author.mention} تمت إضافة **{amount}** نقطة لرصيدك. رصيدك الحين: **{new_balance}** نقطة")
+
+
 # ============================================================
 # 3) نظام الجولات العام — لألعاب "أول من يجاوب صح يفوز"
 # ============================================================
@@ -1359,10 +1374,9 @@ class RouletteView(discord.ui.View):
                 for c in self.children:
                     c.disabled = True
                 add_balance(interaction.guild.id, winner.id, 100)
-                await interaction.response.edit_message(
-                    content=f"🏆 الناجي: {winner.mention}! (+100 نقطة) 🎉", view=self
-                )
+                await interaction.response.edit_message(view=self)
                 await interaction.channel.send(elim_text)
+                await interaction.channel.send(f"🏆 الفايز: {winner.mention}! (+100 نقطة) 🎉")
                 self.stop()
                 return
 
