@@ -50,6 +50,9 @@ ECONOMY_FILE = "economy.json"
 JAIL_FILE = "jail_data.json"
 ROLES_REMOVED_FILE = "removed_roles.json"
 
+# اسم رول الألعاب — لازم يطابق اسم الرول اللي سويته بالسيرفر حرف بحرف
+GAMES_ROLE_NAME = "Event Team"
+
 JAIL_ROLE_NAME = "Jailed"
 MUTE_ROLE_NAME = "Muted"
 WARN_LOG_CHANNEL_NAMES = ["warn-log", "توثيق-التنبيهات", "سجل-التنبيهات", "تنبيهات-اللوق", "log-تنبيهات"]
@@ -401,11 +404,33 @@ def scramble(word: str) -> str:
 # ============================================================
 # 5) ألعاب الجولات الفردية/السريعة (أول من يجاوب صح)
 # ============================================================
+SPLIT_BANK = ["بكره", "مدرسة", "حاسوب", "سيارة", "طائرة", "مكتبة", "حديقة", "سلام",
+              "صباح", "مساء", "قهوة", "مطعم", "ملعب", "صديق", "كتاب", "نافذة", "مفتاح", "شمس", "قمر", "بحر"]
+
+
 @bot.command(name="فكك")
+async def split_letters_cmd(ctx: commands.Context):
+    """فكك الكلمة حرف حرف: بكره ← ب ك ر ه"""
+    word = random.choice(SPLIT_BANK)
+    letters = list(normalize(word))
+    spaced = " ".join(word)
+
+    def checker(content: str) -> bool:
+        cleaned = re.sub(r"[-_.,،|/]", " ", content)
+        tokens = [normalize(t) for t in cleaned.split()]
+        return tokens == letters
+
+    await start_round(ctx.channel, title="فكك الكلمة",
+                       prompt=f"فكك هذي الكلمة حرف حرف (بين كل حرف مسافة): **{word}**\nمثال: بكره ← ب ك ر ه",
+                       checker=checker, reward=(25, 45), reveal=spaced)
+
+
+@bot.command(name="رتب")
 async def unscramble_cmd(ctx: commands.Context):
+    """رتب الحروف المبعثرة (اللعبة القديمة حقت فكك)"""
     word = random.choice(WORD_BANK)
     scrambled = scramble(word)
-    await start_round(ctx.channel, title="فكك الكلمة", prompt=f"رتب الحروف: **{scrambled}**",
+    await start_round(ctx.channel, title="رتب الحروف", prompt=f"رتب الحروف: **{scrambled}**",
                        checker=lambda c: normalize(c) == normalize(word),
                        reward=(25, 45), reveal=word)
 
@@ -536,35 +561,108 @@ async def guess_start(ctx: commands.Context, max_number: int = 100):
 # ============================================================
 # 6) ألعاب فردية تفاعلية (أزرار)
 # ============================================================
-class ReflexButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="انتظر...", style=discord.ButtonStyle.secondary, disabled=True)
+class ElimButton(discord.ui.Button):
+    def __init__(self, idx: int):
+        super().__init__(label="⏳", style=discord.ButtonStyle.secondary, disabled=True, row=idx // 5)
+        self.taken_by = None
 
     async def callback(self, interaction: discord.Interaction):
-        view: ReflexView = self.view
-        if not view.ready:
-            await interaction.response.send_message("⏳ بدري! انتظر لين يصير أخضر.", ephemeral=True)
+        view: ElimButtonView = self.view
+        user = interaction.user
+        if user.id not in view.alive_ids:
+            await interaction.response.send_message("⚠️ أنت مو باللعبة أو طحت من جولة سابقة.", ephemeral=True)
             return
-        if self.disabled:
+        if user.id in view.claimed:
+            await interaction.response.send_message("✅ عندك زر مسبقًا.", ephemeral=True)
             return
-        elapsed = (datetime.now(timezone.utc) - view.ready_time).total_seconds()
+        if self.taken_by is not None:
+            await interaction.response.send_message("❌ هذا الزر انأخذ.", ephemeral=True)
+            return
+        self.taken_by = user
+        view.claimed[user.id] = user
         self.disabled = True
-        self.label = f"{interaction.user.display_name} فاز! ({elapsed:.2f}s)"
-        self.style = discord.ButtonStyle.success
-        pts = max(10, int(50 - elapsed * 10))
-        add_balance(interaction.guild.id, interaction.user.id, pts)
-        await interaction.response.edit_message(
-            content=f"⚡ فاز {interaction.user.mention} بسرعة {elapsed:.2f} ثانية! (+{pts} نقطة)", view=view)
+        self.label = f"✅ {user.display_name[:20]}"
+        self.style = discord.ButtonStyle.primary
+        await interaction.response.edit_message(view=view)
+        if len(view.claimed) >= len(view.children):
+            view.done.set()
+
+
+class ElimButtonView(discord.ui.View):
+    """جولة وحدة: عدد الأزرار أقل من عدد اللاعبين، اللي ما يلحق زر يطيح."""
+
+    def __init__(self, alive: list, button_count: int):
+        super().__init__(timeout=120)
+        self.alive_ids = {p.id for p in alive}
+        self.claimed: dict = {}
+        self.done = asyncio.Event()
+        for i in range(button_count):
+            self.add_item(ElimButton(i))
+
+    def open_buttons(self):
+        for b in self.children:
+            b.disabled = False
+            b.label = "🟢 اضغط!"
+            b.style = discord.ButtonStyle.success
+
+    def lock_all(self):
+        for b in self.children:
+            b.disabled = True
+            if b.taken_by is None:
+                b.label = "⌛ فاضي"
+                b.style = discord.ButtonStyle.secondary
+
+
+async def _run_button_game(ctx: commands.Context, players: list):
+    alive = players.copy()
+    target = 5          # الجولة الأولى 5 أزرار، وبعدها تقل واحد كل جولة
+    round_num = 1
+    idle_rounds = 0
+    while len(alive) > 1:
+        n = max(1, min(target, len(alive) - 1))
+        view = ElimButtonView(alive, n)
+        names = "، ".join(p.mention for p in alive)
+        msg = await ctx.send(
+            f"🔘 **الجولة {round_num}** — {len(alive)} لاعبين و **{n}** أزرار بس!\n{names}\n"
+            f"استعدوا... لما تصير خضراء اضغطوا زر (كل واحد ياخذ زر واحد). اللي ما يلحق زر يطيح! 🔴",
+            view=view)
+        await asyncio.sleep(random.uniform(2, 5))
+        view.open_buttons()
+        try:
+            await msg.edit(content=f"🟢 **الجولة {round_num}** — اضغطوا الحين! ({n} أزرار)", view=view)
+        except discord.NotFound:
+            return
+        try:
+            await asyncio.wait_for(view.done.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            pass
+        view.lock_all()
         view.stop()
+        try:
+            await msg.edit(view=view)
+        except discord.NotFound:
+            pass
 
+        survivors = [p for p in alive if p.id in view.claimed]
+        if not survivors:
+            idle_rounds += 1
+            if idle_rounds >= 2:
+                await ctx.send("😴 ما تفاعل أحد، انتهت اللعبة بدون فائز.")
+                return
+            await ctx.send("😴 ما ضغط أحد! نعيد الجولة.")
+            continue
+        idle_rounds = 0
+        out = [p for p in alive if p.id not in view.claimed]
+        alive = survivors
+        target = max(1, n - 1)
+        await ctx.send(f"💥 طاح: {'، '.join(p.mention for p in out)}")
+        if len(alive) > 1:
+            await ctx.send(f"✅ الباقين ({len(alive)}): {'، '.join(p.mention for p in alive)}")
+        round_num += 1
 
-class ReflexView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=20)
-        self.ready = False
-        self.ready_time = None
-        self.button = ReflexButton()
-        self.add_item(self.button)
+    winner = alive[0]
+    add_balance(ctx.guild.id, winner.id, 100)
+    await ctx.send(f"🏆 فاز {winner.mention} بلعبة الأزرار! (+100 نقطة) 🎉")
 
 
 @bot.command(name="زر")
@@ -572,22 +670,12 @@ async def button_game_cmd(ctx: commands.Context):
     if is_channel_busy(ctx.channel.id):
         await warn_busy(ctx)
         return
-    mark_busy(ctx.channel.id, "زر السرعة")
+    mark_busy(ctx.channel.id, "زر (آخر ناجي)")
     try:
-        view = ReflexView()
-        msg = await ctx.send("🔴 استعدوا... اضغطوا الزر أول ما يصير أخضر!", view=view)
-        await asyncio.sleep(random.uniform(2, 6))
-        if not view.is_finished():
-            view.ready = True
-            view.ready_time = datetime.now(timezone.utc)
-            view.button.disabled = False
-            view.button.label = "🟢 اضغط الآن!"
-            view.button.style = discord.ButtonStyle.success
-            try:
-                await msg.edit(content="🟢 دورك! اضغط بسرعة!", view=view)
-            except discord.NotFound:
-                pass
-        await view.wait()
+        players = await run_lobby(ctx, "🔘 لعبة الأزرار (آخر ناجي)", min_players=2, max_players=20, countdown=30)
+        if not players:
+            return
+        await _run_button_game(ctx, players)
     finally:
         unmark_busy(ctx.channel.id)
 
@@ -1335,11 +1423,12 @@ GAME_LIST = {
         (".ريبلكا", "احفظوا ترتيب الرموز واكتبوه صح."),
         (".خمن [أقصى رقم]", "تخمين رقم سري بالشات."),
         (".كلمة", "قول كلمة تبدأ بآخر حرف من الكلمة المعطاة."),
+        (".زر", "أزرار تقل كل جولة (5 ثم 4 ثم 3...) واللي ما يلحق زر يطيح لين يبقى ناجي وحد."),
     ],
     "فردية": [
-        (".زر", "اضغط الزر أول ما يصير أخضر."),
         (".اسرع", "أعد كتابة الجملة بأسرع وقت."),
-        (".فكك", "رتب حروف الكلمة المبعثرة."),
+        (".فكك", "فكك الكلمة حرف حرف (بكره ← ب ك ر ه)."),
+        (".رتب", "رتب حروف الكلمة المبعثرة."),
         (".ادمج", "خمن الكلمة من دمج رمزين."),
         (".اعلام", "خمن الدولة من علمها."),
         (".اعكس", "اكتب الكلمة بالعكس."),
@@ -1364,9 +1453,10 @@ GAME_HELP = {
     "ريبلكا": "تشوفون ترتيب رموز لمدة 5 ثواني، وبعدها لازم تكتبونه بنفس الترتيب بالضبط، أول وحد يجاوب صح يفوز.",
     "خمن": "البوت يختار رقم سري بين 1 والرقم اللي تحدده، واكتبوا تخمينكم بالشات وبيعطيكم تلميح فوق/تحت.",
     "كلمة": "يعطيكم البوت كلمة، وأول وحد يكتب كلمة تبدأ بآخر حرف منها يفوز بالنقاط.",
-    "زر": "البوت يقول استعدوا، وبعد وقت عشوائي يصير الزر أخضر، أول ضغطة تفوز.",
+    "زر": "ينضم اللاعبين باللوبي. كل جولة تطلع أزرار أقل من عدد اللاعبين (5 بالجولة الأولى، ثم 4، ثم 3...)، لما تصير خضراء اضغطوا زر بسرعة (زر واحد لكل لاعب)، واللي ما يلحق زر يطيح، لين يبقى ناجي وحد ويفوز. لو اللاعبين أقل من 6 تكون الأزرار أقل من عددهم بواحد.",
     "اسرع": "البوت يعطي جملة، وأول وحد يعيد كتابتها بالضبط يفوز.",
-    "فكك": "البوت يبعثر حروف كلمة، وأول وحد يرتبها صح يفوز.",
+    "فكك": "البوت يعطي كلمة، وأول وحد يكتبها حرف حرف وبين كل حرف مسافة يفوز. مثال: بكره ← ب ك ر ه",
+    "رتب": "البوت يبعثر حروف كلمة، وأول وحد يرتبها صح يفوز.",
     "ادمج": "رمزين مع بعض يمثلون كلمة، خمنوا الكلمة اللي يدل عليها الدمج.",
     "اعلام": "البوت يعرض علم دولة، وأول وحد يكتب اسم الدولة صح يفوز.",
     "اعكس": "البوت يعطي كلمة، واكتبوها بالعكس (آخر حرف أول حرف).",
@@ -1424,6 +1514,33 @@ async def commands_list_cmd(ctx: commands.Context):
         "`.اوامر` — تعرض هذي القائمة.",
     ]
     await ctx.send("\n".join(lines))
+
+
+# ---------- قفل تشغيل الألعاب: بس اللي معه رول الألعاب ----------
+GAME_COMMAND_NAMES = {
+    # جماعية
+    "روليت", "xo", "مافيا", "كراسي", "حجرة", "نرد", "عجلة",
+    "غميضة", "ريبلكا", "خمن", "كلمة",
+    # فردية
+    "زر", "اسرع", "فكك", "رتب", "ادمج", "اعلام", "اعكس", "حرف",
+    "صحح", "ترتيب", "الوان", "ايموجي", "اكشف",
+    # قائمة الألعاب
+    "العاب",
+}
+
+
+class GamesRoleRequired(commands.CheckFailure):
+    pass
+
+
+@bot.check
+async def games_role_check(ctx: commands.Context) -> bool:
+    """يمنع أي أمر لعبة (و .العاب) إلا لو صاحبه معه رول الألعاب. باقي الأوامر (رصيد، نقاطي، يومي، تحويل، شرح، اوامر...) مفتوحة للكل."""
+    if ctx.command is None or ctx.command.name not in GAME_COMMAND_NAMES:
+        return True
+    if isinstance(ctx.author, discord.Member) and any(r.name == GAMES_ROLE_NAME for r in ctx.author.roles):
+        return True
+    raise GamesRoleRequired()
 
 
 # ============================================================
@@ -1955,7 +2072,12 @@ async def on_ready():
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: commands.CommandError):
-    if isinstance(error, commands.MemberNotFound):
+    if isinstance(error, GamesRoleRequired):
+        if ctx.guild and discord.utils.get(ctx.guild.roles, name=GAMES_ROLE_NAME) is None:
+            await ctx.send(f"⚠️ رول الألعاب **{GAMES_ROLE_NAME}** مو موجود بالسيرفر — تأكد إن الاسم بالكود يطابق اسم الرول.")
+        else:
+            await ctx.send(f"🚫 {ctx.author.mention} لازم يكون معك رول **{GAMES_ROLE_NAME}** عشان تشغل الألعاب.", delete_after=8)
+    elif isinstance(error, commands.MemberNotFound):
         await ctx.send("⚠️ ما لقيت هذا العضو — تأكد إنك تعمل منشن حقيقي (@) من قائمة الاقتراحات.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f"⚠️ ناقص معطى بالأمر. مثال صحيح: `.{ctx.command.name} @عضو`")
