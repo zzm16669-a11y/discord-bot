@@ -1945,8 +1945,4 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
 
 
 if __name__ == "__main__":
-    t = threading.Thread(target=run_web_server)
-    t.daemon = True
-    t.start()
-    
     bot.run(DISCORD_TOKEN)
