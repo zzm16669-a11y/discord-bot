@@ -12,7 +12,7 @@ def run_web_server():
     server_address = ('0.0.0.0', 10000)
     httpd = HTTPServer(server_address, SimpleHandler)
     httpd.serve_forever()
-  """
+  
 بوت ديسكورد شامل — نسخة كاملة مدموجة (مع مركز الألعاب الموسّع)
 =====================================================================
 الأقسام:
