@@ -2074,9 +2074,8 @@ async def on_ready():
 async def on_command_error(ctx: commands.Context, error: commands.CommandError):
     if isinstance(error, GamesRoleRequired):
         if ctx.guild and discord.utils.get(ctx.guild.roles, name=GAMES_ROLE_NAME) is None:
-            await ctx.send(f"⚠️ رول الألعاب **{GAMES_ROLE_NAME}** مو موجود بالسيرفر — تأكد إن الاسم بالكود يطابق اسم الرول.")
-        else:
-            await ctx.send(f"🚫 {ctx.author.mention} لازم يكون معك رول **{GAMES_ROLE_NAME}** عشان تشغل الألعاب.", delete_after=8)
+            print(f"[تنبيه] رول الألعاب '{GAMES_ROLE_NAME}' مو موجود بالسيرفر — تأكد إن الاسم يطابق.")
+        await ctx.send(f"{ctx.author.mention} ❌ ما عندك الصلاحية.", delete_after=8)
     elif isinstance(error, commands.MemberNotFound):
         await ctx.send("⚠️ ما لقيت هذا العضو — تأكد إنك تعمل منشن حقيقي (@) من قائمة الاقتراحات.")
     elif isinstance(error, commands.MissingRequiredArgument):
