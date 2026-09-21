@@ -1109,17 +1109,42 @@ async def spin_wheel_on(msg: discord.Message, players: list, prefix: str = ""):
 
 
 # ---------- عجلة دائرية حقيقية (سهم ثابت + عجلة صور بروفايل اللاعبين تدور) — خاصة بالروليت بس ----------
-# ألوان الأقسام: كل لاعب ياخذ لون عشوائي مختلف عن الباقين (24 لون، والحد الأقصى 20 لاعب)
+# ألوان هادية مرتبة حسب درجة اللون — كل لاعب ياخذ لون عشوائي، ولا يتكرر لون بين لاعبين
 WHEEL_COLORS = [
-    "#E74C3C", "#E67E22", "#F1C40F", "#2ECC71", "#1ABC9C", "#3498DB", "#9B59B6", "#E91E63",
-    "#00BCD4", "#8BC34A", "#FF5722", "#673AB7", "#009688", "#FFC107", "#03A9F4", "#CDDC39",
-    "#FF4081", "#795548", "#FF6F61", "#6A5ACD", "#20B2AA", "#FF8C00", "#4169E1", "#C71585",
+    '#A04B4B', '#B07E6D', '#8A6138', '#A08A4B', '#B0B06D', '#758A38', '#75A04B', '#7EB06D',
+    '#388A38', '#4BA060', '#6DB08F', '#388A75', '#4BA0A0', '#6DA0B0', '#38618A', '#4B60A0',
+    '#6D6DB0', '#4D388A', '#754BA0', '#A06DB0', '#8A388A', '#A04B8A', '#B06D8F', '#8A384D',
 ]
 WHEEL_BG = (49, 51, 56)   # خلفية الـGIF (نفس لون خلفية ديسكورد الداكن)
+_AVATAR_CACHE: dict = {}  # يحفظ صور اللاعبين عشان ما نحمّلها من جديد كل لفّة (يسرّع العجلة)
+
+
+def _pick_sector_colors(n: int, rng) -> list:
+    """يوزّع الألوان الهادية على الأقسام عشوائيًا، بدون تكرار، وبحيث الأقسام المتجاورة ألوانها مختلفة بوضوح."""
+    total = len(WHEEL_COLORS)
+    if n > total:
+        return [rng.choice(WHEEL_COLORS) for _ in range(n)]
+    offset = rng.randrange(total)
+    steps = [5, 7, 11, 13]
+    rng.shuffle(steps)
+
+    def hue_gap(a, b):
+        d = abs(a - b) % total
+        return min(d, total - d)
+
+    for k in steps:
+        idxs = [(offset + i * k) % total for i in range(n)]
+        if n < 2 or hue_gap(idxs[0], idxs[-1]) >= 3:
+            return [WHEEL_COLORS[i] for i in idxs]
+    return [WHEEL_COLORS[(offset + i * steps[0]) % total] for i in range(n)]
 
 
 async def _get_avatar_circle(member: discord.Member, size: int = 160):
     """يحمّل أفتار العضو ويرجعه كصورة دائرية جاهزة للّصق. يرجع None لو فشل التحميل."""
+    key = (member.id, getattr(member.display_avatar, "key", None), size)
+    cached = _AVATAR_CACHE.get(key)
+    if cached is not None:
+        return cached
     try:
         data = await member.display_avatar.replace(size=128, format="png").read()
         img = Image.open(BytesIO(data)).convert("RGBA").resize((size, size))
@@ -1127,20 +1152,35 @@ async def _get_avatar_circle(member: discord.Member, size: int = 160):
         ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
         circular = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         circular.paste(img, (0, 0), mask)
+        if len(_AVATAR_CACHE) > 300:
+            _AVATAR_CACHE.clear()
+        _AVATAR_CACHE[key] = circular
         return circular
     except Exception as e:
         print(f"[روليت] تعذّر تحميل أفتار {member}: {e}")
         return None
 
 
-def _prepare_wheel_assets(avatars: list, names: list, size: int = 420) -> list:
+def _wheel_layout(n: int, radius: float):
+    """حجم الأفتار ومكانها حسب عدد اللاعبين: قليلين = أفتار كبيرة، كثيرين = يتوزعون على حلقتين عشان ما يتداخلون.
+    يرجع (قطر_الأفتار, [نسب_بعدها_عن_المركز])."""
+    if n <= 5:
+        return int(radius * 0.56), [0.66]
+    if n <= 8:
+        return int(radius * 0.46), [0.68]
+    if n <= 12:
+        return int(radius * 0.36), [0.77, 0.52]
+    return int(radius * 0.28), [0.80, 0.50]
+
+
+def _prepare_wheel_assets(avatars: list, names: list, size: int = 360) -> list:
     """يجهّز صورة كل لاعب (الأفتار بإطار أبيض، أو حروف الاسم لو ما قدرنا نحمّل الصورة) مرة وحدة،
     عشان رسم الفريمات يكون سريع وسلس."""
     radius = size // 2 - 8
-    avatar_size = max(28, int(radius * 0.34))
+    avatar_size, _ = _wheel_layout(len(avatars), radius)
     ring_size = avatar_size + 6
     try:
-        font = ImageFont.load_default(size=20)
+        font = ImageFont.load_default(size=max(16, int(avatar_size * 0.4)))
     except TypeError:
         font = ImageFont.load_default()
     rings = []
@@ -1163,8 +1203,8 @@ def _prepare_wheel_assets(avatars: list, names: list, size: int = 420) -> list:
     return rings
 
 
-def _draw_wheel_frame(rings: list, colors: list, rotation_deg: float, size: int = 420, bg=None):
-    """يرسم عجلة دائرية مقسّمة بعدد اللاعبين، كل قسم بلون مختلف وبه صورة بروفايل العضو،
+def _draw_wheel_frame(rings: list, colors: list, rotation_deg: float, size: int = 360, bg=None):
+    """يرسم عجلة دائرية مقسّمة بعدد اللاعبين، كل قسم بلون هادي مختلف وبه صورة بروفايل العضو،
     وسهم ثابت فوق العجلة يشاور تحت."""
     top_margin = 40
     center = size // 2
@@ -1172,6 +1212,7 @@ def _draw_wheel_frame(rings: list, colors: list, rotation_deg: float, size: int 
     radius = size // 2 - 8
     n = len(rings)
     sector = 360 / n
+    _, factors = _wheel_layout(n, radius)
     rotation_deg = rotation_deg % 360
     img = Image.new("RGBA", (size, size + 40), bg if bg is not None else (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -1184,7 +1225,7 @@ def _draw_wheel_frame(rings: list, colors: list, rotation_deg: float, size: int 
 
     for i in range(n):
         mid_angle = math.radians(rotation_deg + i * sector + sector / 2)
-        text_radius = radius * 0.68
+        text_radius = radius * factors[i % len(factors)]
         tx = center + text_radius * math.cos(mid_angle)
         ty = cy + text_radius * math.sin(mid_angle)
         ring = rings[i]
@@ -1200,9 +1241,25 @@ def _draw_wheel_frame(rings: list, colors: list, rotation_deg: float, size: int 
     return img
 
 
+def _spin_schedule(total_spin: float, duration: float = 3.0, power: float = 2.2) -> list:
+    """جدول فريمات اللفّة: [(زاوية_الدوران, مدة_الفريم_بالمللي)]. فريمات كثيرة وقت السرعة (سلاسة)
+    وقليلة وقت التباطؤ (سرعة في التجهيز)."""
+    frames = []
+    t = 0.0
+    while t < duration - 1e-9:
+        speed = power * total_spin / duration * (1 - t / duration) ** (power - 1)   # درجة بالثانية
+        dt = min(max(22 / max(speed, 1e-6), 0.05), 0.16)
+        dt = min(dt, duration - t)
+        t += dt
+        angle = total_spin * (1 - (1 - t / duration) ** power)
+        frames.append((angle, max(50, int(round(dt * 100)) * 10)))
+    frames[-1] = (total_spin, frames[-1][1])
+    return frames
+
+
 def _build_wheel_gif(avatars: list, names: list, winner_index: int, colors: list):
-    """يبني GIF واحد سلس للعجلة وهي تدور وتبطّئ لين توقف بالضبط عند الفايز، مع صورة ثابتة للنتيجة.
-    يرجع (gif_bytes, png_bytes, مدة_الـGIF_بالثواني)."""
+    """يبني GIF واحد سلس للعبة العجلة وهي تدور وتبطّئ لين توقف بالضبط عند الفايز، مع صورة ثابتة للنتيجة.
+    يرجع (gif_bytes, png_bytes, مدة_اللفّة_بالثواني)."""
     n = len(avatars)
     sector = 360 / n
     rings = _prepare_wheel_assets(avatars, names)
@@ -1212,17 +1269,15 @@ def _build_wheel_gif(avatars: list, names: list, winner_index: int, colors: list
     start_rotation = random.uniform(0, 360)   # كل لفّة تبدأ من زاوية عشوائية
     total_spin = ((target_offset - start_rotation) % 360) + 360 * random.randint(2, 3)
 
-    frame_count = 48
-    frames = []
-    for k in range(1, frame_count + 1):
-        progress = k / frame_count
-        eased = 1 - (1 - progress) ** 2.4   # تباطؤ تدريجي (ease-out)
-        rotation = start_rotation + total_spin * eased
-        frames.append(_draw_wheel_frame(rings, colors, rotation, bg=WHEEL_BG).convert("RGB"))
+    frames, durations = [], []
+    for angle, dur in _spin_schedule(total_spin):
+        frames.append(_draw_wheel_frame(rings, colors, start_rotation + angle, bg=WHEEL_BG).convert("RGB"))
+        durations.append(dur)
+    spin_secs = sum(durations) / 1000
+    durations[-1] += 600   # وقفة قصيرة على النتيجة
 
-    frames_p = [f.quantize(colors=256, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+    frames_p = [f.quantize(colors=128, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
                 for f in frames]
-    durations = [70] * (frame_count - 1) + [1500]
     gif_buf = BytesIO()
     frames_p[0].save(gif_buf, format="GIF", save_all=True, append_images=frames_p[1:],
                      duration=durations, loop=0)
@@ -1230,17 +1285,17 @@ def _build_wheel_gif(avatars: list, names: list, winner_index: int, colors: list
     final_img = _draw_wheel_frame(rings, colors, start_rotation + total_spin)
     png_buf = BytesIO()
     final_img.save(png_buf, format="PNG")
-    return gif_buf.getvalue(), png_buf.getvalue(), sum(durations) / 1000
+    return gif_buf.getvalue(), png_buf.getvalue(), spin_secs
 
 
 async def _spin_wheel_image(msg: discord.Message, avatars: list, names: list, winner_index: int,
                              colors: list, header: str = "🎡 العجلة تدور...") -> None:
     """يدوّر عجلة دائرية فيها سهم ثابت (GIF واحد سلس بدون تقطيع)، لين توقف بالضبط عند اللاعب الفايز."""
-    gif_bytes, png_bytes, secs = await asyncio.to_thread(
+    gif_bytes, png_bytes, spin_secs = await asyncio.to_thread(
         _build_wheel_gif, avatars, names, winner_index, colors)
     try:
         await msg.edit(content=header, attachments=[discord.File(BytesIO(gif_bytes), filename="wheel.gif")])
-        await asyncio.sleep(secs + 1.0)
+        await asyncio.sleep(spin_secs + 0.8)
         # نثبّت آخر صورة (بدل ما الـGIF يعيد نفسه)
         await msg.edit(attachments=[discord.File(BytesIO(png_bytes), filename="wheel.png")])
     except discord.NotFound:
@@ -1263,7 +1318,7 @@ async def spin_and_choose(msg: discord.Message, players: list[discord.Member],
         try:
             avatars = await asyncio.gather(*(_get_avatar_circle(p) for p in order))
             names = [p.display_name for p in order]
-            colors = rng.sample(WHEEL_COLORS, n) if n <= len(WHEEL_COLORS) else [rng.choice(WHEEL_COLORS) for _ in range(n)]
+            colors = _pick_sector_colors(n, rng)
             await _spin_wheel_image(msg, list(avatars), names, winner_idx, colors, header=header)
             return order[winner_idx]
         except Exception as e:
@@ -1336,6 +1391,18 @@ class RouletteSeatButton(discord.ui.Button):
         self.seat_number = seat_number
         self.occupant: discord.Member | None = None
 
+    def set_taken(self, member: discord.Member):
+        """المقعد انحجز: نشيل الرقم من الزر ونحط اسم اللاعب مكانه."""
+        self.occupant = member
+        self.label = member.display_name[:14]
+        self.disabled = True
+
+    def set_free(self):
+        """المقعد رجع فاضي: يرجع الرقم على الزر."""
+        self.occupant = None
+        self.label = str(self.seat_number)
+        self.disabled = False
+
     async def callback(self, interaction: discord.Interaction):
         view: RouletteSeatLobbyView = self.view
         user = interaction.user
@@ -1351,20 +1418,17 @@ class RouletteSeatButton(discord.ui.Button):
                 await interaction.response.send_message("❌ هذا المقعد محجوز لعضو ثاني.", ephemeral=True)
             return
 
-        if len(view.seats) >= view.max_seats and user.id not in view.taken_by_user:
-            await interaction.response.send_message("⚠️ كل المقاعد محجوزة.", ephemeral=True)
-            return
-
         # لو كان جالس بمقعد ثاني، نحرره ونحجز له هذا
         view.release_seat(user.id)
-        self.occupant = user
+        self.set_taken(user)
         view.seats[self.seat_number] = user
         view.taken_by_user[user.id] = self.seat_number
         await interaction.response.edit_message(content=view.status_text(), view=view)
 
 
 class RouletteSeatLobbyView(discord.ui.View):
-    """لوبي دخول الروليت بمقاعد مرقّمة من 1 إلى 20 (زر لكل رقم)، وتحتها زر يبدأ وزر خروج."""
+    """لوبي دخول الروليت بمقاعد مرقّمة من 1 إلى 20 (زر لكل رقم، واسم اللاعب يظهر على الزر بعد ما يحجز)،
+    وتحتها زر يبدأ وزر خروج."""
 
     def __init__(self, host: discord.Member, min_players: int = 3, max_seats: int = 20, countdown: int = 30):
         super().__init__(timeout=countdown + 30)
@@ -1384,8 +1448,7 @@ class RouletteSeatLobbyView(discord.ui.View):
             self.add_item(btn)
 
         # يحجز المضيف مقعد رقم 1 تلقائيًا
-        first_btn = self.seat_buttons[1]
-        first_btn.occupant = host
+        self.seat_buttons[1].set_taken(host)
         self.seats[1] = host
         self.taken_by_user[host.id] = 1
 
@@ -1395,18 +1458,16 @@ class RouletteSeatLobbyView(discord.ui.View):
         if seat is not None:
             btn = self.seat_buttons.get(seat)
             if btn is not None and btn.occupant is not None and btn.occupant.id == user_id:
-                btn.occupant = None
+                btn.set_free()
             occupant = self.seats.get(seat)
             if occupant is not None and occupant.id == user_id:
                 del self.seats[seat]
         return seat
 
     def status_text(self) -> str:
-        taken = "، ".join(f"[{n}] {m.mention}" for n, m in sorted(self.seats.items()))
         return (
-            f"🎡 **الروليت الروسي — اختر مقعدك** ({len(self.seats)}/{self.max_seats})\n"
-            f"{taken if taken else 'ما فيه أحد لسا'}\n\n"
-            f"اضغط على رقم عشان تحجز مقعدك، وإذا تبي تنسحب اضغط 🚪 خروج.\n"
+            f"🎡 **الروليت الروسي — اختر مقعدك** ({len(self.seats)}/{self.max_seats})\n\n"
+            f"اضغط على رقم عشان تحجز مقعدك (يطلع اسمك على الزر)، وإذا تبي تنسحب اضغط 🚪 خروج.\n"
             f"المضيف {self.host.mention} يقدر يضغط ▶️ يبدأ عشان يبدأ مبكرًا (أدنى عدد: {self.min_players}).\n"
             f"⏳ تبدأ تلقائيًا خلال {self.countdown} ثانية."
         )
