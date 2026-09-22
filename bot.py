@@ -64,6 +64,30 @@ SHOP_ACTIVE_FILE = "shop_active.json"
 # النقاط اللي تجي من .يومي أو .تحويل أو .اصدار ما تدخل بهذا الحد.
 DAILY_GAME_POINTS_CAP = 500
 
+# ---------- صور الألعاب ----------
+# مجلد الصور لازم يكون بجنب ملف البوت (نفس المجلد) باسم game_images.
+GAME_IMAGES_DIR = "game_images"
+GAME_IMAGES = {
+    "روليت": "roulette.png", "xo": "xo.png", "مافيا": "mafia.png", "كراسي": "chairs.png",
+    "حجرة": "rps.png", "نرد": "dice.png", "عجلة": "wheel.png", "غميضة": "hideseek.png",
+    "ريبلكا": "replica.png", "خمن": "guess.png", "كلمة": "wordchain.png", "زر": "button.png",
+    "اسرع": "fastest.png", "فكك": "split.png", "رتب": "unscramble.png", "ادمج": "combine.png",
+    "اعلام": "flags.png", "اعكس": "reverse.png", "حرف": "letter.png", "ترتيب": "ordering.png",
+    "الوان": "colors.png", "ايموجي": "emoji.png", "اكشف": "memory.png",
+}
+
+
+def game_image_file(game_key: str) -> discord.File | None:
+    """يرجع صورة اللعبة (discord.File جديدة كل مرة) لو موجودة على القرص، وإلا None."""
+    filename = GAME_IMAGES.get(game_key)
+    if not filename:
+        return None
+    path = os.path.join(GAME_IMAGES_DIR, filename)
+    if not os.path.exists(path):
+        return None
+    return discord.File(path, filename=filename)
+
+
 # اسم رول الألعاب — لازم يطابق اسم الرول اللي سويته بالسيرفر حرف بحرف
 GAMES_ROLE_NAME = "Event Team"
 
@@ -414,7 +438,8 @@ async def warn_busy(ctx: commands.Context) -> None:
 
 
 async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 40),
-                       allowed_ids: set | None = None, timeout: int = 45, reveal: str = ""):
+                       allowed_ids: set | None = None, timeout: int = 45, reveal: str = "",
+                       game_key: str = ""):
     """يبدأ جولة سؤال/جواب بالروم. أول رسالة تطابق checker تفوز."""
     if channel.id in active_rounds or is_channel_busy(channel.id):
         busy_name = active_channel_games.get(channel.id, title)
@@ -426,7 +451,11 @@ async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 
         "allowed_ids": allowed_ids, "token": token, "reveal": reveal,
     }
     mark_busy(channel.id, title)
-    await channel.send(f"🎯 **{title}**\n{prompt}")
+    image = game_image_file(game_key)
+    if image:
+        await channel.send(f"🎯 **{title}**\n{prompt}", file=image)
+    else:
+        await channel.send(f"🎯 **{title}**\n{prompt}")
 
     async def _timeout_watcher():
         await asyncio.sleep(timeout)
@@ -525,7 +554,7 @@ async def split_letters_cmd(ctx: commands.Context):
 
     await start_round(ctx.channel, title="فكك الكلمة",
                        prompt=f"فكك هذي الكلمة حرف حرف (بين كل حرف مسافة): **{word}**\nمثال: بكره ← ب ك ر ه",
-                       checker=checker, reward=(25, 45), reveal=spaced)
+                       checker=checker, reward=(25, 45), reveal=spaced, game_key="فكك")
 
 
 @bot.command(name="رتب")
@@ -535,7 +564,7 @@ async def unscramble_cmd(ctx: commands.Context):
     scrambled = scramble(word)
     await start_round(ctx.channel, title="رتب الحروف", prompt=f"رتب الحروف: **{scrambled}**",
                        checker=lambda c: normalize(c) == normalize(word),
-                       reward=(25, 45), reveal=word)
+                       reward=(25, 45), reveal=word, game_key="رتب")
 
 
 @bot.command(name="اعكس")
@@ -544,7 +573,7 @@ async def reverse_cmd(ctx: commands.Context):
     reversed_word = word[::-1]
     await start_round(ctx.channel, title="اعكس الكلمة", prompt=f"اكتب هذي الكلمة بالعكس: **{word}**",
                        checker=lambda c: normalize(c) == normalize(reversed_word),
-                       reward=(20, 35), reveal=reversed_word)
+                       reward=(20, 35), reveal=reversed_word, game_key="اعكس")
 
 
 @bot.command(name="صحح")
@@ -561,7 +590,7 @@ async def flags_cmd(ctx: commands.Context):
     flag, country = random.choice(FLAG_BANK)
     await start_round(ctx.channel, title="خمن الدولة", prompt=f"وش هذي الدولة؟ {flag}",
                        checker=lambda c: normalize(country) in normalize(c),
-                       reward=(20, 40), reveal=country)
+                       reward=(20, 40), reveal=country, game_key="اعلام")
 
 
 @bot.command(name="ايموجي")
@@ -569,7 +598,7 @@ async def emoji_guess_cmd(ctx: commands.Context):
     emoji, answer = random.choice(EMOJI_GUESS_BANK)
     await start_round(ctx.channel, title="خمن من الرمز", prompt=f"وش تتوقع هذا الرمز؟ {emoji}",
                        checker=lambda c: normalize(c) == normalize(answer),
-                       reward=(15, 30), reveal=answer)
+                       reward=(15, 30), reveal=answer, game_key="ايموجي")
 
 
 @bot.command(name="ادمج")
@@ -577,7 +606,7 @@ async def combine_cmd(ctx: commands.Context):
     emojis, answer = random.choice(COMPOUND_BANK)
     await start_round(ctx.channel, title="ادمج وخمن", prompt=f"وش الكلمة اللي يرمز لها دمج: {emojis}",
                        checker=lambda c: normalize(c) == normalize(answer),
-                       reward=(25, 45), reveal=answer)
+                       reward=(25, 45), reveal=answer, game_key="ادمج")
 
 
 @bot.command(name="الوان")
@@ -585,7 +614,7 @@ async def colors_cmd(ctx: commands.Context):
     emoji, color = random.choice(COLOR_BANK)
     await start_round(ctx.channel, title="خمن اللون", prompt=f"وش اللون المرتبط بـ {emoji}؟",
                        checker=lambda c: normalize(c) == normalize(color),
-                       reward=(15, 25), reveal=color)
+                       reward=(15, 25), reveal=color, game_key="الوان")
 
 
 @bot.command(name="اسرع")
@@ -594,7 +623,7 @@ async def fastest_typer_cmd(ctx: commands.Context):
     await start_round(ctx.channel, title="أسرع كتابة",
                        prompt=f"اكتب هذي الجملة بالضبط بأسرع وقت:\n**{phrase}**",
                        checker=lambda c: normalize(c) == normalize(phrase),
-                       reward=(30, 60), reveal=phrase, timeout=45)
+                       reward=(30, 60), reveal=phrase, timeout=45, game_key="اسرع")
 
 
 @bot.command(name="حرف")
@@ -608,7 +637,7 @@ async def letter_game_cmd(ctx: commands.Context):
 
     await start_round(ctx.channel, title="أول من يجاوب",
                        prompt=f"اذكر ({category}) يبدأ بحرف **{letter}**",
-                       checker=checker, reward=(15, 30), reveal="", timeout=30)
+                       checker=checker, reward=(15, 30), reveal="", timeout=30, game_key="حرف")
 
 
 @bot.command(name="ترتيب")
@@ -626,7 +655,7 @@ async def ordering_cmd(ctx: commands.Context):
     reveal_text = "  ".join(str(n) for n in correct)
     await start_round(ctx.channel, title="رتب الأرقام",
                        prompt=f"رتب هذي الأرقام تصاعديًا (اكتبهم بمسافة بينهم):\n**{nums_text}**",
-                       checker=checker, reward=(20, 35), reveal=reveal_text, timeout=40)
+                       checker=checker, reward=(20, 35), reveal=reveal_text, timeout=40, game_key="ترتيب")
 
 
 @bot.command(name="كلمة")
@@ -640,7 +669,7 @@ async def word_chain_cmd(ctx: commands.Context):
 
     await start_round(ctx.channel, title="سلسلة الكلمات",
                        prompt=f"الكلمة: **{word}**\nقولوا كلمة تبدأ بآخر حرف منها (حرف {word[-1]})",
-                       checker=checker, reward=(15, 30), reveal="", timeout=30)
+                       checker=checker, reward=(15, 30), reveal="", timeout=30, game_key="كلمة")
 
 
 # ---------- خمن (تخمين رقم — مفتوحة بالروم، فيها تلميح فوق/تحت) ----------
@@ -658,7 +687,12 @@ async def guess_start(ctx: commands.Context, max_number: int = 100):
     number = random.randint(1, max_number)
     active_guess_games[ctx.channel.id] = {"number": number, "max": max_number}
     mark_busy(ctx.channel.id, "خمن (تخمين رقم)")
-    await ctx.send(f"🔢 اخترت رقم سري بين **1** و **{max_number}**! اكتبوا تخمينكم.")
+    image = game_image_file("خمن")
+    text = f"🔢 اخترت رقم سري بين **1** و **{max_number}**! اكتبوا تخمينكم."
+    if image:
+        await ctx.send(text, file=image)
+    else:
+        await ctx.send(text)
 
 
 # ============================================================
@@ -779,7 +813,7 @@ async def button_game_cmd(ctx: commands.Context):
         return
     mark_busy(ctx.channel.id, "زر (آخر ناجي)")
     try:
-        players = await run_lobby(ctx, "🔘 لعبة الأزرار (آخر ناجي)", min_players=2, max_players=20, countdown=30)
+        players = await run_lobby(ctx, "🔘 لعبة الأزرار (آخر ناجي)", min_players=2, max_players=20, countdown=30, game_key="زر")
         if not players:
             return
         await _run_button_game(ctx, players)
@@ -860,7 +894,12 @@ async def memory_game_cmd(ctx: commands.Context):
     mark_busy(ctx.channel.id, "اكشف (لعبة الذاكرة)")
     try:
         view = MemoryView(ctx.author)
-        await ctx.send(f"🧠 {ctx.author.mention} لعبة الذاكرة! دور بطاقتين متطابقتين لين تلقى كل الأزواج.", view=view)
+        image = game_image_file("اكشف")
+        text = f"🧠 {ctx.author.mention} لعبة الذاكرة! دور بطاقتين متطابقتين لين تلقى كل الأزواج."
+        if image:
+            await ctx.send(text, view=view, file=image)
+        else:
+            await ctx.send(text, view=view)
         await view.wait()
     finally:
         unmark_busy(ctx.channel.id)
@@ -915,11 +954,15 @@ class ChallengeView(discord.ui.View):
                 pass
 
 
-async def send_challenge(ctx: commands.Context, opponent: discord.Member, game_name: str) -> bool:
+async def send_challenge(ctx: commands.Context, opponent: discord.Member, game_name: str, game_key: str = "") -> bool:
     """يرسل دعوة تحدي للخصم وينتظر رده. يرجع True لو وافق، False لو رفض أو ما رد."""
     view = ChallengeView(ctx.author, opponent, game_name)
-    msg = await ctx.send(
-        f"⚔️ {ctx.author.mention} يتحداك يا {opponent.mention} بلعبة **{game_name}**! تبي تلعب؟", view=view)
+    image = game_image_file(game_key)
+    text = f"⚔️ {ctx.author.mention} يتحداك يا {opponent.mention} بلعبة **{game_name}**! تبي تلعب؟"
+    if image:
+        msg = await ctx.send(text, view=view, file=image)
+    else:
+        msg = await ctx.send(text, view=view)
     view.message = msg
     await view.wait()
     return view.result is True
@@ -1003,7 +1046,7 @@ async def xo_cmd(ctx: commands.Context, opponent: discord.Member):
         return
     mark_busy(ctx.channel.id, "XO")
     try:
-        accepted = await send_challenge(ctx, opponent, "XO")
+        accepted = await send_challenge(ctx, opponent, "XO", game_key="xo")
         if not accepted:
             return
         view = TicTacToeView(ctx.author, opponent)
@@ -1082,7 +1125,7 @@ async def rps_cmd(ctx: commands.Context, opponent: discord.Member):
         return
     mark_busy(ctx.channel.id, "حجرة ورقة مقص")
     try:
-        accepted = await send_challenge(ctx, opponent, "حجرة ورقة مقص")
+        accepted = await send_challenge(ctx, opponent, "حجرة ورقة مقص", game_key="حجرة")
         if not accepted:
             return
         view = RPSView(ctx.author, opponent)
@@ -1159,13 +1202,17 @@ class GameLobby(discord.ui.View):
 
 
 async def run_lobby(ctx: commands.Context, game_title: str, min_players: int = 3,
-                     max_players: int = 20, countdown: int = 30):
+                     max_players: int = 20, countdown: int = 30, game_key: str = ""):
     """يفتح لوبي جماعي، ويرجع قائمة اللاعبين إذا اكتمل العدد الأدنى، وإلا يرجع None."""
     if ctx.author.bot:
         return None
     lobby = GameLobby(ctx.author, game_title, min_players, max_players, countdown)
     lobby.host_countdown_text = str(countdown)
-    msg = await ctx.send(lobby.status_text(), view=lobby)
+    image = game_image_file(game_key)
+    if image:
+        msg = await ctx.send(lobby.status_text(), view=lobby, file=image)
+    else:
+        msg = await ctx.send(lobby.status_text(), view=lobby)
     try:
         await asyncio.wait_for(lobby.start_event.wait(), timeout=countdown)
     except asyncio.TimeoutError:
@@ -1613,7 +1660,11 @@ async def run_roulette_seat_lobby(ctx: commands.Context, min_players: int = 3,
     if ctx.author.bot:
         return None
     lobby = RouletteSeatLobbyView(ctx.author, min_players, max_seats, countdown)
-    msg = await ctx.send(lobby.status_text(), view=lobby)
+    image = game_image_file("روليت")
+    if image:
+        msg = await ctx.send(lobby.status_text(), view=lobby, file=image)
+    else:
+        msg = await ctx.send(lobby.status_text(), view=lobby)
     try:
         await asyncio.wait_for(lobby.start_event.wait(), timeout=countdown)
     except asyncio.TimeoutError:
@@ -1661,7 +1712,7 @@ async def dice_cmd(ctx: commands.Context):
         return
     mark_busy(ctx.channel.id, "نرد")
     try:
-        players = await run_lobby(ctx, "🎲 لعبة النرد", min_players=2, max_players=20, countdown=30)
+        players = await run_lobby(ctx, "🎲 لعبة النرد", min_players=2, max_players=20, countdown=30, game_key="نرد")
         if not players:
             return
         rolls = {p: random.randint(1, 6) for p in players}
@@ -1693,7 +1744,7 @@ async def wheel_cmd(ctx: commands.Context):
         return
     mark_busy(ctx.channel.id, "عجلة الحظ")
     try:
-        players = await run_lobby(ctx, "🎡 عجلة الحظ", min_players=2, max_players=20, countdown=30)
+        players = await run_lobby(ctx, "🎡 عجلة الحظ", min_players=2, max_players=20, countdown=30, game_key="عجلة")
         if not players:
             return
         msg = await ctx.send("🎡 **العجلة تدور تختار الفايز...**")
@@ -1761,7 +1812,7 @@ async def hideseek_cmd(ctx: commands.Context):
 
 
 async def _run_hideseek(ctx: commands.Context):
-    players = await run_lobby(ctx, "🙈 غميضة", min_players=3, max_players=20, countdown=30)
+    players = await run_lobby(ctx, "🙈 غميضة", min_players=3, max_players=20, countdown=30, game_key="غميضة")
     if not players:
         return
     seeker = random.choice(players)
@@ -1795,7 +1846,7 @@ async def replica_cmd(ctx: commands.Context):
         await warn_busy(ctx)
         return
     mark_busy(ctx.channel.id, "ريبلكا (احفظ الترتيب)")
-    players = await run_lobby(ctx, "🔁 ريبلكا (احفظ الترتيب)", min_players=2, max_players=20, countdown=30)
+    players = await run_lobby(ctx, "🔁 ريبلكا (احفظ الترتيب)", min_players=2, max_players=20, countdown=30, game_key="ريبلكا")
     if not players:
         unmark_busy(ctx.channel.id)
         return
@@ -1829,7 +1880,7 @@ async def mafia_cmd(ctx: commands.Context):
 
 
 async def _run_mafia(ctx: commands.Context):
-    players = await run_lobby(ctx, "🕵️ مافيا", min_players=4, max_players=20, countdown=30)
+    players = await run_lobby(ctx, "🕵️ مافيا", min_players=4, max_players=20, countdown=30, game_key="مافيا")
     if not players:
         return
     mafia_count = max(1, len(players) // 4)
@@ -1937,7 +1988,7 @@ async def chairs_cmd(ctx: commands.Context):
 
 
 async def _run_chairs(ctx: commands.Context):
-    players = await run_lobby(ctx, "🪑 الكراسي الموسيقية", min_players=3, max_players=20, countdown=30)
+    players = await run_lobby(ctx, "🪑 الكراسي الموسيقية", min_players=3, max_players=20, countdown=30, game_key="كراسي")
     if not players:
         return
     all_players = players.copy()
@@ -2892,4 +2943,3 @@ if __name__ == "__main__":
     t.start()
 
     bot.run(DISCORD_TOKEN)
-  
