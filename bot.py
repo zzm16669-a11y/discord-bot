@@ -2194,6 +2194,13 @@ def strip_mentions(content: str, mentions) -> str:
     return content.strip()
 
 
+async def resolve_target_member(message: discord.Message) -> discord.Member | None:
+    """يرجع العضو المستهدف بالأمر عن طريق المنشن العادي (@عضو) بس."""
+    if message.mentions:
+        return message.mentions[0]
+    return None
+
+
 def parse_duration(text: str) -> timedelta:
     """يفهم صيغ زي: 10 / 10m / 10h / 10d / 10س / 10د / 10ي — افتراضي 10 دقائق."""
     text = text.strip().split()[0] if text.strip() else ""
@@ -2230,12 +2237,11 @@ async def cleanup(message: discord.Message):
 
 # ---------- إدارة الأعضاء ----------
 async def cmd_ban(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `برا @العضو السبب`")
         return
-    target = message.mentions[0]
     reason = strip_mentions(args, message.mentions) or "لم يُذكر سبب"
-    await cleanup(message)
     try:
         await target.ban(reason=reason)
         await reply(message, f"🔨 تم حظر {target.mention} — السبب: {reason}")
@@ -2248,7 +2254,6 @@ async def cmd_unban(message: discord.Message, args: str):
     if not arg.isdigit():
         await reply(message, "⚠️ الصيغة: `سماح <آيدي العضو>` (لازم الآيدي رقمي لأن العضو مو بالسيرفر)")
         return
-    await cleanup(message)
     try:
         user = discord.Object(id=int(arg))
         await message.guild.unban(user, reason=f"بواسطة {message.author}")
@@ -2258,12 +2263,11 @@ async def cmd_unban(message: discord.Message, args: str):
 
 
 async def cmd_kick(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `ترحيل @العضو السبب`")
         return
-    target = message.mentions[0]
     reason = strip_mentions(args, message.mentions) or "لم يُذكر سبب"
-    await cleanup(message)
     try:
         await target.kick(reason=reason)
         await reply(message, f"👢 تم طرد {target.mention} — السبب: {reason}")
@@ -2272,14 +2276,13 @@ async def cmd_kick(message: discord.Message, args: str):
 
 
 async def cmd_timeout(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `تايم @العضو 10m السبب` (افتراضي 10 دقائق)")
+    target = await resolve_target_member(message)
+    if target is None:
+        await reply(message, "⚠️ الصيغة: `تايم @العضو 10m السبب` — افتراضي 10 دقائق")
         return
-    target = message.mentions[0]
     remainder = strip_mentions(args, message.mentions)
     duration = parse_duration(remainder)
     reason = " ".join(remainder.split()[1:]) if remainder.split() else "لم يُذكر سبب"
-    await cleanup(message)
     try:
         await target.timeout(discord.utils.utcnow() + duration, reason=reason)
         await reply(message, f"⏱️ تم إعطاء {target.mention} تايم لمدة {duration}")
@@ -2288,32 +2291,29 @@ async def cmd_timeout(message: discord.Message, args: str):
 
 
 async def cmd_untimeout(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `تحرير @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
     await target.timeout(None, reason=f"بواسطة {message.author}")
     await reply(message, f"✅ تم فك التايم عن {target.mention}")
 
 
 async def cmd_textmute(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `اخرس @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
     role = await ensure_role(message.guild, MUTE_ROLE_NAME)
     await target.add_roles(role, reason=f"بواسطة {message.author}")
     await reply(message, f"🔇 تم إسكات {target.mention} بالشات")
 
 
 async def cmd_textunmute(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `تكلم @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
     role = discord.utils.get(message.guild.roles, name=MUTE_ROLE_NAME)
     if role and role in target.roles:
         await target.remove_roles(role, reason=f"بواسطة {message.author}")
@@ -2321,11 +2321,10 @@ async def cmd_textunmute(message: discord.Message, args: str):
 
 
 async def cmd_jail(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `سجن @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
     jail_role = await ensure_role(message.guild, JAIL_ROLE_NAME)
 
     keep_roles = [r for r in target.roles if r.name != "@everyone"]
@@ -2344,11 +2343,10 @@ async def cmd_jail(message: discord.Message, args: str):
 
 
 async def cmd_unjail(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `فك @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
     data = load_json(JAIL_FILE)
     gid, mid = str(message.guild.id), str(target.id)
     saved_ids = data.get(gid, {}).get(mid, [])
@@ -2365,12 +2363,11 @@ async def cmd_unjail(message: discord.Message, args: str):
 
 
 async def cmd_nick(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `لقب @العضو الاسم_الجديد`")
         return
-    target = message.mentions[0]
     new_nick = strip_mentions(args, message.mentions)
-    await cleanup(message)
     if not new_nick:
         await reply(message, "⚠️ لازم تكتب اللقب الجديد.")
         return
@@ -2382,12 +2379,11 @@ async def cmd_nick(message: discord.Message, args: str):
 
 
 async def cmd_remove_role(message: discord.Message, args: str):
-    if not message.mentions or not message.role_mentions:
+    target = await resolve_target_member(message)
+    if target is None or not message.role_mentions:
         await reply(message, "⚠️ الصيغة: `تنزيل @العضو @الرتبة`")
         return
-    target = message.mentions[0]
     role = message.role_mentions[0]
-    await cleanup(message)
     if role not in target.roles:
         await reply(message, f"⚠️ {target.mention} أصلًا ما عنده رتبة {role.name}")
         return
@@ -2401,11 +2397,10 @@ async def cmd_remove_role(message: discord.Message, args: str):
 
 
 async def cmd_restore_role(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `رجع @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
     data = load_json(ROLES_REMOVED_FILE)
     gid, mid = str(message.guild.id), str(target.id)
     role_id = data.get(gid, {}).get(mid)
@@ -2421,13 +2416,12 @@ async def cmd_restore_role(message: discord.Message, args: str):
 
 
 async def cmd_give_role(message: discord.Message, args: str):
-    if not message.mentions or not message.role_mentions:
+    target = await resolve_target_member(message)
+    if target is None or not message.role_mentions:
         await reply(message, "⚠️ الصيغة: `رول @العضو @الرتبة`")
         return
-    target = message.mentions[0]
     role = message.role_mentions[0]
     author = message.author
-    await cleanup(message)
     if role in target.roles:
         await reply(message, f"⚠️ {target.mention} عنده رتبة {role.name} أصلًا")
         return
@@ -2447,13 +2441,11 @@ async def cmd_purge(message: discord.Message, args: str):
     amount_text = args.strip().split()[0] if args.strip() else "50"
     amount = int(amount_text) if amount_text.isdigit() else 50
     amount = min(amount, 200)
-    await cleanup(message)
     deleted = await message.channel.purge(limit=amount)
     await reply(message, f"🧹 تم حذف {len(deleted)} رسالة.")
 
 
 async def cmd_lock(message: discord.Message, args: str):
-    await cleanup(message)
     overwrite = message.channel.overwrites_for(message.guild.default_role)
     overwrite.send_messages = False
     await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
@@ -2461,7 +2453,6 @@ async def cmd_lock(message: discord.Message, args: str):
 
 
 async def cmd_unlock(message: discord.Message, args: str):
-    await cleanup(message)
     overwrite = message.channel.overwrites_for(message.guild.default_role)
     overwrite.send_messages = None
     await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
@@ -2469,7 +2460,6 @@ async def cmd_unlock(message: discord.Message, args: str):
 
 
 async def cmd_hide(message: discord.Message, args: str):
-    await cleanup(message)
     overwrite = message.channel.overwrites_for(message.guild.default_role)
     overwrite.view_channel = False
     await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
@@ -2477,7 +2467,6 @@ async def cmd_hide(message: discord.Message, args: str):
 
 
 async def cmd_show(message: discord.Message, args: str):
-    await cleanup(message)
     overwrite = message.channel.overwrites_for(message.guild.default_role)
     overwrite.view_channel = None
     await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
@@ -2486,11 +2475,10 @@ async def cmd_show(message: discord.Message, args: str):
 
 # ---------- إدارة الصوت ----------
 async def cmd_vc_kick(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `بره @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
     if target.voice and target.voice.channel:
         await target.move_to(None, reason=f"بواسطة {message.author}")
         await reply(message, f"👋 تم إخراج {target.mention} من الروم الصوتي.")
@@ -2499,34 +2487,31 @@ async def cmd_vc_kick(message: discord.Message, args: str):
 
 
 async def cmd_vc_mute(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `اصمت @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
     await target.edit(mute=True, reason=f"بواسطة {message.author}")
     await reply(message, f"🔇 تم إسكات {target.mention} صوتيًا.")
 
 
 async def cmd_vc_unmute(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `انطق @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
     await target.edit(mute=False, reason=f"بواسطة {message.author}")
     await reply(message, f"🔊 تم فك الإسكات الصوتي عن {target.mention}.")
 
 
 async def cmd_vc_pull(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `اسحب @العضو` (وأنت داخل روم صوتي)")
+    target = await resolve_target_member(message)
+    if target is None:
+        await reply(message, "⚠️ الصيغة: `اسحب @العضو` — وأنت داخل روم صوتي")
         return
     if not (message.author.voice and message.author.voice.channel):
         await reply(message, "⚠️ لازم تكون داخل روم صوتي عشان تسحب له أحد.")
         return
-    target = message.mentions[0]
-    await cleanup(message)
     if target.voice:
         await target.move_to(message.author.voice.channel, reason=f"بواسطة {message.author}")
         await reply(message, f"📥 تم سحب {target.mention} لروم {message.author.voice.channel.name}")
@@ -2539,7 +2524,6 @@ async def cmd_vc_gather(message: discord.Message, args: str):
         await reply(message, "⚠️ لازم تكون داخل روم صوتي عشان تجمع الكل عندك.")
         return
     destination = message.author.voice.channel
-    await cleanup(message)
     count = 0
     for vc in message.guild.voice_channels:
         if vc.id == destination.id:
@@ -2551,11 +2535,10 @@ async def cmd_vc_gather(message: discord.Message, args: str):
 
 
 async def cmd_vc_comehere(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `تعال @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
     if not (message.author.voice):
         await reply(message, "⚠️ لازم تكون بروم صوتي عشان يسحبك البوت... انتقل يدويًا.")
         return
@@ -2567,11 +2550,10 @@ async def cmd_vc_comehere(message: discord.Message, args: str):
 
 
 async def cmd_vc_kicklock(message: discord.Message, args: str):
-    if not message.mentions:
+    target = await resolve_target_member(message)
+    if target is None:
         await reply(message, "⚠️ الصيغة: `اطلع @العضو`")
         return
-    target = message.mentions[0]
-    await cleanup(message)
     if not (target.voice and target.voice.channel):
         await reply(message, "⚠️ العضو مو داخل روم صوتي.")
         return
@@ -2584,15 +2566,14 @@ async def cmd_vc_kicklock(message: discord.Message, args: str):
 
 
 async def cmd_vc_allow(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `مسموح @العضو` (وأنت داخل الروم الصوتي)")
+    target = await resolve_target_member(message)
+    if target is None:
+        await reply(message, "⚠️ الصيغة: `مسموح @العضو` — وأنت داخل الروم الصوتي")
         return
     if not (message.author.voice and message.author.voice.channel):
         await reply(message, "⚠️ لازم تكون داخل الروم الصوتي المقفول عشان تسمح لأحد.")
         return
-    target = message.mentions[0]
     channel = message.author.voice.channel
-    await cleanup(message)
     overwrite = channel.overwrites_for(target)
     overwrite.connect = True
     await channel.set_permissions(target, overwrite=overwrite)
