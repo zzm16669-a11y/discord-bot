@@ -300,6 +300,10 @@ _round_id_counter = itertools.count()
 # ---------- قفل عام يمنع تداخل الألعاب: روم واحد = لعبة وحدة بنفس اللحظة ----------
 active_channel_games: dict[int, str] = {}  # channel_id -> اسم اللعبة الشغالة
 
+# ---------- تتبع إيقاف اللعبة عند حذف رسالتها ----------
+active_channel_tasks: dict[int, asyncio.Task] = {}     # channel_id -> المهمة (Task) اللي شغّالة فيها اللعبة الحالية
+active_game_messages: dict[int, set[int]] = {}          # channel_id -> آيديات رسائل اللعبة الحالية اللي لو انحذفت توقف اللعبة
+
 
 def is_channel_busy(channel_id: int) -> bool:
     return channel_id in active_channel_games
@@ -307,10 +311,26 @@ def is_channel_busy(channel_id: int) -> bool:
 
 def mark_busy(channel_id: int, game_name: str) -> None:
     active_channel_games[channel_id] = game_name
+    try:
+        current = asyncio.current_task()
+    except RuntimeError:
+        current = None
+    if current is not None:
+        active_channel_tasks[channel_id] = current
+    active_game_messages.setdefault(channel_id, set())
 
 
 def unmark_busy(channel_id: int) -> None:
     active_channel_games.pop(channel_id, None)
+    active_channel_tasks.pop(channel_id, None)
+    active_game_messages.pop(channel_id, None)
+
+
+def track_game_message(channel_id: int, message: discord.Message | None) -> None:
+    """يسجّل رسالة تابعة للعبة الحالية بالروم، عشان لو انحذفت نعرف نوقف اللعبة."""
+    if message is None:
+        return
+    active_game_messages.setdefault(channel_id, set()).add(message.id)
 
 
 async def warn_busy(ctx: commands.Context) -> None:
@@ -326,12 +346,14 @@ async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 
         await channel.send(f"⚠️ فيه **{busy_name}** شغالة بهذا الروم حاليًا، خلصوها الأول.")
         return
     token = next(_round_id_counter)
+    mark_busy(channel.id, title)
+    sent = await channel.send(f"🎯 **{title}**\n{prompt}")
+    track_game_message(channel.id, sent)
     active_rounds[channel.id] = {
         "checker": checker, "reward": reward,
         "allowed_ids": allowed_ids, "token": token, "reveal": reveal,
+        "message_id": sent.id,
     }
-    mark_busy(channel.id, title)
-    await channel.send(f"🎯 **{title}**\n{prompt}")
 
     async def _timeout_watcher():
         await asyncio.sleep(timeout)
@@ -561,9 +583,10 @@ async def guess_start(ctx: commands.Context, max_number: int = 100):
         await ctx.send("⚠️ اختر رقم أقصى 10 أو أكثر.")
         return
     number = random.randint(1, max_number)
-    active_guess_games[ctx.channel.id] = {"number": number, "max": max_number}
     mark_busy(ctx.channel.id, "خمن (تخمين رقم)")
-    await ctx.send(f"🔢 اخترت رقم سري بين **1** و **{max_number}**! اكتبوا تخمينكم.")
+    sent = await ctx.send(f"🔢 اخترت رقم سري بين **1** و **{max_number}**! اكتبوا تخمينكم.")
+    track_game_message(ctx.channel.id, sent)
+    active_guess_games[ctx.channel.id] = {"number": number, "max": max_number, "message_id": sent.id}
 
 
 # ============================================================
@@ -634,6 +657,7 @@ async def _run_button_game(ctx: commands.Context, players: list):
             f"🔘 **الجولة {round_num}** — {len(alive)} لاعبين و **{n}** أزرار بس!\n{names}\n"
             f"استعدوا... لما تصير خضراء اضغطوا زر (كل واحد ياخذ زر واحد). اللي ما يلحق زر يطيح! 🔴",
             view=view)
+        track_game_message(ctx.channel.id, msg)
         await asyncio.sleep(random.uniform(2, 5))
         view.open_buttons()
         try:
@@ -761,7 +785,8 @@ async def memory_game_cmd(ctx: commands.Context):
     mark_busy(ctx.channel.id, "اكشف (لعبة الذاكرة)")
     try:
         view = MemoryView(ctx.author)
-        await ctx.send(f"🧠 {ctx.author.mention} لعبة الذاكرة! دور بطاقتين متطابقتين لين تلقى كل الأزواج.", view=view)
+        sent = await ctx.send(f"🧠 {ctx.author.mention} لعبة الذاكرة! دور بطاقتين متطابقتين لين تلقى كل الأزواج.", view=view)
+        track_game_message(ctx.channel.id, sent)
         await view.wait()
     finally:
         unmark_busy(ctx.channel.id)
@@ -822,6 +847,7 @@ async def send_challenge(ctx: commands.Context, opponent: discord.Member, game_n
     msg = await ctx.send(
         f"⚔️ {ctx.author.mention} يتحداك يا {opponent.mention} بلعبة **{game_name}**! تبي تلعب؟", view=view)
     view.message = msg
+    track_game_message(ctx.channel.id, msg)
     await view.wait()
     return view.result is True
 
@@ -905,9 +931,10 @@ async def xo_cmd(ctx: commands.Context, opponent: discord.Member):
         if not accepted:
             return
         view = TicTacToeView(ctx.author, opponent)
-        await ctx.send(
+        sent = await ctx.send(
             f"🎮 **XO**: {ctx.author.mention} (X) ضد {opponent.mention} (O)\n🎯 دور {ctx.author.mention}", view=view
         )
+        track_game_message(ctx.channel.id, sent)
         await view.wait()
     finally:
         unmark_busy(ctx.channel.id)
@@ -980,9 +1007,10 @@ async def rps_cmd(ctx: commands.Context, opponent: discord.Member):
         if not accepted:
             return
         view = RPSView(ctx.author, opponent)
-        await ctx.send(
+        sent = await ctx.send(
             f"✂️ **حجرة ورقة مقص**: {ctx.author.mention} ضد {opponent.mention}\nكل واحد يضغط بالخفاء 👇", view=view
         )
+        track_game_message(ctx.channel.id, sent)
         await view.wait()
     finally:
         unmark_busy(ctx.channel.id)
@@ -1060,6 +1088,7 @@ async def run_lobby(ctx: commands.Context, game_title: str, min_players: int = 3
     lobby = GameLobby(ctx.author, game_title, min_players, max_players, countdown)
     lobby.host_countdown_text = str(countdown)
     msg = await ctx.send(lobby.status_text(), view=lobby)
+    track_game_message(ctx.channel.id, msg)
     try:
         await asyncio.wait_for(lobby.start_event.wait(), timeout=countdown)
     except asyncio.TimeoutError:
@@ -1504,6 +1533,7 @@ async def run_roulette_seat_lobby(ctx: commands.Context, min_players: int = 3,
         return None
     lobby = RouletteSeatLobbyView(ctx.author, min_players, max_seats, countdown)
     msg = await ctx.send(lobby.status_text(), view=lobby)
+    track_game_message(ctx.channel.id, msg)
     try:
         await asyncio.wait_for(lobby.start_event.wait(), timeout=countdown)
     except asyncio.TimeoutError:
@@ -1534,6 +1564,7 @@ async def roulette_cmd(ctx: commands.Context):
         legend = "\n".join(f"`{i + 1}` {p.mention}" for i, p in enumerate(players))
         header = "🎡 **بدأت اللعبة!** العجلة تدور تختار مين يبدأ..."
         msg = await ctx.send(header)
+        track_game_message(ctx.channel.id, msg)
         chosen = await spin_and_choose(msg, players, header=header)
         view.chosen = chosen
         view._build_buttons()
@@ -1579,6 +1610,7 @@ async def wheel_cmd(ctx: commands.Context):
         if not players:
             return
         msg = await ctx.send("🎡 العجلة تدور...")
+        track_game_message(ctx.channel.id, msg)
         await asyncio.sleep(2)
         winner = random.choice(players)
         pts = random.randint(50, 150)
@@ -1612,10 +1644,11 @@ async def _run_hideseek(ctx: commands.Context):
     hidden_spots = {p: spots[i] for i, p in enumerate(hiders)}
     found = set()
     attempts = len(hidden_spots) + 4
-    await ctx.send(
+    sent = await ctx.send(
         f"🙈 {seeker.mention} هو الباحث! الباقين مختبئين بأرقام من 1 إلى 10.\n"
         f"اكتب رقم للبحث فيه (عندك {attempts} محاولة)."
     )
+    track_game_message(ctx.channel.id, sent)
     for _ in range(attempts):
         def check(m: discord.Message):
             return m.channel == ctx.channel and m.author == seeker and m.content.strip().isdigit()
@@ -1661,6 +1694,7 @@ async def replica_cmd(ctx: commands.Context):
     sequence = random.sample(pool, k=5)
     seq_text = " ".join(sequence)
     msg = await ctx.send(f"🔁 احفظوا هذا الترتيب:\n\n# {seq_text}")
+    track_game_message(ctx.channel.id, msg)
     await asyncio.sleep(5)
     try:
         await msg.edit(content="🔁 **ريبلكا**: اكتبوا نفس الترتيب بالضبط (افصلوا بمسافة)!")
@@ -1698,10 +1732,11 @@ async def _run_mafia(ctx: commands.Context):
             await p.send(f"🕵️ لعبة مافيا بسيرفر **{ctx.guild.name}**:\n{role}")
         except discord.Forbidden:
             pass
-    await ctx.send(
+    sent = await ctx.send(
         f"🕵️ بدأت اللعبة! فيه **{mafia_count}** من المافيا بينكم.\n"
         f"ناقشوا 60 ثانية، وصوّتوا بكتابة: `تصويت @الشخص`"
     )
+    track_game_message(ctx.channel.id, sent)
 
     def check(m: discord.Message):
         return (m.channel == ctx.channel and m.author in players
@@ -1797,6 +1832,7 @@ async def _run_chairs(ctx: commands.Context):
         msg = await ctx.send(
             f"🪑 **الجولة {round_num}**: {len(players)} لاعبين و {max(1, len(players) - 1)} كرسي! بسرعة اقعدوا 👇",
             view=view)
+        track_game_message(ctx.channel.id, msg)
         await asyncio.sleep(12)
         for c in view.children:
             c.disabled = True
@@ -1982,6 +2018,14 @@ def strip_mentions(content: str, mentions) -> str:
     return content.strip()
 
 
+def explicit_mentions(message: discord.Message) -> list:
+    """يرجع فقط الأعضاء اللي مذكورين صراحة بنص الرسالة (@عضو)، ويتجاهل عضو الرسالة اللي انرد عليها
+    (ديسكورد يحط صاحب الرد تلقائيًا بقائمة message.mentions حتى لو ما ذكرته بالنص، وهذا يسبب تنفيذ
+    الأمر عليه بالغلط لمجرد إنك رديت على رسالته)."""
+    ids = {int(uid) for uid in re.findall(r"<@!?(\d+)>", message.content)}
+    return [m for m in message.mentions if m.id in ids]
+
+
 def parse_duration(text: str) -> timedelta:
     """يفهم صيغ زي: 10 / 10m / 10h / 10d / 10س / 10د / 10ي — افتراضي 10 دقائق."""
     text = text.strip().split()[0] if text.strip() else ""
@@ -2018,11 +2062,12 @@ async def cleanup(message: discord.Message):
 
 # ---------- إدارة الأعضاء ----------
 async def cmd_ban(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `برا @العضو السبب`")
         return
-    target = message.mentions[0]
-    reason = strip_mentions(args, message.mentions) or "لم يُذكر سبب"
+    target = mentions[0]
+    reason = strip_mentions(args, mentions) or "لم يُذكر سبب"
     await cleanup(message)
     try:
         await target.ban(reason=reason)
@@ -2046,11 +2091,12 @@ async def cmd_unban(message: discord.Message, args: str):
 
 
 async def cmd_kick(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `ترحيل @العضو السبب`")
         return
-    target = message.mentions[0]
-    reason = strip_mentions(args, message.mentions) or "لم يُذكر سبب"
+    target = mentions[0]
+    reason = strip_mentions(args, mentions) or "لم يُذكر سبب"
     await cleanup(message)
     try:
         await target.kick(reason=reason)
@@ -2060,11 +2106,12 @@ async def cmd_kick(message: discord.Message, args: str):
 
 
 async def cmd_timeout(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `تايم @العضو 10m السبب` (افتراضي 10 دقائق)")
         return
-    target = message.mentions[0]
-    remainder = strip_mentions(args, message.mentions)
+    target = mentions[0]
+    remainder = strip_mentions(args, mentions)
     duration = parse_duration(remainder)
     reason = " ".join(remainder.split()[1:]) if remainder.split() else "لم يُذكر سبب"
     await cleanup(message)
@@ -2076,20 +2123,22 @@ async def cmd_timeout(message: discord.Message, args: str):
 
 
 async def cmd_untimeout(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `تحرير @العضو`")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     await cleanup(message)
     await target.timeout(None, reason=f"بواسطة {message.author}")
     await reply(message, f"✅ تم فك التايم عن {target.mention}")
 
 
 async def cmd_textmute(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `اخرس @العضو`")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     await cleanup(message)
     role = await ensure_role(message.guild, MUTE_ROLE_NAME)
     await target.add_roles(role, reason=f"بواسطة {message.author}")
@@ -2097,10 +2146,11 @@ async def cmd_textmute(message: discord.Message, args: str):
 
 
 async def cmd_textunmute(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `تكلم @العضو`")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     await cleanup(message)
     role = discord.utils.get(message.guild.roles, name=MUTE_ROLE_NAME)
     if role and role in target.roles:
@@ -2109,10 +2159,11 @@ async def cmd_textunmute(message: discord.Message, args: str):
 
 
 async def cmd_jail(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `سجن @العضو`")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     await cleanup(message)
     jail_role = await ensure_role(message.guild, JAIL_ROLE_NAME)
 
@@ -2132,10 +2183,11 @@ async def cmd_jail(message: discord.Message, args: str):
 
 
 async def cmd_unjail(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `فك @العضو`")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     await cleanup(message)
     data = load_json(JAIL_FILE)
     gid, mid = str(message.guild.id), str(target.id)
@@ -2153,11 +2205,12 @@ async def cmd_unjail(message: discord.Message, args: str):
 
 
 async def cmd_nick(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `لقب @العضو الاسم_الجديد`")
         return
-    target = message.mentions[0]
-    new_nick = strip_mentions(args, message.mentions)
+    target = mentions[0]
+    new_nick = strip_mentions(args, mentions)
     await cleanup(message)
     if not new_nick:
         await reply(message, "⚠️ لازم تكتب اللقب الجديد.")
@@ -2170,10 +2223,11 @@ async def cmd_nick(message: discord.Message, args: str):
 
 
 async def cmd_remove_role(message: discord.Message, args: str):
-    if not message.mentions or not message.role_mentions:
+    mentions = explicit_mentions(message)
+    if not mentions or not message.role_mentions:
         await reply(message, "⚠️ الصيغة: `تنزيل @العضو @الرتبة`")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     role = message.role_mentions[0]
     await cleanup(message)
     if role not in target.roles:
@@ -2189,10 +2243,11 @@ async def cmd_remove_role(message: discord.Message, args: str):
 
 
 async def cmd_restore_role(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `رجع @العضو`")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     await cleanup(message)
     data = load_json(ROLES_REMOVED_FILE)
     gid, mid = str(message.guild.id), str(target.id)
@@ -2252,10 +2307,11 @@ async def cmd_show(message: discord.Message, args: str):
 
 # ---------- إدارة الصوت ----------
 async def cmd_vc_kick(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `بره @العضو`")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     await cleanup(message)
     if target.voice and target.voice.channel:
         await target.move_to(None, reason=f"بواسطة {message.author}")
@@ -2265,33 +2321,36 @@ async def cmd_vc_kick(message: discord.Message, args: str):
 
 
 async def cmd_vc_mute(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `اصمت @العضو`")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     await cleanup(message)
     await target.edit(mute=True, reason=f"بواسطة {message.author}")
     await reply(message, f"🔇 تم إسكات {target.mention} صوتيًا.")
 
 
 async def cmd_vc_unmute(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `انطق @العضو`")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     await cleanup(message)
     await target.edit(mute=False, reason=f"بواسطة {message.author}")
     await reply(message, f"🔊 تم فك الإسكات الصوتي عن {target.mention}.")
 
 
 async def cmd_vc_pull(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `اسحب @العضو` (وأنت داخل روم صوتي)")
         return
     if not (message.author.voice and message.author.voice.channel):
         await reply(message, "⚠️ لازم تكون داخل روم صوتي عشان تسحب له أحد.")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     await cleanup(message)
     if target.voice:
         await target.move_to(message.author.voice.channel, reason=f"بواسطة {message.author}")
@@ -2317,10 +2376,11 @@ async def cmd_vc_gather(message: discord.Message, args: str):
 
 
 async def cmd_vc_comehere(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `تعال @العضو`")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     await cleanup(message)
     if not (message.author.voice):
         await reply(message, "⚠️ لازم تكون بروم صوتي عشان يسحبك البوت... انتقل يدويًا.")
@@ -2333,10 +2393,11 @@ async def cmd_vc_comehere(message: discord.Message, args: str):
 
 
 async def cmd_vc_kicklock(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `اطلع @العضو`")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     await cleanup(message)
     if not (target.voice and target.voice.channel):
         await reply(message, "⚠️ العضو مو داخل روم صوتي.")
@@ -2350,13 +2411,14 @@ async def cmd_vc_kicklock(message: discord.Message, args: str):
 
 
 async def cmd_vc_allow(message: discord.Message, args: str):
-    if not message.mentions:
+    mentions = explicit_mentions(message)
+    if not mentions:
         await reply(message, "⚠️ الصيغة: `مسموح @العضو` (وأنت داخل الروم الصوتي)")
         return
     if not (message.author.voice and message.author.voice.channel):
         await reply(message, "⚠️ لازم تكون داخل الروم الصوتي المقفول عشان تسمح لأحد.")
         return
-    target = message.mentions[0]
+    target = mentions[0]
     channel = message.author.voice.channel
     await cleanup(message)
     overwrite = channel.overwrites_for(target)
@@ -2475,12 +2537,52 @@ async def on_message(message: discord.Message):
 
 
 @bot.event
+async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
+    """لو انحذفت رسالة تابعة للعبة شغالة حاليًا بنفس الروم، نوقف اللعبة تلقائيًا."""
+    channel_id = payload.channel_id
+    message_id = payload.message_id
+    stopped = False
+
+    # 1) ألعاب الجولة العامة (فكك/رتب/اعكس/صحح/اعلام/ايموجي/ادمج/الوان/اسرع/حرف/ترتيب/كلمة/ريبلكا)
+    round_info = active_rounds.get(channel_id)
+    if round_info and round_info.get("message_id") == message_id:
+        del active_rounds[channel_id]
+        unmark_busy(channel_id)
+        stopped = True
+
+    # 2) لعبة خمن/تخمين
+    guess_info = active_guess_games.get(channel_id)
+    if guess_info and guess_info.get("message_id") == message_id:
+        del active_guess_games[channel_id]
+        unmark_busy(channel_id)
+        stopped = True
+
+    # 3) بقية الألعاب اللي تشتغل داخل مهمة (Task) مستمرة (لوبيات، تحديات، روليت، مافيا، غميضة...)
+    tracked_ids = active_game_messages.get(channel_id)
+    task = active_channel_tasks.get(channel_id)
+    if tracked_ids and message_id in tracked_ids and task and not task.done():
+        task.cancel()
+        unmark_busy(channel_id)
+        stopped = True
+
+    if stopped:
+        channel = bot.get_channel(channel_id)
+        if channel:
+            try:
+                await channel.send("🛑 تم إيقاف اللعبة لأنه تم حذف رسالتها.")
+            except discord.Forbidden:
+                pass
+
+
+@bot.event
 async def on_ready():
     print(f"✅ تم تسجيل الدخول باسم {bot.user}")
 
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: commands.CommandError):
+    if isinstance(error, commands.CommandInvokeError) and isinstance(error.original, asyncio.CancelledError):
+        return  # اللعبة اتوقفت بسبب حذف رسالتها — تجاهل بصمت
     if isinstance(error, GamesRoleRequired):
         if ctx.guild and discord.utils.get(ctx.guild.roles, name=GAMES_ROLE_NAME) is None:
             print(f"[تنبيه] رول الألعاب '{GAMES_ROLE_NAME}' مو موجود بالسيرفر — تأكد إن الاسم يطابق.")
