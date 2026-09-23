@@ -104,6 +104,29 @@ bot = commands.Bot(command_prefix=".", intents=intents)
 
 
 # ============================================================
+# فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
+# ============================================================
+# ديسكورد لما ترد على رسالة وتسوي "Reply" مع تفعيل التنبيه، يحط صاحب الرسالة
+# جوا message.mentions حتى لو ما كتبت @اسمه صراحة بالنص. هذا يخلي أوامر زي "تايم"
+# أو "برا" ممكن تنفذ غلط على شخص انت بس رادّ عليه بدون ما تقصد تنفذ فيه أمر.
+# الحل: نصفّي القائمة ونخلي فيها بس الأعضاء اللي فعليًا مكتوب @هم بنص الرسالة.
+EXPLICIT_MENTION_PATTERN = re.compile(r"<@!?(\d+)>")
+
+
+def filter_explicit_mentions(message: discord.Message) -> list:
+    """يرجع بس الأعضاء المنشنين صراحة بنص الرسالة (مو بس لأنه رد على رسالتهم)."""
+    ids_in_order = []
+    seen = set()
+    for raw_id in EXPLICIT_MENTION_PATTERN.findall(message.content):
+        uid = int(raw_id)
+        if uid not in seen:
+            seen.add(uid)
+            ids_in_order.append(uid)
+    by_id = {m.id: m for m in message.mentions}
+    return [by_id[uid] for uid in ids_in_order if uid in by_id]
+
+
+# ============================================================
 # أدوات تخزين JSON عامة
 # ============================================================
 def load_json(path: str) -> dict:
@@ -430,11 +453,61 @@ def mark_busy(channel_id: int, game_name: str) -> None:
 
 def unmark_busy(channel_id: int) -> None:
     active_channel_games.pop(channel_id, None)
+    untrack_game_message(channel_id)
 
 
 async def warn_busy(ctx: commands.Context) -> None:
     name = active_channel_games.get(ctx.channel.id, "لعبة")
     await ctx.send(f"⚠️ فيه **{name}** شغالة بهذا الروم حاليًا، خلصوها الأول قبل لعبة ثانية.")
+
+
+# ---------- تتبع رسالة اللعبة الحالية (عشان لو انحذفت، اللعبة توقف) ----------
+active_game_messages: dict[int, int] = {}       # channel_id -> آيدي رسالة اللعبة الحالية
+game_cancel_events: dict[int, asyncio.Event] = {}  # channel_id -> Event تنضبط لو انحذفت رسالة اللعبة
+
+
+def track_game_message(channel_id: int, message: discord.Message) -> asyncio.Event:
+    """يسجل هذي الرسالة كرسالة اللعبة الحالية بهذا الروم (يستبدل أي تتبع سابق لنفس الروم)،
+    ويرجع Event تنضبط تلقائيًا لو حد حذف الرسالة."""
+    event = asyncio.Event()
+    game_cancel_events[channel_id] = event
+    active_game_messages[channel_id] = message.id
+    return event
+
+
+def untrack_game_message(channel_id: int) -> None:
+    game_cancel_events.pop(channel_id, None)
+    active_game_messages.pop(channel_id, None)
+
+
+async def wait_or_game_cancelled(event: asyncio.Event, timeout: float | None = None) -> bool:
+    """ينتظر لين اللعبة تنلغى (حذف رسالتها) أو ينتهي الوقت. يرجع True لو انلغت اللعبة."""
+    try:
+        await asyncio.wait_for(event.wait(), timeout=timeout)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
+@bot.event
+async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
+    """لو انحذفت رسالة لعبة شغالة حاليًا، نوقف اللعبة فورًا ونبلّغ بالروم."""
+    channel_id = payload.channel_id
+    if active_game_messages.get(channel_id) != payload.message_id:
+        return
+    event = game_cancel_events.get(channel_id)
+    if event is not None:
+        event.set()
+    # نوقف أي جولة سؤال/جواب أو لعبة تخمين شغالة بنفس الروم
+    active_rounds.pop(channel_id, None)
+    active_guess_games.pop(channel_id, None)
+    unmark_busy(channel_id)  # يشيل قفل "روم مشغول" ويمسح التتبع
+    channel = bot.get_channel(channel_id)
+    if channel is not None:
+        try:
+            await channel.send("🛑 تم إيقاف اللعبة (تم حذف رسالتها).")
+        except discord.Forbidden:
+            pass
 
 
 async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 40),
@@ -453,18 +526,21 @@ async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 
     mark_busy(channel.id, title)
     image = game_image_file(game_key)
     if image:
-        await channel.send(f"🎯 **{title}**\n{prompt}", file=image)
+        msg = await channel.send(f"🎯 **{title}**\n{prompt}", file=image)
     else:
-        await channel.send(f"🎯 **{title}**\n{prompt}")
+        msg = await channel.send(f"🎯 **{title}**\n{prompt}")
+    cancel_event = track_game_message(channel.id, msg)
 
     async def _timeout_watcher():
-        await asyncio.sleep(timeout)
+        cancelled = await wait_or_game_cancelled(cancel_event, timeout=timeout)
         current = active_rounds.get(channel.id)
         if current and current.get("token") == token:
             del active_rounds[channel.id]
             unmark_busy(channel.id)
-            extra = f" الإجابة كانت: **{reveal}**" if reveal else ""
-            await channel.send(f"⏳ خلص الوقت!{extra}")
+            if not cancelled:
+                extra = f" الإجابة كانت: **{reveal}**" if reveal else ""
+                await channel.send(f"⏳ خلص الوقت!{extra}")
+            # لو انحذفت الرسالة، معالج on_raw_message_delete هو اللي أرسل خبر الإيقاف
 
     bot.loop.create_task(_timeout_watcher())
 
@@ -690,9 +766,10 @@ async def guess_start(ctx: commands.Context, max_number: int = 100):
     image = game_image_file("خمن")
     text = f"🔢 اخترت رقم سري بين **1** و **{max_number}**! اكتبوا تخمينكم."
     if image:
-        await ctx.send(text, file=image)
+        msg = await ctx.send(text, file=image)
     else:
-        await ctx.send(text)
+        msg = await ctx.send(text)
+    track_game_message(ctx.channel.id, msg)
 
 
 # ============================================================
@@ -763,16 +840,22 @@ async def _run_button_game(ctx: commands.Context, players: list):
             f"🔘 **الجولة {round_num}** — {len(alive)} لاعبين و **{n}** أزرار بس!\n{names}\n"
             f"استعدوا... لما تصير خضراء اضغطوا زر (كل واحد ياخذ زر واحد). اللي ما يلحق زر يطيح! 🔴",
             view=view)
+        cancel_event = track_game_message(ctx.channel.id, msg)
         await asyncio.sleep(random.uniform(2, 5))
+        if cancel_event.is_set():
+            return
         view.open_buttons()
         try:
             await msg.edit(content=f"🟢 **الجولة {round_num}** — اضغطوا الحين! ({n} أزرار)", view=view)
         except discord.NotFound:
             return
-        try:
-            await asyncio.wait_for(view.done.wait(), timeout=10)
-        except asyncio.TimeoutError:
-            pass
+        done, pending = await asyncio.wait(
+            [asyncio.create_task(view.done.wait()), asyncio.create_task(cancel_event.wait())],
+            timeout=10, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        if cancel_event.is_set():
+            return
         view.lock_all()
         view.stop()
         try:
@@ -897,10 +980,17 @@ async def memory_game_cmd(ctx: commands.Context):
         image = game_image_file("اكشف")
         text = f"🧠 {ctx.author.mention} لعبة الذاكرة! دور بطاقتين متطابقتين لين تلقى كل الأزواج."
         if image:
-            await ctx.send(text, view=view, file=image)
+            msg = await ctx.send(text, view=view, file=image)
         else:
-            await ctx.send(text, view=view)
-        await view.wait()
+            msg = await ctx.send(text, view=view)
+        cancel_event = track_game_message(ctx.channel.id, msg)
+        done, pending = await asyncio.wait(
+            [asyncio.create_task(view.wait()), asyncio.create_task(cancel_event.wait())],
+            return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        if cancel_event.is_set():
+            view.stop()
     finally:
         unmark_busy(ctx.channel.id)
 
@@ -1050,10 +1140,17 @@ async def xo_cmd(ctx: commands.Context, opponent: discord.Member):
         if not accepted:
             return
         view = TicTacToeView(ctx.author, opponent)
-        await ctx.send(
+        msg = await ctx.send(
             f"🎮 **XO**: {ctx.author.mention} (X) ضد {opponent.mention} (O)\n🎯 دور {ctx.author.mention}", view=view
         )
-        await view.wait()
+        cancel_event = track_game_message(ctx.channel.id, msg)
+        done, pending = await asyncio.wait(
+            [asyncio.create_task(view.wait()), asyncio.create_task(cancel_event.wait())],
+            return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        if cancel_event.is_set():
+            view.stop()
     finally:
         unmark_busy(ctx.channel.id)
 
@@ -1129,10 +1226,17 @@ async def rps_cmd(ctx: commands.Context, opponent: discord.Member):
         if not accepted:
             return
         view = RPSView(ctx.author, opponent)
-        await ctx.send(
+        msg = await ctx.send(
             f"✂️ **حجرة ورقة مقص**: {ctx.author.mention} ضد {opponent.mention}\nكل واحد يضغط بالخفاء 👇", view=view
         )
-        await view.wait()
+        cancel_event = track_game_message(ctx.channel.id, msg)
+        done, pending = await asyncio.wait(
+            [asyncio.create_task(view.wait()), asyncio.create_task(cancel_event.wait())],
+            return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        if cancel_event.is_set():
+            view.stop()
     finally:
         unmark_busy(ctx.channel.id)
 
@@ -1213,10 +1317,14 @@ async def run_lobby(ctx: commands.Context, game_title: str, min_players: int = 3
         msg = await ctx.send(lobby.status_text(), view=lobby, file=image)
     else:
         msg = await ctx.send(lobby.status_text(), view=lobby)
-    try:
-        await asyncio.wait_for(lobby.start_event.wait(), timeout=countdown)
-    except asyncio.TimeoutError:
-        pass
+    cancel_event = track_game_message(ctx.channel.id, msg)
+    done, pending = await asyncio.wait(
+        [asyncio.create_task(lobby.start_event.wait()), asyncio.create_task(cancel_event.wait())],
+        timeout=countdown, return_when=asyncio.FIRST_COMPLETED)
+    for t in pending:
+        t.cancel()
+    if cancel_event.is_set():
+        return None  # انحذفت رسالة اللوبي — معالج on_raw_message_delete هو اللي بلّغ بالإيقاف
     for c in lobby.children:
         c.disabled = True
     try:
@@ -1665,10 +1773,14 @@ async def run_roulette_seat_lobby(ctx: commands.Context, min_players: int = 3,
         msg = await ctx.send(lobby.status_text(), view=lobby, file=image)
     else:
         msg = await ctx.send(lobby.status_text(), view=lobby)
-    try:
-        await asyncio.wait_for(lobby.start_event.wait(), timeout=countdown)
-    except asyncio.TimeoutError:
-        pass
+    cancel_event = track_game_message(ctx.channel.id, msg)
+    done, pending = await asyncio.wait(
+        [asyncio.create_task(lobby.start_event.wait()), asyncio.create_task(cancel_event.wait())],
+        timeout=countdown, return_when=asyncio.FIRST_COMPLETED)
+    for t in pending:
+        t.cancel()
+    if cancel_event.is_set():
+        return None  # انحذفت رسالة اللوبي — معالج on_raw_message_delete هو اللي بلّغ بالإيقاف
     for c in lobby.children:
         c.disabled = True
     try:
@@ -1695,11 +1807,20 @@ async def roulette_cmd(ctx: commands.Context):
         legend = "\n".join(f"`{i + 1}` {p.mention}" for i, p in enumerate(players))
         header = "🎡 **بدأت اللعبة!** العجلة تدور تختار مين يبدأ..."
         msg = await ctx.send(header)
+        cancel_event = track_game_message(ctx.channel.id, msg)
         chosen = await spin_and_choose(msg, players, header=header)
+        if cancel_event.is_set():
+            return
         view.chosen = chosen
         view._build_buttons()
         await msg.edit(content=f"{header}\n{legend}\n\n🎯 دور {chosen.mention} يختار وحد يطلعه!", view=view)
-        await view.wait()
+        done, pending = await asyncio.wait(
+            [asyncio.create_task(view.wait()), asyncio.create_task(cancel_event.wait())],
+            return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        if cancel_event.is_set():
+            view.stop()
     finally:
         unmark_busy(ctx.channel.id)
 
@@ -1748,8 +1869,11 @@ async def wheel_cmd(ctx: commands.Context):
         if not players:
             return
         msg = await ctx.send("🎡 **العجلة تدور تختار الفايز...**")
+        cancel_event = track_game_message(ctx.channel.id, msg)
         pts = random.randint(50, 150)
         winner = await spin_and_choose(msg, players, header="🎡 **العجلة تدور تختار الفايز...**")
+        if cancel_event.is_set():
+            return
         actual = add_game_reward(ctx.guild.id, winner.id, pts)
         record_game_result(ctx.guild.id, winner.id, won=True)
         for p in players:
@@ -1818,14 +1942,18 @@ async def _run_hideseek(ctx: commands.Context):
     seeker = random.choice(players)
     hiders = [p for p in players if p != seeker]
     view = HideSeekView(seeker, hiders)
-    await ctx.send(
+    msg = await ctx.send(
         f"🙈 {seeker.mention} هو الباحث! الباقين مختبئين بأرقام من 1 إلى {len(hiders)}.\n"
         f"اضغط على رقم عشان تبحث فيه 👇", view=view
     )
-    try:
-        await asyncio.wait_for(view.all_found.wait(), timeout=90)
-    except asyncio.TimeoutError:
-        pass
+    cancel_event = track_game_message(ctx.channel.id, msg)
+    done, pending = await asyncio.wait(
+        [asyncio.create_task(view.all_found.wait()), asyncio.create_task(cancel_event.wait())],
+        timeout=90, return_when=asyncio.FIRST_COMPLETED)
+    for t in pending:
+        t.cancel()
+    if cancel_event.is_set():
+        return
     for c in view.children:
         c.disabled = True
     try:
@@ -1854,7 +1982,10 @@ async def replica_cmd(ctx: commands.Context):
     sequence = random.sample(pool, k=5)
     seq_text = " ".join(sequence)
     msg = await ctx.send(f"🔁 احفظوا هذا الترتيب:\n\n# {seq_text}")
+    cancel_event = track_game_message(ctx.channel.id, msg)
     await asyncio.sleep(5)
+    if cancel_event.is_set():
+        return
     try:
         await msg.edit(content="🔁 **ريبلكا**: اكتبوا نفس الترتيب بالضبط (افصلوا بمسافة)!")
     except discord.NotFound:
@@ -1891,10 +2022,11 @@ async def _run_mafia(ctx: commands.Context):
             await p.send(f"🕵️ لعبة مافيا بسيرفر **{ctx.guild.name}**:\n{role}")
         except discord.Forbidden:
             pass
-    await ctx.send(
+    announce_msg = await ctx.send(
         f"🕵️ بدأت اللعبة! فيه **{mafia_count}** من المافيا بينكم.\n"
         f"ناقشوا 60 ثانية، وصوّتوا بكتابة: `تصويت @الشخص`"
     )
+    cancel_event = track_game_message(ctx.channel.id, announce_msg)
 
     def check(m: discord.Message):
         return (m.channel == ctx.channel and m.author in players
@@ -1903,13 +2035,15 @@ async def _run_mafia(ctx: commands.Context):
     votes: dict[int, discord.Member] = {}
     end_time = datetime.now(timezone.utc) + timedelta(seconds=60)
     while True:
+        if cancel_event.is_set():
+            return
         remaining = (end_time - datetime.now(timezone.utc)).total_seconds()
         if remaining <= 0:
             break
         try:
-            m = await bot.wait_for("message", check=check, timeout=remaining)
+            m = await bot.wait_for("message", check=check, timeout=min(remaining, 3))
         except asyncio.TimeoutError:
-            break
+            continue
         target = m.mentions[0]
         if target in players:
             votes[m.author.id] = target
@@ -1998,10 +2132,14 @@ async def _run_chairs(ctx: commands.Context):
         msg = await ctx.send(
             f"🪑 **الجولة {round_num}**: {len(players)} لاعبين و {max(1, len(players) - 1)} كرسي! بسرعة اقعدوا 👇",
             view=view)
-        try:
-            await asyncio.wait_for(view.done.wait(), timeout=10)
-        except asyncio.TimeoutError:
-            pass
+        cancel_event = track_game_message(ctx.channel.id, msg)
+        done, pending = await asyncio.wait(
+            [asyncio.create_task(view.done.wait()), asyncio.create_task(cancel_event.wait())],
+            timeout=10, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        if cancel_event.is_set():
+            return
         for c in view.children:
             c.disabled = True
         try:
@@ -2835,6 +2973,10 @@ async def shop_expiry_task():
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
+
+    # نصفّي المنشنات: لو المستخدم بس رادّ (Reply) على حد بدون ما يكتب @اسمه صراحة،
+    # ما نعتبره منشن — عشان "تايم"/"برا"/... ما تنفذ غلط بمجرد الرد على رسالة الشخص.
+    message.mentions = filter_explicit_mentions(message)
 
     if message.content.strip().startswith("تنبيه"):
         await handle_warn_command(message)
