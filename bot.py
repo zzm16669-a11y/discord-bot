@@ -27,7 +27,7 @@
 """
 
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 import aiohttp
 import asyncio
 import itertools
@@ -57,36 +57,6 @@ WARNS_FILE = "warns.json"
 ECONOMY_FILE = "economy.json"
 JAIL_FILE = "jail_data.json"
 ROLES_REMOVED_FILE = "removed_roles.json"
-GAME_STATS_FILE = "game_stats.json"
-SHOP_ACTIVE_FILE = "shop_active.json"
-
-# الحد الأقصى للنقاط اللي يقدر اللاعب ياخذها من الألعاب خلال 24 ساعة (يحمي من تكديس النقاط بسرعة غير طبيعية).
-# النقاط اللي تجي من .يومي أو .تحويل أو .اصدار ما تدخل بهذا الحد.
-DAILY_GAME_POINTS_CAP = 500
-
-# ---------- صور الألعاب ----------
-# مجلد الصور لازم يكون بجنب ملف البوت (نفس المجلد) باسم game_images.
-GAME_IMAGES_DIR = "game_images"
-GAME_IMAGES = {
-    "روليت": "roulette.png", "xo": "xo.png", "مافيا": "mafia.png", "كراسي": "chairs.png",
-    "حجرة": "rps.png", "نرد": "dice.png", "عجلة": "wheel.png", "غميضة": "hideseek.png",
-    "ريبلكا": "replica.png", "خمن": "guess.png", "كلمة": "wordchain.png", "زر": "button.png",
-    "اسرع": "fastest.png", "فكك": "split.png", "رتب": "unscramble.png", "ادمج": "combine.png",
-    "اعلام": "flags.png", "اعكس": "reverse.png", "حرف": "letter.png", "ترتيب": "ordering.png",
-    "الوان": "colors.png", "ايموجي": "emoji.png", "اكشف": "memory.png",
-}
-
-
-def game_image_file(game_key: str) -> discord.File | None:
-    """يرجع صورة اللعبة (discord.File جديدة كل مرة) لو موجودة على القرص، وإلا None."""
-    filename = GAME_IMAGES.get(game_key)
-    if not filename:
-        return None
-    path = os.path.join(GAME_IMAGES_DIR, filename)
-    if not os.path.exists(path):
-        return None
-    return discord.File(path, filename=filename)
-
 
 # اسم رول الألعاب — لازم يطابق اسم الرول اللي سويته بالسيرفر حرف بحرف
 GAMES_ROLE_NAME = "Event Team"
@@ -311,95 +281,6 @@ async def transfer_cmd(ctx: commands.Context, member: discord.Member, amount: in
     await ctx.send(f"✅ تم تحويل **{amount}** نقطة إلى {member.mention}")
 
 
-def add_game_reward(guild_id: int, user_id: int, amount: int) -> int:
-    """يضيف نقاط من مكاسب الألعاب بس (مو من .يومي أو .تحويل أو .اصدار)، بحد أقصى DAILY_GAME_POINTS_CAP
-    نقطة كل 24 ساعة لكل لاعب. يرجع المبلغ اللي انضاف فعليًا (ممكن يكون أقل من amount لو قارب السقف)."""
-    if amount <= 0:
-        return 0
-    data = load_json(ECONOMY_FILE)
-    gid, uid = str(guild_id), str(user_id)
-    data.setdefault(gid, {})
-    now = datetime.now(timezone.utc)
-    start_key, earned_key = f"{uid}_daily_game_start", f"{uid}_daily_game_earned"
-    start_str = data[gid].get(start_key)
-    earned_so_far = data[gid].get(earned_key, 0)
-    if not start_str or (now - datetime.fromisoformat(start_str)).total_seconds() >= 86400:
-        start_str = now.isoformat()
-        earned_so_far = 0
-    actual = max(0, min(amount, DAILY_GAME_POINTS_CAP - earned_so_far))
-    data[gid][start_key] = start_str
-    data[gid][earned_key] = earned_so_far + actual
-    if actual > 0:
-        data[gid][uid] = data[gid].get(uid, 0) + actual
-    save_json(ECONOMY_FILE, data)
-    return actual
-
-
-def record_game_result(guild_id: int, user_id: int, won: bool) -> None:
-    """يسجل فوز أو خسارة للاعب بملف إحصائيات الألعاب (يستخدمه أمر .سجلي)."""
-    data = load_json(GAME_STATS_FILE)
-    gid, uid = str(guild_id), str(user_id)
-    data.setdefault(gid, {})
-    data[gid].setdefault(uid, {"wins": 0, "losses": 0})
-    data[gid][uid]["wins" if won else "losses"] += 1
-    save_json(GAME_STATS_FILE, data)
-
-
-@bot.command(name="توب", aliases=["ليدربورد"])
-async def leaderboard_cmd(ctx: commands.Context):
-    data = load_json(ECONOMY_FILE)
-    guild_data = data.get(str(ctx.guild.id), {})
-    # نستبعد المفاتيح المساعدة (تواريخ اليومي/سقف الألعاب) ونخلي أرقام اليوزرات بس
-    scores = []
-    for key, value in guild_data.items():
-        if key.isdigit() and isinstance(value, int):
-            scores.append((int(key), value))
-    scores.sort(key=lambda x: x[1], reverse=True)
-    top = scores[:10]
-    if not top:
-        await ctx.send("📉 ما فيه أي نقاط مسجلة بهذا السيرفر لين الحين.")
-        return
-    medals = ["🥇", "🥈", "🥉"]
-    lines = ["🏆 **توب 10 — أعلى النقاط بالسيرفر**\n"]
-    for i, (uid, pts) in enumerate(top):
-        member = ctx.guild.get_member(uid)
-        name = member.mention if member else f"عضو غادر (`{uid}`)"
-        rank = medals[i] if i < 3 else f"`#{i + 1}`"
-        lines.append(f"{rank} {name} — **{pts}** نقطة")
-    await ctx.send("\n".join(lines))
-
-
-@bot.command(name="سجلي", aliases=["سجل"])
-async def game_log_cmd(ctx: commands.Context, member: discord.Member = None):
-    member = member or ctx.author
-    data = load_json(GAME_STATS_FILE)
-    stats = data.get(str(ctx.guild.id), {}).get(str(member.id), {"wins": 0, "losses": 0})
-    wins, losses = stats.get("wins", 0), stats.get("losses", 0)
-    total = wins + losses
-    rate = f"{(wins / total * 100):.0f}%" if total else "—"
-    await ctx.send(
-        f"📊 **سجل {member.display_name}**\n"
-        f"✅ فوز: **{wins}**\n"
-        f"❌ خسارة: **{losses}**\n"
-        f"📈 نسبة الفوز: **{rate}**"
-    )
-
-
-
-async def mint_points_cmd(ctx: commands.Context, amount: int):
-    """يضيف نقاط من العدم لرصيد صاحب الأمر — بس لصاحب رول Owner أو مالك السيرفر."""
-    has_owner_role = isinstance(ctx.author, discord.Member) and has_role(ctx.author, [OWNER])
-    is_guild_owner = ctx.guild is not None and ctx.author.id == ctx.guild.owner_id
-    if not (has_owner_role or is_guild_owner):
-        await ctx.send(f"{ctx.author.mention} ❌ ما عندك الصلاحية.", delete_after=8)
-        return
-    if amount <= 0:
-        await ctx.send("⚠️ المبلغ لازم يكون أكبر من صفر.")
-        return
-    new_balance = add_balance(ctx.guild.id, ctx.author.id, amount)
-    await ctx.send(f"💰 {ctx.author.mention} تمت إضافة **{amount}** نقطة لرصيدك. رصيدك الحين: **{new_balance}** نقطة")
-
-
 # ============================================================
 # 3) نظام الجولات العام — لألعاب "أول من يجاوب صح يفوز"
 # ============================================================
@@ -438,8 +319,7 @@ async def warn_busy(ctx: commands.Context) -> None:
 
 
 async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 40),
-                       allowed_ids: set | None = None, timeout: int = 45, reveal: str = "",
-                       game_key: str = ""):
+                       allowed_ids: set | None = None, timeout: int = 45, reveal: str = ""):
     """يبدأ جولة سؤال/جواب بالروم. أول رسالة تطابق checker تفوز."""
     if channel.id in active_rounds or is_channel_busy(channel.id):
         busy_name = active_channel_games.get(channel.id, title)
@@ -451,11 +331,7 @@ async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 
         "allowed_ids": allowed_ids, "token": token, "reveal": reveal,
     }
     mark_busy(channel.id, title)
-    image = game_image_file(game_key)
-    if image:
-        await channel.send(f"🎯 **{title}**\n{prompt}", file=image)
-    else:
-        await channel.send(f"🎯 **{title}**\n{prompt}")
+    await channel.send(f"🎯 **{title}**\n{prompt}")
 
     async def _timeout_watcher():
         await asyncio.sleep(timeout)
@@ -554,7 +430,7 @@ async def split_letters_cmd(ctx: commands.Context):
 
     await start_round(ctx.channel, title="فكك الكلمة",
                        prompt=f"فكك هذي الكلمة حرف حرف (بين كل حرف مسافة): **{word}**\nمثال: بكره ← ب ك ر ه",
-                       checker=checker, reward=(25, 45), reveal=spaced, game_key="فكك")
+                       checker=checker, reward=(25, 45), reveal=spaced)
 
 
 @bot.command(name="رتب")
@@ -564,7 +440,7 @@ async def unscramble_cmd(ctx: commands.Context):
     scrambled = scramble(word)
     await start_round(ctx.channel, title="رتب الحروف", prompt=f"رتب الحروف: **{scrambled}**",
                        checker=lambda c: normalize(c) == normalize(word),
-                       reward=(25, 45), reveal=word, game_key="رتب")
+                       reward=(25, 45), reveal=word)
 
 
 @bot.command(name="اعكس")
@@ -573,7 +449,7 @@ async def reverse_cmd(ctx: commands.Context):
     reversed_word = word[::-1]
     await start_round(ctx.channel, title="اعكس الكلمة", prompt=f"اكتب هذي الكلمة بالعكس: **{word}**",
                        checker=lambda c: normalize(c) == normalize(reversed_word),
-                       reward=(20, 35), reveal=reversed_word, game_key="اعكس")
+                       reward=(20, 35), reveal=reversed_word)
 
 
 @bot.command(name="صحح")
@@ -590,7 +466,7 @@ async def flags_cmd(ctx: commands.Context):
     flag, country = random.choice(FLAG_BANK)
     await start_round(ctx.channel, title="خمن الدولة", prompt=f"وش هذي الدولة؟ {flag}",
                        checker=lambda c: normalize(country) in normalize(c),
-                       reward=(20, 40), reveal=country, game_key="اعلام")
+                       reward=(20, 40), reveal=country)
 
 
 @bot.command(name="ايموجي")
@@ -598,7 +474,7 @@ async def emoji_guess_cmd(ctx: commands.Context):
     emoji, answer = random.choice(EMOJI_GUESS_BANK)
     await start_round(ctx.channel, title="خمن من الرمز", prompt=f"وش تتوقع هذا الرمز؟ {emoji}",
                        checker=lambda c: normalize(c) == normalize(answer),
-                       reward=(15, 30), reveal=answer, game_key="ايموجي")
+                       reward=(15, 30), reveal=answer)
 
 
 @bot.command(name="ادمج")
@@ -606,7 +482,7 @@ async def combine_cmd(ctx: commands.Context):
     emojis, answer = random.choice(COMPOUND_BANK)
     await start_round(ctx.channel, title="ادمج وخمن", prompt=f"وش الكلمة اللي يرمز لها دمج: {emojis}",
                        checker=lambda c: normalize(c) == normalize(answer),
-                       reward=(25, 45), reveal=answer, game_key="ادمج")
+                       reward=(25, 45), reveal=answer)
 
 
 @bot.command(name="الوان")
@@ -614,7 +490,7 @@ async def colors_cmd(ctx: commands.Context):
     emoji, color = random.choice(COLOR_BANK)
     await start_round(ctx.channel, title="خمن اللون", prompt=f"وش اللون المرتبط بـ {emoji}؟",
                        checker=lambda c: normalize(c) == normalize(color),
-                       reward=(15, 25), reveal=color, game_key="الوان")
+                       reward=(15, 25), reveal=color)
 
 
 @bot.command(name="اسرع")
@@ -623,7 +499,7 @@ async def fastest_typer_cmd(ctx: commands.Context):
     await start_round(ctx.channel, title="أسرع كتابة",
                        prompt=f"اكتب هذي الجملة بالضبط بأسرع وقت:\n**{phrase}**",
                        checker=lambda c: normalize(c) == normalize(phrase),
-                       reward=(30, 60), reveal=phrase, timeout=45, game_key="اسرع")
+                       reward=(30, 60), reveal=phrase, timeout=45)
 
 
 @bot.command(name="حرف")
@@ -637,7 +513,7 @@ async def letter_game_cmd(ctx: commands.Context):
 
     await start_round(ctx.channel, title="أول من يجاوب",
                        prompt=f"اذكر ({category}) يبدأ بحرف **{letter}**",
-                       checker=checker, reward=(15, 30), reveal="", timeout=30, game_key="حرف")
+                       checker=checker, reward=(15, 30), reveal="", timeout=30)
 
 
 @bot.command(name="ترتيب")
@@ -655,7 +531,7 @@ async def ordering_cmd(ctx: commands.Context):
     reveal_text = "  ".join(str(n) for n in correct)
     await start_round(ctx.channel, title="رتب الأرقام",
                        prompt=f"رتب هذي الأرقام تصاعديًا (اكتبهم بمسافة بينهم):\n**{nums_text}**",
-                       checker=checker, reward=(20, 35), reveal=reveal_text, timeout=40, game_key="ترتيب")
+                       checker=checker, reward=(20, 35), reveal=reveal_text, timeout=40)
 
 
 @bot.command(name="كلمة")
@@ -669,7 +545,7 @@ async def word_chain_cmd(ctx: commands.Context):
 
     await start_round(ctx.channel, title="سلسلة الكلمات",
                        prompt=f"الكلمة: **{word}**\nقولوا كلمة تبدأ بآخر حرف منها (حرف {word[-1]})",
-                       checker=checker, reward=(15, 30), reveal="", timeout=30, game_key="كلمة")
+                       checker=checker, reward=(15, 30), reveal="", timeout=30)
 
 
 # ---------- خمن (تخمين رقم — مفتوحة بالروم، فيها تلميح فوق/تحت) ----------
@@ -687,12 +563,7 @@ async def guess_start(ctx: commands.Context, max_number: int = 100):
     number = random.randint(1, max_number)
     active_guess_games[ctx.channel.id] = {"number": number, "max": max_number}
     mark_busy(ctx.channel.id, "خمن (تخمين رقم)")
-    image = game_image_file("خمن")
-    text = f"🔢 اخترت رقم سري بين **1** و **{max_number}**! اكتبوا تخمينكم."
-    if image:
-        await ctx.send(text, file=image)
-    else:
-        await ctx.send(text)
+    await ctx.send(f"🔢 اخترت رقم سري بين **1** و **{max_number}**! اكتبوا تخمينكم.")
 
 
 # ============================================================
@@ -798,12 +669,8 @@ async def _run_button_game(ctx: commands.Context, players: list):
         round_num += 1
 
     winner = alive[0]
-    actual = add_game_reward(ctx.guild.id, winner.id, 100)
-    record_game_result(ctx.guild.id, winner.id, won=True)
-    for p in players:
-        if p != winner:
-            record_game_result(ctx.guild.id, p.id, won=False)
-    await ctx.send(f"🏆 فاز {winner.mention} بلعبة الأزرار! (+{actual} نقطة) 🎉")
+    add_balance(ctx.guild.id, winner.id, 100)
+    await ctx.send(f"🏆 فاز {winner.mention} بلعبة الأزرار! (+100 نقطة) 🎉")
 
 
 @bot.command(name="زر")
@@ -813,7 +680,7 @@ async def button_game_cmd(ctx: commands.Context):
         return
     mark_busy(ctx.channel.id, "زر (آخر ناجي)")
     try:
-        players = await run_lobby(ctx, "🔘 لعبة الأزرار (آخر ناجي)", min_players=2, max_players=20, countdown=30, game_key="زر")
+        players = await run_lobby(ctx, "🔘 لعبة الأزرار (آخر ناجي)", min_players=2, max_players=20, countdown=30)
         if not players:
             return
         await _run_button_game(ctx, players)
@@ -868,11 +735,11 @@ class MemoryView(discord.ui.View):
             self.locked = False
             if all(self.matched):
                 pts = max(20, 200 - self.moves * 10)
-                actual = add_game_reward(interaction.guild.id, self.player.id, pts)
+                add_balance(interaction.guild.id, self.player.id, pts)
                 for b in self.buttons:
                     b.disabled = True
                 await interaction.message.edit(
-                    content=f"🎉 خلصت اللعبة بعدد **{self.moves}** محاولة! (+{actual} نقطة)", view=self)
+                    content=f"🎉 خلصت اللعبة بعدد **{self.moves}** محاولة! (+{pts} نقطة)", view=self)
                 self.stop()
             return
         await asyncio.sleep(1.2)
@@ -894,12 +761,7 @@ async def memory_game_cmd(ctx: commands.Context):
     mark_busy(ctx.channel.id, "اكشف (لعبة الذاكرة)")
     try:
         view = MemoryView(ctx.author)
-        image = game_image_file("اكشف")
-        text = f"🧠 {ctx.author.mention} لعبة الذاكرة! دور بطاقتين متطابقتين لين تلقى كل الأزواج."
-        if image:
-            await ctx.send(text, view=view, file=image)
-        else:
-            await ctx.send(text, view=view)
+        await ctx.send(f"🧠 {ctx.author.mention} لعبة الذاكرة! دور بطاقتين متطابقتين لين تلقى كل الأزواج.", view=view)
         await view.wait()
     finally:
         unmark_busy(ctx.channel.id)
@@ -954,15 +816,11 @@ class ChallengeView(discord.ui.View):
                 pass
 
 
-async def send_challenge(ctx: commands.Context, opponent: discord.Member, game_name: str, game_key: str = "") -> bool:
+async def send_challenge(ctx: commands.Context, opponent: discord.Member, game_name: str) -> bool:
     """يرسل دعوة تحدي للخصم وينتظر رده. يرجع True لو وافق، False لو رفض أو ما رد."""
     view = ChallengeView(ctx.author, opponent, game_name)
-    image = game_image_file(game_key)
-    text = f"⚔️ {ctx.author.mention} يتحداك يا {opponent.mention} بلعبة **{game_name}**! تبي تلعب؟"
-    if image:
-        msg = await ctx.send(text, view=view, file=image)
-    else:
-        msg = await ctx.send(text, view=view)
+    msg = await ctx.send(
+        f"⚔️ {ctx.author.mention} يتحداك يا {opponent.mention} بلعبة **{game_name}**! تبي تلعب؟", view=view)
     view.message = msg
     await view.wait()
     return view.result is True
@@ -985,13 +843,10 @@ class TicTacToeButton(discord.ui.Button):
         winner_symbol = view.check_winner()
         if winner_symbol:
             winner = view.player_x if winner_symbol == "X" else view.player_o
-            loser = view.player_o if winner_symbol == "X" else view.player_x
             for c in view.children:
                 c.disabled = True
-            actual = add_game_reward(interaction.guild.id, winner.id, 50)
-            record_game_result(interaction.guild.id, winner.id, won=True)
-            record_game_result(interaction.guild.id, loser.id, won=False)
-            await interaction.response.edit_message(content=f"🏆 فاز {winner.mention}! (+{actual} نقطة)", view=view)
+            add_balance(interaction.guild.id, winner.id, 50)
+            await interaction.response.edit_message(content=f"🏆 فاز {winner.mention}! (+50 نقطة)", view=view)
             view.stop()
             return
         if view.is_full():
@@ -1046,7 +901,7 @@ async def xo_cmd(ctx: commands.Context, opponent: discord.Member):
         return
     mark_busy(ctx.channel.id, "XO")
     try:
-        accepted = await send_challenge(ctx, opponent, "XO", game_key="xo")
+        accepted = await send_challenge(ctx, opponent, "XO")
         if not accepted:
             return
         view = TicTacToeView(ctx.author, opponent)
@@ -1083,15 +938,11 @@ class RPSView(discord.ui.View):
             if result == 0:
                 text += "🤝 تعادل!"
             elif result == 1:
-                actual = add_game_reward(interaction.guild.id, self.p1.id, 30)
-                record_game_result(interaction.guild.id, self.p1.id, won=True)
-                record_game_result(interaction.guild.id, self.p2.id, won=False)
-                text += f"🏆 فاز {self.p1.mention}! (+{actual} نقطة)"
+                text += f"🏆 فاز {self.p1.mention}! (+30 نقطة)"
+                add_balance(interaction.guild.id, self.p1.id, 30)
             else:
-                actual = add_game_reward(interaction.guild.id, self.p2.id, 30)
-                record_game_result(interaction.guild.id, self.p2.id, won=True)
-                record_game_result(interaction.guild.id, self.p1.id, won=False)
-                text += f"🏆 فاز {self.p2.mention}! (+{actual} نقطة)"
+                text += f"🏆 فاز {self.p2.mention}! (+30 نقطة)"
+                add_balance(interaction.guild.id, self.p2.id, 30)
             await interaction.message.edit(content=text, view=self)
             self.stop()
 
@@ -1125,7 +976,7 @@ async def rps_cmd(ctx: commands.Context, opponent: discord.Member):
         return
     mark_busy(ctx.channel.id, "حجرة ورقة مقص")
     try:
-        accepted = await send_challenge(ctx, opponent, "حجرة ورقة مقص", game_key="حجرة")
+        accepted = await send_challenge(ctx, opponent, "حجرة ورقة مقص")
         if not accepted:
             return
         view = RPSView(ctx.author, opponent)
@@ -1154,12 +1005,12 @@ class GameLobby(discord.ui.View):
 
     def status_text(self) -> str:
         names = "، ".join(m.mention for m in self.players)
-        countdown_text = self.host_countdown_text if hasattr(self, 'host_countdown_text') else '30'
         return (
             f"🎮 **{self.game_title} — بانتظار اللاعبين** ({len(self.players)}/{self.max_players})\n"
             f"{names}\n\n"
-            f"أدنى عدد: {self.min_players}\n"
-            f"⏳ تبدأ تلقائيًا خلال {countdown_text} ثانية."
+            f"اضغط 🎮 **انضمام** للدخول، 🚪 **خروج** للانسحاب، "
+            f"أو المضيف {self.host.mention} يضغط ▶️ **بدء الآن** (أدنى عدد: {self.min_players})\n"
+            f"⏳ تبدأ تلقائيًا خلال {self.host_countdown_text if hasattr(self, 'host_countdown_text') else '30'} ثانية."
         )
 
     @discord.ui.button(label="🎮 انضمام", style=discord.ButtonStyle.success)
@@ -1202,17 +1053,13 @@ class GameLobby(discord.ui.View):
 
 
 async def run_lobby(ctx: commands.Context, game_title: str, min_players: int = 3,
-                     max_players: int = 20, countdown: int = 30, game_key: str = ""):
+                     max_players: int = 20, countdown: int = 30):
     """يفتح لوبي جماعي، ويرجع قائمة اللاعبين إذا اكتمل العدد الأدنى، وإلا يرجع None."""
     if ctx.author.bot:
         return None
     lobby = GameLobby(ctx.author, game_title, min_players, max_players, countdown)
     lobby.host_countdown_text = str(countdown)
-    image = game_image_file(game_key)
-    if image:
-        msg = await ctx.send(lobby.status_text(), view=lobby, file=image)
-    else:
-        msg = await ctx.send(lobby.status_text(), view=lobby)
+    msg = await ctx.send(lobby.status_text(), view=lobby)
     try:
         await asyncio.wait_for(lobby.start_event.wait(), timeout=countdown)
     except asyncio.TimeoutError:
@@ -1483,7 +1330,6 @@ async def spin_and_choose(msg: discord.Message, players: list[discord.Member],
 class RouletteView(discord.ui.View):
     def __init__(self, players: list[discord.Member]):
         super().__init__(timeout=180)
-        self.all_players = players.copy()
         self.remaining = players.copy()
         self.chosen: discord.Member | None = None
         self.spinning = False
@@ -1507,36 +1353,29 @@ class RouletteView(discord.ui.View):
                 await interaction.response.send_message("⚠️ مو دورك!", ephemeral=True)
                 return
             self.remaining.remove(target)
-            elim_text = f"💀 {interaction.user.mention} أقصى {target.mention} من اللعبة!"
             if len(self.remaining) == 1:
                 winner = self.remaining[0]
                 for c in self.children:
                     c.disabled = True
-                actual = add_game_reward(interaction.guild.id, winner.id, 100)
-                record_game_result(interaction.guild.id, winner.id, won=True)
-                for p in self.all_players:
-                    if p != winner:
-                        record_game_result(interaction.guild.id, p.id, won=False)
-                await interaction.response.edit_message(view=self)
-                await interaction.channel.send(elim_text)
-                await interaction.channel.send(f"🏆 الفايز: {winner.mention}! (+{actual} نقطة) 🎉")
+                add_balance(interaction.guild.id, winner.id, 100)
+                await interaction.response.edit_message(
+                    content=f"💀 {interaction.user.mention} أقصى {target.mention} من اللعبة!\n\n🏆 الناجي: {winner.mention}! (+100 نقطة) 🎉", view=self
+                )
                 self.stop()
                 return
 
             # العجلة الدائرية تدور وتختار مين دوره يطلع وحد
             self.spinning = True
-            for c in self.children:
-                c.disabled = True
-            await interaction.response.edit_message(view=self)  # نجمّد رسالة الجولة اللي راحت (تبقى فوق كسجل)
+            prefix = f"💀 {interaction.user.mention} أقصى {target.mention} من اللعبة!\n\n"
+            await interaction.response.edit_message(content=prefix + "🎡 العجلة تدور...", view=None)
+            msg = interaction.message
             try:
-                await interaction.channel.send(elim_text)
-                spin_msg = await interaction.channel.send("🎡 العجلة تدور...")
                 legend = "\n".join(f"`{i + 1}` {m.mention}" for i, m in enumerate(self.remaining))
-                chosen = await spin_and_choose(spin_msg, self.remaining, header="🎡 العجلة تدور...")
+                chosen = await spin_and_choose(msg, self.remaining, header=prefix + "🎡 العجلة تدور...")
                 self.chosen = chosen
                 self._build_buttons()
-                await interaction.channel.send(
-                    content=f"{legend}\n\n🎯 دور {chosen.mention} يختار!", view=self)
+                await msg.edit(
+                    content=f"{prefix}{legend}\n\n🎯 دور {chosen.mention} يختار!", view=self)
             except discord.NotFound:
                 self.stop()
             finally:
@@ -1628,6 +1467,8 @@ class RouletteSeatLobbyView(discord.ui.View):
     def status_text(self) -> str:
         return (
             f"🎡 **الروليت الروسي — اختر مقعدك** ({len(self.seats)}/{self.max_seats})\n\n"
+            f"اضغط على رقم عشان تحجز مقعدك (يطلع اسمك على الزر)، وإذا تبي تنسحب اضغط 🚪 خروج.\n"
+            f"المضيف {self.host.mention} يقدر يضغط ▶️ يبدأ عشان يبدأ مبكرًا (أدنى عدد: {self.min_players}).\n"
             f"⏳ تبدأ تلقائيًا خلال {self.countdown} ثانية."
         )
 
@@ -1662,11 +1503,7 @@ async def run_roulette_seat_lobby(ctx: commands.Context, min_players: int = 3,
     if ctx.author.bot:
         return None
     lobby = RouletteSeatLobbyView(ctx.author, min_players, max_seats, countdown)
-    image = game_image_file("روليت")
-    if image:
-        msg = await ctx.send(lobby.status_text(), view=lobby, file=image)
-    else:
-        msg = await ctx.send(lobby.status_text(), view=lobby)
+    msg = await ctx.send(lobby.status_text(), view=lobby)
     try:
         await asyncio.wait_for(lobby.start_event.wait(), timeout=countdown)
     except asyncio.TimeoutError:
@@ -1700,7 +1537,7 @@ async def roulette_cmd(ctx: commands.Context):
         chosen = await spin_and_choose(msg, players, header=header)
         view.chosen = chosen
         view._build_buttons()
-        await ctx.send(content=f"{legend}\n\n🎯 دور {chosen.mention} يختار وحد يطلعه!", view=view)
+        await msg.edit(content=f"{header}\n{legend}\n\n🎯 دور {chosen.mention} يختار وحد يطلعه!", view=view)
         await view.wait()
     finally:
         unmark_busy(ctx.channel.id)
@@ -1714,26 +1551,18 @@ async def dice_cmd(ctx: commands.Context):
         return
     mark_busy(ctx.channel.id, "نرد")
     try:
-        players = await run_lobby(ctx, "🎲 لعبة النرد", min_players=2, max_players=20, countdown=30, game_key="نرد")
+        players = await run_lobby(ctx, "🎲 لعبة النرد", min_players=2, max_players=20, countdown=30)
         if not players:
             return
         rolls = {p: random.randint(1, 6) for p in players}
         top = max(rolls.values())
         winners = [p for p in players if rolls[p] == top]
         lines = "\n".join(f"{p.mention}: 🎲 {rolls[p]}" for p in players)
-        actual_amounts = []
         for w in winners:
-            actual_amounts.append(add_game_reward(ctx.guild.id, w.id, 60))
-            record_game_result(ctx.guild.id, w.id, won=True)
-        for p in players:
-            if p not in winners:
-                record_game_result(ctx.guild.id, p.id, won=False)
+            add_balance(ctx.guild.id, w.id, 60)
         winners_text = " و ".join(w.mention for w in winners)
-        if len(set(actual_amounts)) == 1:
-            reward_text = f"(+{actual_amounts[0]} نقطة{' لكل واحد' if len(winners) > 1 else ''})"
-        else:
-            reward_text = "(" + "، ".join(f"{w.mention}: +{a}" for w, a in zip(winners, actual_amounts)) + ")"
-        await ctx.send(f"🎲 **نتائج الرمي:**\n{lines}\n\n🏆 الفائز: {winners_text} {reward_text}")
+        extra = " لكل واحد" if len(winners) > 1 else ""
+        await ctx.send(f"🎲 **نتائج الرمي:**\n{lines}\n\n🏆 الفائز: {winners_text} (+60 نقطة{extra})")
     finally:
         unmark_busy(ctx.channel.id)
 
@@ -1746,61 +1575,20 @@ async def wheel_cmd(ctx: commands.Context):
         return
     mark_busy(ctx.channel.id, "عجلة الحظ")
     try:
-        players = await run_lobby(ctx, "🎡 عجلة الحظ", min_players=2, max_players=20, countdown=30, game_key="عجلة")
+        players = await run_lobby(ctx, "🎡 عجلة الحظ", min_players=2, max_players=20, countdown=30)
         if not players:
             return
-        msg = await ctx.send("🎡 **العجلة تدور تختار الفايز...**")
+        msg = await ctx.send("🎡 العجلة تدور...")
+        await asyncio.sleep(2)
+        winner = random.choice(players)
         pts = random.randint(50, 150)
-        winner = await spin_and_choose(msg, players, header="🎡 **العجلة تدور تختار الفايز...**")
-        actual = add_game_reward(ctx.guild.id, winner.id, pts)
-        record_game_result(ctx.guild.id, winner.id, won=True)
-        for p in players:
-            if p != winner:
-                record_game_result(ctx.guild.id, p.id, won=False)
-        await ctx.send(f"🎉 الفايز: {winner.mention}! (+{actual} نقطة)")
+        add_balance(ctx.guild.id, winner.id, pts)
+        await msg.edit(content=f"🎡 توقفت العجلة عند... 🎉 {winner.mention}! (+{pts} نقطة)")
     finally:
         unmark_busy(ctx.channel.id)
 
 
 # ---------- غميضة ----------
-class HideSeekButton(discord.ui.Button):
-    def __init__(self, number: int):
-        super().__init__(label=str(number), style=discord.ButtonStyle.secondary, row=(number - 1) // 5)
-        self.number = number
-
-    async def callback(self, interaction: discord.Interaction):
-        view: HideSeekView = self.view
-        if interaction.user != view.seeker:
-            await interaction.response.send_message("⚠️ أنت مو الباحث بهذي اللعبة.", ephemeral=True)
-            return
-        if self.disabled:
-            await interaction.response.send_message("✅ هذا الرقم انفتح مسبقًا.", ephemeral=True)
-            return
-        found_player = view.spots[self.number]
-        self.disabled = True
-        self.label = f"✅ {found_player.display_name[:12]}"
-        self.style = discord.ButtonStyle.success
-        view.found.add(found_player.id)
-        add_game_reward(interaction.guild.id, view.seeker.id, 20)
-        await interaction.response.edit_message(view=view)
-        await interaction.channel.send(f"🎯 لقيت {found_player.mention}!")
-        if len(view.found) >= len(view.spots):
-            view.all_found.set()
-
-
-class HideSeekView(discord.ui.View):
-    def __init__(self, seeker: discord.Member, hiders: list[discord.Member]):
-        super().__init__(timeout=90)
-        self.seeker = seeker
-        numbers = list(range(1, len(hiders) + 1))
-        random.shuffle(numbers)
-        self.spots: dict[int, discord.Member] = {num: p for num, p in zip(numbers, hiders)}
-        self.found: set[int] = set()
-        self.all_found = asyncio.Event()
-        for n in range(1, len(hiders) + 1):
-            self.add_item(HideSeekButton(n))
-
-
 @bot.command(name="غميضة")
 async def hideseek_cmd(ctx: commands.Context):
     if is_channel_busy(ctx.channel.id):
@@ -1814,31 +1602,48 @@ async def hideseek_cmd(ctx: commands.Context):
 
 
 async def _run_hideseek(ctx: commands.Context):
-    players = await run_lobby(ctx, "🙈 غميضة", min_players=3, max_players=20, countdown=30, game_key="غميضة")
+    players = await run_lobby(ctx, "🙈 غميضة", min_players=3, max_players=20, countdown=30)
     if not players:
         return
     seeker = random.choice(players)
-    hiders = [p for p in players if p != seeker]
-    view = HideSeekView(seeker, hiders)
+    hiders = [p for p in players if p != seeker][:10]
+    spots = list(range(1, 11))
+    random.shuffle(spots)
+    hidden_spots = {p: spots[i] for i, p in enumerate(hiders)}
+    found = set()
+    attempts = len(hidden_spots) + 4
     await ctx.send(
-        f"🙈 {seeker.mention} هو الباحث! الباقين مختبئين بأرقام من 1 إلى {len(hiders)}.\n"
-        f"اضغط على رقم عشان تبحث فيه 👇", view=view
+        f"🙈 {seeker.mention} هو الباحث! الباقين مختبئين بأرقام من 1 إلى 10.\n"
+        f"اكتب رقم للبحث فيه (عندك {attempts} محاولة)."
     )
-    try:
-        await asyncio.wait_for(view.all_found.wait(), timeout=90)
-    except asyncio.TimeoutError:
-        pass
-    for c in view.children:
-        c.disabled = True
-    try:
-        await ctx.send("🏁 خلص وقت البحث!" if len(view.found) < len(hiders) else "🏁 لقاهم كلهم!")
-    except discord.NotFound:
-        pass
-    for p in hiders:
-        if p.id not in view.found:
-            add_game_reward(ctx.guild.id, p.id, 40)
-    remaining = len(hiders) - len(view.found)
-    await ctx.send(f"📊 {seeker.mention} لقى **{len(view.found)}** وبقي **{remaining}** ماله دري عنهم.")
+    for _ in range(attempts):
+        def check(m: discord.Message):
+            return m.channel == ctx.channel and m.author == seeker and m.content.strip().isdigit()
+
+        try:
+            m = await bot.wait_for("message", check=check, timeout=20)
+        except asyncio.TimeoutError:
+            await ctx.send("⏳ خلص وقت الباحث!")
+            break
+        guess = int(m.content.strip())
+        hit = None
+        for p, spot in hidden_spots.items():
+            if spot == guess and p not in found:
+                hit = p
+                break
+        if hit:
+            found.add(hit)
+            add_balance(ctx.guild.id, seeker.id, 20)
+            await ctx.send(f"🎯 لقيت {hit.mention}!")
+            if len(found) == len(hidden_spots):
+                break
+        else:
+            await ctx.send("❌ ما فيه أحد بهذا الرقم.")
+    for p in hidden_spots:
+        if p not in found:
+            add_balance(ctx.guild.id, p.id, 40)
+    remaining = len(hidden_spots) - len(found)
+    await ctx.send(f"🏁 انتهت اللعبة! {seeker.mention} لقى **{len(found)}** وبقي **{remaining}** مختبئين ماله دري عنهم.")
 
 
 # ---------- ريبلكا (احفظ الترتيب) ----------
@@ -1848,7 +1653,7 @@ async def replica_cmd(ctx: commands.Context):
         await warn_busy(ctx)
         return
     mark_busy(ctx.channel.id, "ريبلكا (احفظ الترتيب)")
-    players = await run_lobby(ctx, "🔁 ريبلكا (احفظ الترتيب)", min_players=2, max_players=20, countdown=30, game_key="ريبلكا")
+    players = await run_lobby(ctx, "🔁 ريبلكا (احفظ الترتيب)", min_players=2, max_players=20, countdown=30)
     if not players:
         unmark_busy(ctx.channel.id)
         return
@@ -1882,7 +1687,7 @@ async def mafia_cmd(ctx: commands.Context):
 
 
 async def _run_mafia(ctx: commands.Context):
-    players = await run_lobby(ctx, "🕵️ مافيا", min_players=4, max_players=20, countdown=30, game_key="مافيا")
+    players = await run_lobby(ctx, "🕵️ مافيا", min_players=4, max_players=20, countdown=30)
     if not players:
         return
     mafia_count = max(1, len(players) // 4)
@@ -1934,11 +1739,7 @@ async def _run_mafia(ctx: commands.Context):
         result = f"❌ {eliminated.mention} كان بريء! فازت المافيا 🕵️"
 
     for w in winners:
-        add_game_reward(ctx.guild.id, w.id, 50)
-        record_game_result(ctx.guild.id, w.id, won=True)
-    for p in players:
-        if p not in winners:
-            record_game_result(ctx.guild.id, p.id, won=False)
+        add_balance(ctx.guild.id, w.id, 50)
     mafia_names = "، ".join(m.mention for m in mafia)
     await ctx.send(f"{result}\n\nالمافيا كانوا: {mafia_names}")
 
@@ -1949,9 +1750,8 @@ class ChairsView(discord.ui.View):
         super().__init__(timeout=15)
         self.remaining = players.copy()
         self.taken: set[int] = set()
-        self.done = asyncio.Event()
-        self.chairs = max(1, len(players) - 1)
-        for i in range(self.chairs):
+        chairs = max(1, len(players) - 1)
+        for i in range(chairs):
             btn = discord.ui.Button(label=f"🪑 كرسي {i + 1}", style=discord.ButtonStyle.secondary)
             btn.callback = self._make_cb(btn)
             self.add_item(btn)
@@ -1972,8 +1772,6 @@ class ChairsView(discord.ui.View):
             btn.style = discord.ButtonStyle.success
             self.taken.add(interaction.user.id)
             await interaction.response.edit_message(view=self)
-            if len(self.taken) >= self.chairs:
-                self.done.set()
         return cb
 
 
@@ -1990,20 +1788,16 @@ async def chairs_cmd(ctx: commands.Context):
 
 
 async def _run_chairs(ctx: commands.Context):
-    players = await run_lobby(ctx, "🪑 الكراسي الموسيقية", min_players=3, max_players=20, countdown=30, game_key="كراسي")
+    players = await run_lobby(ctx, "🪑 الكراسي الموسيقية", min_players=3, max_players=20, countdown=30)
     if not players:
         return
-    all_players = players.copy()
     round_num = 1
     while len(players) > 1:
         view = ChairsView(players)
         msg = await ctx.send(
             f"🪑 **الجولة {round_num}**: {len(players)} لاعبين و {max(1, len(players) - 1)} كرسي! بسرعة اقعدوا 👇",
             view=view)
-        try:
-            await asyncio.wait_for(view.done.wait(), timeout=10)
-        except asyncio.TimeoutError:
-            pass
+        await asyncio.sleep(12)
         for c in view.children:
             c.disabled = True
         try:
@@ -2018,12 +1812,8 @@ async def _run_chairs(ctx: commands.Context):
         round_num += 1
     if players:
         winner = players[0]
-        actual = add_game_reward(ctx.guild.id, winner.id, 100)
-        record_game_result(ctx.guild.id, winner.id, won=True)
-        for p in all_players:
-            if p != winner:
-                record_game_result(ctx.guild.id, p.id, won=False)
-        await ctx.send(f"🏆 فاز {winner.mention} بلعبة الكراسي! (+{actual} نقطة)")
+        add_balance(ctx.guild.id, winner.id, 100)
+        await ctx.send(f"🏆 فاز {winner.mention} بلعبة الكراسي! (+100 نقطة)")
 
 
 # ============================================================
@@ -2038,7 +1828,7 @@ GAME_LIST = {
         (".حجرة @خصمك", "حجرة ورقة مقص بينك وبين خصم."),
         (".نرد", "كل واحد يرمي نرد، الأعلى يفوز."),
         (".عجلة", "عجلة حظ تختار فايز عشوائي."),
-        (".غميضة", "وحد يبحث عن الباقين المختبئين بأزرار مرقّمة."),
+        (".غميضة", "وحد يبحث عن الباقين المختبئين بأرقام."),
         (".ريبلكا", "احفظوا ترتيب الرموز واكتبوه صح."),
         (".خمن [أقصى رقم]", "تخمين رقم سري بالشات."),
         (".كلمة", "قول كلمة تبدأ بآخر حرف من الكلمة المعطاة."),
@@ -2068,7 +1858,7 @@ GAME_HELP = {
     "حجرة": "حجرة ورقة مقص بينك وبين خصم، كل واحد يختار بالخفاء والنتيجة تبان بعد اختيار الاثنين.",
     "نرد": "كل لاعب يرمي نرد تلقائيًا، وصاحب أعلى رقم يفوز بالنقاط.",
     "عجلة": "بعد ما يكتمل اللوبي، العجلة تدور وتختار فايز عشوائي من المنضمين.",
-    "غميضة": "لاعب وحد يصير الباحث، والباقين يتوزعون سرًا على أرقام حسب عددهم، والباحث يضغط الأزرار عشان يلقاهم.",
+    "غميضة": "لاعب وحد يصير الباحث، والباقين يتوزعون على أرقام من 1-10 بالخفاء، والباحث يخمن الأرقام يلقاهم.",
     "ريبلكا": "تشوفون ترتيب رموز لمدة 5 ثواني، وبعدها لازم تكتبونه بنفس الترتيب بالضبط، أول وحد يجاوب صح يفوز.",
     "خمن": "البوت يختار رقم سري بين 1 والرقم اللي تحدده، واكتبوا تخمينكم بالشات وبيعطيكم تلميح فوق/تحت.",
     "كلمة": "يعطيكم البوت كلمة، وأول وحد يكتب كلمة تبدأ بآخر حرف منها يفوز بالنقاط.",
@@ -2092,10 +1882,10 @@ GAME_HELP = {
 async def games_list_cmd(ctx: commands.Context):
     lines = ["🎮 **مركز الألعاب**\n", "__ألعاب جماعية (تبدأ بلوبي 30 ثانية)__"]
     for cmd, desc in GAME_LIST["جماعية"]:
-        lines.append(f"`{cmd}` — {desc}")
+        lines.append(f"`{cmd}`")
     lines.append("\n__ألعاب فردية__")
     for cmd, desc in GAME_LIST["فردية"]:
-        lines.append(f"`{cmd}` — {desc}")
+        lines.append(f"`{cmd}`")
     lines.append("\n⭐ اكتب `.نقاطي` عشان تشوف رصيدك.")
     lines.append("📖 اكتب `.شرح اسم_اللعبة` (بدون النقطة داخل الاسم) عشان أشرحلك أي لعبة بالتفصيل.")
     lines.append("📋 اكتب `.اوامر` عشان تشوف باقي الأوامر.")
@@ -2124,10 +1914,6 @@ async def commands_list_cmd(ctx: commands.Context):
         "`.نقاطي` — تشوف رصيد نقاطك.",
         "`.يومي` — تاخذ جائزتك اليومية (مرة كل 24 ساعة).",
         "`.تحويل @عضو المبلغ` — تحول نقاط لعضو ثاني.",
-        "`.توب` — لوحة الصدارة، أعلى 10 لاعبين بالنقاط.",
-        "`.سجلي [@عضو]` — عدد مرات الفوز والخسارة بالألعاب.",
-        "`.متجر` — تشوف الأشياء المتوفرة بالمتجر.",
-        "`.شراء <العنصر>` — تشتري شي من المتجر بنقاطك.",
         "\n__⚠️ التنبيهات__",
         "`.تنبيهاته [@عضو]` — تشوف عدد التنبيهات المسجلة على عضو (أو عليك).",
         "\n__🎮 الألعاب__",
@@ -2196,13 +1982,6 @@ def strip_mentions(content: str, mentions) -> str:
     return content.strip()
 
 
-def explicit_mentions_only(message: discord.Message) -> list:
-    """يرجع بس الأعضاء اللي انكتب منشنهم فعليًا بنص الرسالة، ويستبعد منشن الرد التلقائي
-    (لما تسوي Reply على رسالة أحد وديسكورد يمنشنه تلقائي بدون ما تكتب @ فعليًا)."""
-    return [m for m in message.mentions
-            if f"<@{m.id}>" in message.content or f"<@!{m.id}>" in message.content]
-
-
 def parse_duration(text: str) -> timedelta:
     """يفهم صيغ زي: 10 / 10m / 10h / 10d / 10س / 10د / 10ي — افتراضي 10 دقائق."""
     text = text.strip().split()[0] if text.strip() else ""
@@ -2244,6 +2023,7 @@ async def cmd_ban(message: discord.Message, args: str):
         return
     target = message.mentions[0]
     reason = strip_mentions(args, message.mentions) or "لم يُذكر سبب"
+    await cleanup(message)
     try:
         await target.ban(reason=reason)
         await reply(message, f"🔨 تم حظر {target.mention} — السبب: {reason}")
@@ -2256,6 +2036,7 @@ async def cmd_unban(message: discord.Message, args: str):
     if not arg.isdigit():
         await reply(message, "⚠️ الصيغة: `سماح <آيدي العضو>` (لازم الآيدي رقمي لأن العضو مو بالسيرفر)")
         return
+    await cleanup(message)
     try:
         user = discord.Object(id=int(arg))
         await message.guild.unban(user, reason=f"بواسطة {message.author}")
@@ -2270,6 +2051,7 @@ async def cmd_kick(message: discord.Message, args: str):
         return
     target = message.mentions[0]
     reason = strip_mentions(args, message.mentions) or "لم يُذكر سبب"
+    await cleanup(message)
     try:
         await target.kick(reason=reason)
         await reply(message, f"👢 تم طرد {target.mention} — السبب: {reason}")
@@ -2285,6 +2067,7 @@ async def cmd_timeout(message: discord.Message, args: str):
     remainder = strip_mentions(args, message.mentions)
     duration = parse_duration(remainder)
     reason = " ".join(remainder.split()[1:]) if remainder.split() else "لم يُذكر سبب"
+    await cleanup(message)
     try:
         await target.timeout(discord.utils.utcnow() + duration, reason=reason)
         await reply(message, f"⏱️ تم إعطاء {target.mention} تايم لمدة {duration}")
@@ -2297,6 +2080,7 @@ async def cmd_untimeout(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `تحرير @العضو`")
         return
     target = message.mentions[0]
+    await cleanup(message)
     await target.timeout(None, reason=f"بواسطة {message.author}")
     await reply(message, f"✅ تم فك التايم عن {target.mention}")
 
@@ -2306,6 +2090,7 @@ async def cmd_textmute(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `اخرس @العضو`")
         return
     target = message.mentions[0]
+    await cleanup(message)
     role = await ensure_role(message.guild, MUTE_ROLE_NAME)
     await target.add_roles(role, reason=f"بواسطة {message.author}")
     await reply(message, f"🔇 تم إسكات {target.mention} بالشات")
@@ -2316,6 +2101,7 @@ async def cmd_textunmute(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `تكلم @العضو`")
         return
     target = message.mentions[0]
+    await cleanup(message)
     role = discord.utils.get(message.guild.roles, name=MUTE_ROLE_NAME)
     if role and role in target.roles:
         await target.remove_roles(role, reason=f"بواسطة {message.author}")
@@ -2327,6 +2113,7 @@ async def cmd_jail(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `سجن @العضو`")
         return
     target = message.mentions[0]
+    await cleanup(message)
     jail_role = await ensure_role(message.guild, JAIL_ROLE_NAME)
 
     keep_roles = [r for r in target.roles if r.name != "@everyone"]
@@ -2349,6 +2136,7 @@ async def cmd_unjail(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `فك @العضو`")
         return
     target = message.mentions[0]
+    await cleanup(message)
     data = load_json(JAIL_FILE)
     gid, mid = str(message.guild.id), str(target.id)
     saved_ids = data.get(gid, {}).get(mid, [])
@@ -2370,6 +2158,7 @@ async def cmd_nick(message: discord.Message, args: str):
         return
     target = message.mentions[0]
     new_nick = strip_mentions(args, message.mentions)
+    await cleanup(message)
     if not new_nick:
         await reply(message, "⚠️ لازم تكتب اللقب الجديد.")
         return
@@ -2386,6 +2175,7 @@ async def cmd_remove_role(message: discord.Message, args: str):
         return
     target = message.mentions[0]
     role = message.role_mentions[0]
+    await cleanup(message)
     if role not in target.roles:
         await reply(message, f"⚠️ {target.mention} أصلًا ما عنده رتبة {role.name}")
         return
@@ -2403,6 +2193,7 @@ async def cmd_restore_role(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `رجع @العضو`")
         return
     target = message.mentions[0]
+    await cleanup(message)
     data = load_json(ROLES_REMOVED_FILE)
     gid, mid = str(message.guild.id), str(target.id)
     role_id = data.get(gid, {}).get(mid)
@@ -2417,37 +2208,18 @@ async def cmd_restore_role(message: discord.Message, args: str):
         await reply(message, f"📥 تم إرجاع رتبة {role.name} لـ {target.mention}")
 
 
-async def cmd_give_role(message: discord.Message, args: str):
-    if not message.mentions or not message.role_mentions:
-        await reply(message, "⚠️ الصيغة: `رول @العضو @الرتبة`")
-        return
-    target = message.mentions[0]
-    role = message.role_mentions[0]
-    author = message.author
-    if role in target.roles:
-        await reply(message, f"⚠️ {target.mention} عنده رتبة {role.name} أصلًا")
-        return
-    # ما أحد يعطي رتبة أعلى من رتبته أو مساوية لها (إلا مالك السيرفر)
-    if author.id != message.guild.owner_id and role >= author.top_role:
-        await reply(message, "❌ ما تقدر تعطي رتبة أعلى من رتبتك أو مساوية لها.")
-        return
-    try:
-        await target.add_roles(role, reason=f"بواسطة {author}")
-        await reply(message, f"📥 تم إعطاء {target.mention} رتبة {role.name}")
-    except discord.Forbidden:
-        await reply(message, "❌ ما أقدر أعطي هذي الرتبة (رتبتي أقل منها).")
-
-
 # ---------- إدارة الرومات ----------
 async def cmd_purge(message: discord.Message, args: str):
     amount_text = args.strip().split()[0] if args.strip() else "50"
     amount = int(amount_text) if amount_text.isdigit() else 50
     amount = min(amount, 200)
+    await message.delete()
     deleted = await message.channel.purge(limit=amount)
     await reply(message, f"🧹 تم حذف {len(deleted)} رسالة.")
 
 
 async def cmd_lock(message: discord.Message, args: str):
+    await cleanup(message)
     overwrite = message.channel.overwrites_for(message.guild.default_role)
     overwrite.send_messages = False
     await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
@@ -2455,6 +2227,7 @@ async def cmd_lock(message: discord.Message, args: str):
 
 
 async def cmd_unlock(message: discord.Message, args: str):
+    await cleanup(message)
     overwrite = message.channel.overwrites_for(message.guild.default_role)
     overwrite.send_messages = None
     await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
@@ -2462,6 +2235,7 @@ async def cmd_unlock(message: discord.Message, args: str):
 
 
 async def cmd_hide(message: discord.Message, args: str):
+    await cleanup(message)
     overwrite = message.channel.overwrites_for(message.guild.default_role)
     overwrite.view_channel = False
     await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
@@ -2469,6 +2243,7 @@ async def cmd_hide(message: discord.Message, args: str):
 
 
 async def cmd_show(message: discord.Message, args: str):
+    await cleanup(message)
     overwrite = message.channel.overwrites_for(message.guild.default_role)
     overwrite.view_channel = None
     await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
@@ -2481,6 +2256,7 @@ async def cmd_vc_kick(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `بره @العضو`")
         return
     target = message.mentions[0]
+    await cleanup(message)
     if target.voice and target.voice.channel:
         await target.move_to(None, reason=f"بواسطة {message.author}")
         await reply(message, f"👋 تم إخراج {target.mention} من الروم الصوتي.")
@@ -2493,6 +2269,7 @@ async def cmd_vc_mute(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `اصمت @العضو`")
         return
     target = message.mentions[0]
+    await cleanup(message)
     await target.edit(mute=True, reason=f"بواسطة {message.author}")
     await reply(message, f"🔇 تم إسكات {target.mention} صوتيًا.")
 
@@ -2502,6 +2279,7 @@ async def cmd_vc_unmute(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `انطق @العضو`")
         return
     target = message.mentions[0]
+    await cleanup(message)
     await target.edit(mute=False, reason=f"بواسطة {message.author}")
     await reply(message, f"🔊 تم فك الإسكات الصوتي عن {target.mention}.")
 
@@ -2514,6 +2292,7 @@ async def cmd_vc_pull(message: discord.Message, args: str):
         await reply(message, "⚠️ لازم تكون داخل روم صوتي عشان تسحب له أحد.")
         return
     target = message.mentions[0]
+    await cleanup(message)
     if target.voice:
         await target.move_to(message.author.voice.channel, reason=f"بواسطة {message.author}")
         await reply(message, f"📥 تم سحب {target.mention} لروم {message.author.voice.channel.name}")
@@ -2526,6 +2305,7 @@ async def cmd_vc_gather(message: discord.Message, args: str):
         await reply(message, "⚠️ لازم تكون داخل روم صوتي عشان تجمع الكل عندك.")
         return
     destination = message.author.voice.channel
+    await cleanup(message)
     count = 0
     for vc in message.guild.voice_channels:
         if vc.id == destination.id:
@@ -2541,6 +2321,7 @@ async def cmd_vc_comehere(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `تعال @العضو`")
         return
     target = message.mentions[0]
+    await cleanup(message)
     if not (message.author.voice):
         await reply(message, "⚠️ لازم تكون بروم صوتي عشان يسحبك البوت... انتقل يدويًا.")
         return
@@ -2556,6 +2337,7 @@ async def cmd_vc_kicklock(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `اطلع @العضو`")
         return
     target = message.mentions[0]
+    await cleanup(message)
     if not (target.voice and target.voice.channel):
         await reply(message, "⚠️ العضو مو داخل روم صوتي.")
         return
@@ -2576,6 +2358,7 @@ async def cmd_vc_allow(message: discord.Message, args: str):
         return
     target = message.mentions[0]
     channel = message.author.voice.channel
+    await cleanup(message)
     overwrite = channel.overwrites_for(target)
     overwrite.connect = True
     await channel.set_permissions(target, overwrite=overwrite)
@@ -2600,7 +2383,6 @@ ADMIN_COMMANDS = {
     "اسم": (MOD_ROLES, cmd_nick),
     "تنزيل": (ADMIN_ROLES, cmd_remove_role),
     "رجع": (ADMIN_ROLES, cmd_restore_role),
-    "رول": (ADMIN_ROLES, cmd_give_role),
     # إدارة الرومات
     "اباده": (ADMIN_ROLES, cmd_purge),
     "مسح": (ADMIN_ROLES, cmd_purge),
@@ -2631,185 +2413,13 @@ async def try_dispatch_admin_command(message: discord.Message) -> bool:
         if content == trigger or content.startswith(trigger + " "):
             allowed_roles, handler = ADMIN_COMMANDS[trigger]
             if not isinstance(message.author, discord.Member) or not has_role(message.author, allowed_roles):
+                await cleanup(message)
                 await reply(message, f"{message.author.mention} ❌ ما عندك صلاحية لهذا الأمر.")
                 return True
             args = content[len(trigger):].strip()
-            message.mentions = explicit_mentions_only(message)
             await handler(message, args)
             return True
     return False
-
-
-# ============================================================
-# 12) المتجر — شراء أشياء بالنقاط
-# ============================================================
-# ألوان جاهزة للرتب المؤقتة اللي يشتريها اللاعبين. غيّر الأسماء أو الألوان زي ما تبي.
-# ملاحظة: عشان اللون يبان فعليًا بقائمة الأعضاء، لازم ترفع هذي الرتب (بعد ما البوت ينشئها أول مرة)
-# لمكان أعلى من رتب الأعضاء العادية بترتيب رتب السيرفر يدويًا.
-SHOP_COLOR_ROLES = {
-    "احمر": 0xE74C3C,
-    "ازرق": 0x3498DB,
-    "اخضر": 0x2ECC71,
-    "بنفسجي": 0x9B59B6,
-    "ذهبي": 0xF1C40F,
-}
-SHOP_COLOR_DURATION_HOURS = 24
-SHOP_TITLE_DURATION_HOURS = 24
-SHOP_TITLE_PRICE = 300
-SHOP_COLOR_PRICE = 250
-SHOP_WARN_CLEAR_PRICE = 500
-
-SHOP_ITEMS_TEXT = (
-    "🛍️ **المتجر**\n\n"
-    f"🎭 **لقب مؤقت** — {SHOP_TITLE_PRICE} نقطة ({SHOP_TITLE_DURATION_HOURS} ساعة)\n"
-    "الشراء: `.شراء لقب النص_اللي_تبيه`\n\n"
-    f"🎨 **لون رول مؤقت** — {SHOP_COLOR_PRICE} نقطة ({SHOP_COLOR_DURATION_HOURS} ساعة)\n"
-    f"الألوان المتوفرة: {'، '.join(SHOP_COLOR_ROLES)}\n"
-    "الشراء: `.شراء لون اسم_اللون`\n\n"
-    f"🧹 **حذف تنبيه** — {SHOP_WARN_CLEAR_PRICE} نقطة\n"
-    "يشيل أقدم تنبيه مسجل عليك.\n"
-    "الشراء: `.شراء تنظيف`"
-)
-
-
-@bot.command(name="متجر")
-async def shop_cmd(ctx: commands.Context):
-    await ctx.send(SHOP_ITEMS_TEXT)
-
-
-def _shop_set_active(guild_id: int, user_id: int, item_type: str, hours: int, extra: dict) -> None:
-    data = load_json(SHOP_ACTIVE_FILE)
-    gid, uid = str(guild_id), str(user_id)
-    data.setdefault(gid, {})
-    expires = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
-    data[gid][uid] = {"type": item_type, "expires": expires, **extra}
-    save_json(SHOP_ACTIVE_FILE, data)
-
-
-def _shop_clear_active(guild_id: int, user_id: int) -> dict | None:
-    data = load_json(SHOP_ACTIVE_FILE)
-    gid, uid = str(guild_id), str(user_id)
-    entry = data.get(gid, {}).pop(uid, None)
-    if entry is not None:
-        save_json(SHOP_ACTIVE_FILE, data)
-    return entry
-
-
-@bot.command(name="شراء")
-async def buy_cmd(ctx: commands.Context, item: str = None, *, extra_text: str = None):
-    if not item:
-        await ctx.send("⚠️ اكتب `.متجر` عشان تشوف الأشياء المتوفرة، وبعدها `.شراء <العنصر>`")
-        return
-    item = item.strip()
-    author = ctx.author
-    balance = get_balance(ctx.guild.id, author.id)
-
-    if item == "لقب":
-        price = SHOP_TITLE_PRICE
-        if not extra_text or not extra_text.strip():
-            await ctx.send("⚠️ الصيغة: `.شراء لقب النص_اللي_تبيه`")
-            return
-        title_text = extra_text.strip()
-        if balance < price:
-            await ctx.send(f"❌ رصيدك ما يكفي (تحتاج {price} نقطة).")
-            return
-        old_entry = _shop_clear_active(ctx.guild.id, author.id)
-        original_nick = (old_entry.get("original_nick")
-                         if (old_entry and old_entry.get("type") == "title") else author.nick)
-        new_nick = f"{original_nick or author.name} | {title_text}"[:32]
-        try:
-            await author.edit(nick=new_nick, reason="شراء لقب مؤقت من المتجر")
-        except discord.Forbidden:
-            await ctx.send("❌ ما أقدر أغيّر لقبك (رتبتك أعلى من رتبتي أو ناقصني صلاحية).")
-            return
-        add_balance(ctx.guild.id, author.id, -price)
-        _shop_set_active(ctx.guild.id, author.id, "title", SHOP_TITLE_DURATION_HOURS,
-                          {"original_nick": original_nick})
-        await ctx.send(f"✅ تم! لقبك الحين **{new_nick}** لمدة {SHOP_TITLE_DURATION_HOURS} ساعة.")
-
-    elif item == "لون":
-        price = SHOP_COLOR_PRICE
-        color_name = (extra_text or "").strip()
-        if color_name not in SHOP_COLOR_ROLES:
-            options = "، ".join(SHOP_COLOR_ROLES)
-            await ctx.send(f"⚠️ الصيغة: `.شراء لون اسم_اللون`\nالألوان المتوفرة: {options}")
-            return
-        if balance < price:
-            await ctx.send(f"❌ رصيدك ما يكفي (تحتاج {price} نقطة).")
-            return
-        for name in SHOP_COLOR_ROLES:
-            old_role = discord.utils.get(ctx.guild.roles, name=f"🎨 {name}")
-            if old_role and old_role in author.roles:
-                await author.remove_roles(old_role, reason="تبديل لون المتجر")
-        role_name = f"🎨 {color_name}"
-        role = discord.utils.get(ctx.guild.roles, name=role_name)
-        if role is None:
-            role = await ctx.guild.create_role(
-                name=role_name, color=discord.Color(SHOP_COLOR_ROLES[color_name]),
-                reason="رتبة لون من المتجر - إنشاء تلقائي")
-        try:
-            await author.add_roles(role, reason="شراء لون من المتجر")
-        except discord.Forbidden:
-            await ctx.send("❌ ما أقدر أعطيك هذي الرتبة (رتبتها أعلى من رتبة البوت — رتّبها بإعدادات السيرفر).")
-            return
-        add_balance(ctx.guild.id, author.id, -price)
-        _shop_set_active(ctx.guild.id, author.id, "color", SHOP_COLOR_DURATION_HOURS, {"role_id": role.id})
-        await ctx.send(f"✅ تم! صار لونك **{color_name}** لمدة {SHOP_COLOR_DURATION_HOURS} ساعة.")
-
-    elif item == "تنظيف":
-        price = SHOP_WARN_CLEAR_PRICE
-        warns_data = load_json(WARNS_FILE)
-        gid, uid = str(ctx.guild.id), str(author.id)
-        user_warns = warns_data.get(gid, {}).get(uid, [])
-        if not user_warns:
-            await ctx.send("⚠️ ما عندك أي تنبيه تحذفه.")
-            return
-        if balance < price:
-            await ctx.send(f"❌ رصيدك ما يكفي (تحتاج {price} نقطة).")
-            return
-        user_warns.pop(0)
-        warns_data[gid][uid] = user_warns
-        save_json(WARNS_FILE, warns_data)
-        add_balance(ctx.guild.id, author.id, -price)
-        await ctx.send(f"✅ تم حذف أقدم تنبيه عندك. باقي عندك **{len(user_warns)}** تنبيه.")
-
-    else:
-        await ctx.send("⚠️ ما لقيت هذا العنصر، اكتب `.متجر` عشان تشوف الأشياء المتوفرة.")
-
-
-@tasks.loop(minutes=5)
-async def shop_expiry_task():
-    data = load_json(SHOP_ACTIVE_FILE)
-    now = datetime.now(timezone.utc)
-    changed = False
-    for gid, users in list(data.items()):
-        guild = bot.get_guild(int(gid))
-        if guild is None:
-            continue
-        for uid, entry in list(users.items()):
-            try:
-                expires = datetime.fromisoformat(entry["expires"])
-            except (KeyError, ValueError):
-                del data[gid][uid]
-                changed = True
-                continue
-            if now < expires:
-                continue
-            member = guild.get_member(int(uid))
-            if member is not None:
-                try:
-                    if entry.get("type") == "title":
-                        await member.edit(nick=entry.get("original_nick"), reason="انتهت مدة اللقب المؤقت")
-                    elif entry.get("type") == "color":
-                        role = guild.get_role(entry.get("role_id"))
-                        if role and role in member.roles:
-                            await member.remove_roles(role, reason="انتهت مدة لون المتجر")
-                except discord.Forbidden:
-                    pass
-            del data[gid][uid]
-            changed = True
-    if changed:
-        save_json(SHOP_ACTIVE_FILE, data)
 
 
 # ============================================================
@@ -2833,11 +2443,8 @@ async def on_message(message: discord.Message):
         guess = int(message.content.strip())
         if guess == game["number"]:
             reward = random.randint(50, 150)
-            actual = add_game_reward(message.guild.id, message.author.id, reward)
-            record_game_result(message.guild.id, message.author.id, won=True)
-            capped = " (وصلت السقف اليومي)" if actual < reward else ""
-            await message.channel.send(
-                f"🎉 {message.author.mention} عرف الرقم **{game['number']}**! (+{actual} نقطة{capped})")
+            add_balance(message.guild.id, message.author.id, reward)
+            await message.channel.send(f"🎉 {message.author.mention} عرف الرقم **{game['number']}**! (+{reward} نقطة)")
             del active_guess_games[message.channel.id]
             unmark_busy(message.channel.id)
         elif 0 < guess < game["number"]:
@@ -2859,12 +2466,10 @@ async def on_message(message: discord.Message):
                 unmark_busy(message.channel.id)
                 lo, hi = round_info["reward"]
                 pts = random.randint(lo, hi)
-                actual = add_game_reward(message.guild.id, message.author.id, pts)
-                record_game_result(message.guild.id, message.author.id, won=True)
+                add_balance(message.guild.id, message.author.id, pts)
                 reveal = round_info.get("reveal", "")
                 extra = f" الإجابة: **{reveal}**" if reveal else ""
-                capped = " (وصلت السقف اليومي)" if actual < pts else ""
-                await message.channel.send(f"🎉 {message.author.mention} جاوب صح!{extra} (+{actual} نقطة{capped})")
+                await message.channel.send(f"🎉 {message.author.mention} جاوب صح!{extra} (+{pts} نقطة)")
 
     await bot.process_commands(message)
 
@@ -2872,8 +2477,6 @@ async def on_message(message: discord.Message):
 @bot.event
 async def on_ready():
     print(f"✅ تم تسجيل الدخول باسم {bot.user}")
-    if not shop_expiry_task.is_running():
-        shop_expiry_task.start()
 
 
 @bot.event
