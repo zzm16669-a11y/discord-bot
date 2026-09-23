@@ -74,6 +74,7 @@ LOG_CHANNEL_NAMES: dict[str, list[str]] = {
     "bot": ["bot-logs", "bot-log"],
     "server": ["server-logs", "server-log"],
     "modified_message": ["modified-message", "modified-messages"],
+    "deleted_message": ["deleted-message", "deleted-messages", "delete-log", "delete-logs"],
     "ban": ["ban-log", "ban-logs"],
     "voice": ["voice-logs", "voice-log"],
     "channel": ["channel-logs", "channel-log"],
@@ -2682,7 +2683,7 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
             except discord.Forbidden:
                 pass
 
-    # لوق حذف الرسائل (modified-message) — بس لو الرسالة كانت بذاكرة البوت (cached_message)
+    # لوق حذف الرسائل (deleted-message) — بس لو الرسالة كانت بذاكرة البوت (cached_message)
     cached = payload.cached_message
     if cached is not None and not cached.author.bot and payload.guild_id:
         guild = bot.get_guild(payload.guild_id)
@@ -2696,7 +2697,27 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
                                        ("الروم", cached.channel.mention, True),
                                        ("بواسطة", deleter_text, True),
                                        ("المحتوى", cached.content or "— (بدون نص، ربما مرفق/صورة)", False)])
-            await send_log(guild, "modified_message", embed)
+            await send_log(guild, "deleted_message", embed)
+
+
+@bot.event
+async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent):
+    """لوق المسح الجماعي (.مسح / .اباده أو أي حذف جماعي مباشر من ديسكورد) — يروح لروم mod-logs."""
+    guild_id = payload.guild_id
+    if guild_id is None:
+        return
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return
+    channel = bot.get_channel(payload.channel_id)
+    channel_text = channel.mention if channel else f"#{payload.channel_id}"
+    entry = await fetch_audit_entry(guild, discord.AuditLogAction.message_bulk_delete, target_id=payload.channel_id)
+    moderator = entry.user.mention if entry and entry.user else "غير معروف"
+    embed = log_embed("🧹 حذف جماعي للرسائل", color=discord.Color.red(),
+                       fields=[("الروم", channel_text, True),
+                               ("عدد الرسائل", str(len(payload.message_ids)), True),
+                               ("بواسطة", moderator, True)])
+    await send_log(guild, "mod", embed)
 
 
 @bot.event
