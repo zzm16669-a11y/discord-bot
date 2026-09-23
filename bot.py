@@ -65,6 +65,23 @@ JAIL_ROLE_NAME = "Jailed"
 MUTE_ROLE_NAME = "Muted"
 WARN_LOG_CHANNEL_NAMES = ["warn-log", "توثيق-التنبيهات", "سجل-التنبيهات", "تنبيهات-اللوق", "log-تنبيهات"]
 
+# ============================================================
+# أسماء رومات اللوقات (سجلات النشاط) — لازم تطابق أسماء الرومات بالسيرفر
+# (يتحمل حروف كبيرة/صغيرة، الشرطة "-" أو الشرطة السفلية "_")
+# ============================================================
+LOG_CHANNEL_NAMES: dict[str, list[str]] = {
+    "security": ["security-logs", "security-log"],
+    "bot": ["bot-logs", "bot-log"],
+    "server": ["server-logs", "server-log"],
+    "modified_message": ["modified-message", "modified-messages"],
+    "ban": ["ban-log", "ban-logs"],
+    "voice": ["voice-logs", "voice-log"],
+    "channel": ["channel-logs", "channel-log"],
+    "mod": ["mod-logs", "mod-log"],
+    "role": ["role-logs", "role-log"],
+    "member": ["member-logs", "member-log"],
+}
+
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -125,6 +142,89 @@ def find_warn_log_channel(guild: discord.Guild) -> discord.TextChannel | None:
             if target_name.lower() in normalized_name:
                 return ch
     return None
+
+
+def find_log_channel(guild: discord.Guild, key: str) -> discord.TextChannel | None:
+    """يدور على روم لوق معيّن بالاسم (key من LOG_CHANNEL_NAMES)، يتحمل حروف كبيرة/صغيرة ومسافات/شرطات."""
+    names = LOG_CHANNEL_NAMES.get(key, [])
+    for ch in guild.text_channels:
+        normalized_name = ch.name.lower().replace("_", "-")
+        for target_name in names:
+            if target_name.lower() in normalized_name:
+                return ch
+    return None
+
+
+async def send_log(guild: discord.Guild | None, key: str, embed: discord.Embed) -> None:
+    """يرسل إمبد للوق المطلوب لو الروم موجود بالسيرفر."""
+    if guild is None:
+        return
+    channel = find_log_channel(guild, key)
+    if channel is None:
+        return
+    try:
+        await channel.send(embed=embed)
+    except discord.Forbidden:
+        pass
+
+
+def log_embed(title: str, *, color: discord.Color | None = None,
+              fields: list[tuple[str, str, bool]] | None = None) -> discord.Embed:
+    """يبني إمبد لوق موحّد الشكل."""
+    embed = discord.Embed(title=title, color=color or discord.Color.blurple(),
+                           timestamp=datetime.now(timezone.utc))
+    for name, value, inline in (fields or []):
+        embed.add_field(name=name, value=(value or "—")[:1024], inline=inline)
+    return embed
+
+
+async def fetch_audit_entry(guild: discord.Guild, action: discord.AuditLogAction,
+                             target_id: int | None = None, within_seconds: int = 5):
+    """يدور بآخر سجلات الأوديت لوق عن حدث معيّن (خلال آخر ثواني) عشان نعرف مين المسؤول عن الحدث."""
+    try:
+        async for entry in guild.audit_logs(action=action, limit=5):
+            age = (datetime.now(timezone.utc) - entry.created_at).total_seconds()
+            if age > within_seconds:
+                break
+            if target_id is None or (entry.target and getattr(entry.target, "id", None) == target_id):
+                return entry
+    except (discord.Forbidden, discord.HTTPException):
+        return None
+    return None
+
+
+async def log_mod_action(guild: discord.Guild, action: str, moderator: discord.Member,
+                          target, reason: str = "") -> None:
+    """لوق موحّد لأوامر الإدارة (كيك/تايم/اخرس/سجن...) — يُستخدم داخل أوامر الإدارة نفسها."""
+    target_text = target.mention if hasattr(target, "mention") else str(target)
+    embed = log_embed(f"🛡️ {action}", color=discord.Color.orange(),
+                       fields=[("العضو", target_text, True),
+                               ("بواسطة", moderator.mention, True),
+                               ("السبب", reason or "لم يُذكر سبب", False)])
+    await send_log(guild, "mod", embed)
+
+
+INVITE_LINK_REGEX = re.compile(r"(discord\.gg/|discord(?:app)?\.com/invite/)", re.IGNORECASE)
+MASS_MENTION_THRESHOLD = 5
+
+
+async def check_security_message(message: discord.Message) -> None:
+    """يفحص الرسالة عن مؤشرات أمنية (روابط دعوات، منشن جماعي) ويسجلها بروم security-logs بدون ما يحذفها."""
+    if message.author.bot or not message.guild:
+        return
+    flags = []
+    if INVITE_LINK_REGEX.search(message.content):
+        flags.append("🔗 رابط دعوة ديسكورد")
+    if len(message.mentions) >= MASS_MENTION_THRESHOLD:
+        flags.append(f"📢 منشن جماعي ({len(message.mentions)} عضو)")
+    if not flags:
+        return
+    embed = log_embed("🚨 نشاط مشبوه", color=discord.Color.dark_red(),
+                       fields=[("العضو", message.author.mention, True),
+                               ("الروم", message.channel.mention, True),
+                               ("السبب", "، ".join(flags), False),
+                               ("الرسالة", message.content or "—", False)])
+    await send_log(message.guild, "security", embed)
 
 
 async def send_warn_log(guild: discord.Guild, target, moderator, reason, warn_number, channel_name):
@@ -2101,6 +2201,7 @@ async def cmd_kick(message: discord.Message, args: str):
     try:
         await target.kick(reason=reason)
         await reply(message, f"👢 تم طرد {target.mention} — السبب: {reason}")
+        await log_mod_action(message.guild, "طرد عضو", message.author, target, reason)
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أطرد هذا العضو.")
 
@@ -2118,6 +2219,7 @@ async def cmd_timeout(message: discord.Message, args: str):
     try:
         await target.timeout(discord.utils.utcnow() + duration, reason=reason)
         await reply(message, f"⏱️ تم إعطاء {target.mention} تايم لمدة {duration}")
+        await log_mod_action(message.guild, f"تايم ({duration})", message.author, target, reason)
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أعطي هذا العضو تايم.")
 
@@ -2131,6 +2233,7 @@ async def cmd_untimeout(message: discord.Message, args: str):
     await cleanup(message)
     await target.timeout(None, reason=f"بواسطة {message.author}")
     await reply(message, f"✅ تم فك التايم عن {target.mention}")
+    await log_mod_action(message.guild, "فك تايم", message.author, target)
 
 
 async def cmd_textmute(message: discord.Message, args: str):
@@ -2143,6 +2246,7 @@ async def cmd_textmute(message: discord.Message, args: str):
     role = await ensure_role(message.guild, MUTE_ROLE_NAME)
     await target.add_roles(role, reason=f"بواسطة {message.author}")
     await reply(message, f"🔇 تم إسكات {target.mention} بالشات")
+    await log_mod_action(message.guild, "إسكات بالشات", message.author, target)
 
 
 async def cmd_textunmute(message: discord.Message, args: str):
@@ -2156,6 +2260,7 @@ async def cmd_textunmute(message: discord.Message, args: str):
     if role and role in target.roles:
         await target.remove_roles(role, reason=f"بواسطة {message.author}")
     await reply(message, f"🔊 تم فك الإسكات عن {target.mention}")
+    await log_mod_action(message.guild, "فك إسكات", message.author, target)
 
 
 async def cmd_jail(message: discord.Message, args: str):
@@ -2178,6 +2283,7 @@ async def cmd_jail(message: discord.Message, args: str):
         await target.remove_roles(*keep_roles, reason="سجن")
         await target.add_roles(jail_role, reason=f"سجن بواسطة {message.author}")
         await reply(message, f"🔒 تم سجن {target.mention}")
+        await log_mod_action(message.guild, "سجن عضو", message.author, target)
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أسجن هذا العضو.")
 
@@ -2202,6 +2308,7 @@ async def cmd_unjail(message: discord.Message, args: str):
         data[gid].pop(mid, None)
         save_json(JAIL_FILE, data)
     await reply(message, f"🔓 تم فك السجن عن {target.mention}")
+    await log_mod_action(message.guild, "فك سجن", message.author, target)
 
 
 async def cmd_nick(message: discord.Message, args: str):
@@ -2492,6 +2599,8 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    await check_security_message(message)
+
     if message.content.strip().startswith("تنبيه"):
         await handle_warn_command(message)
         return
@@ -2573,10 +2682,260 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
             except discord.Forbidden:
                 pass
 
+    # لوق حذف الرسائل (modified-message) — بس لو الرسالة كانت بذاكرة البوت (cached_message)
+    cached = payload.cached_message
+    if cached is not None and not cached.author.bot and payload.guild_id:
+        guild = bot.get_guild(payload.guild_id)
+        if guild:
+            deleter_text = cached.author.mention
+            entry = await fetch_audit_entry(guild, discord.AuditLogAction.message_delete, target_id=cached.author.id)
+            if entry and entry.user and entry.user.id != cached.author.id:
+                deleter_text = f"{entry.user.mention} (حذف رسالة {cached.author.mention})"
+            embed = log_embed("🗑️ تم حذف رسالة", color=discord.Color.red(),
+                               fields=[("صاحب الرسالة", cached.author.mention, True),
+                                       ("الروم", cached.channel.mention, True),
+                                       ("بواسطة", deleter_text, True),
+                                       ("المحتوى", cached.content or "— (بدون نص، ربما مرفق/صورة)", False)])
+            await send_log(guild, "modified_message", embed)
+
+
+@bot.event
+async def on_message_edit(before: discord.Message, after: discord.Message):
+    """لوق تعديل الرسائل (modified-message)."""
+    if before.author.bot or not before.guild or before.content == after.content:
+        return
+    embed = log_embed("✏️ تم تعديل رسالة", color=discord.Color.gold(),
+                       fields=[("العضو", after.author.mention, True),
+                               ("الروم", after.channel.mention, True),
+                               ("قبل", before.content or "—", False),
+                               ("بعد", after.content or "—", False),
+                               ("رابط", f"[اذهب للرسالة]({after.jump_url})", False)])
+    await send_log(after.guild, "modified_message", embed)
+
+
+@bot.event
+async def on_member_ban(guild: discord.Guild, user):
+    """لوق الحظر (ban-log) — يشتغل سواء صار الحظر بأمر البوت أو مباشرة من ديسكورد."""
+    entry = await fetch_audit_entry(guild, discord.AuditLogAction.ban, target_id=user.id)
+    moderator = entry.user.mention if entry and entry.user else "غير معروف"
+    reason = entry.reason if entry and entry.reason else "لم يُذكر سبب"
+    embed = log_embed("🔨 تم حظر عضو", color=discord.Color.dark_red(),
+                       fields=[("العضو", f"{user} ({user.id})", True),
+                               ("بواسطة", moderator, True),
+                               ("السبب", reason, False)])
+    await send_log(guild, "ban", embed)
+
+
+@bot.event
+async def on_member_unban(guild: discord.Guild, user):
+    """لوق فك الحظر (ban-log)."""
+    entry = await fetch_audit_entry(guild, discord.AuditLogAction.unban, target_id=user.id)
+    moderator = entry.user.mention if entry and entry.user else "غير معروف"
+    embed = log_embed("✅ تم فك حظر عضو", color=discord.Color.green(),
+                       fields=[("العضو", f"{user} ({user.id})", True),
+                               ("بواسطة", moderator, True)])
+    await send_log(guild, "ban", embed)
+
+
+@bot.event
+async def on_guild_role_create(role: discord.Role):
+    """لوق إنشاء رتبة (role-logs)."""
+    embed = log_embed("➕ تم إنشاء رتبة", color=discord.Color.green(),
+                       fields=[("الرتبة", role.mention, True)])
+    await send_log(role.guild, "role", embed)
+
+
+@bot.event
+async def on_guild_role_delete(role: discord.Role):
+    """لوق حذف رتبة (role-logs)."""
+    embed = log_embed("➖ تم حذف رتبة", color=discord.Color.red(),
+                       fields=[("الرتبة", f"`{role.name}`", True)])
+    await send_log(role.guild, "role", embed)
+
+
+@bot.event
+async def on_guild_role_update(before: discord.Role, after: discord.Role):
+    """لوق تعديل رتبة — اسم/لون/صلاحيات (role-logs)."""
+    changes = []
+    if before.name != after.name:
+        changes.append(f"الاسم: `{before.name}` ← `{after.name}`")
+    if before.color != after.color:
+        changes.append(f"اللون: `{before.color}` ← `{after.color}`")
+    if before.permissions != after.permissions:
+        changes.append("تغيّرت صلاحيات الرتبة")
+    if not changes:
+        return
+    embed = log_embed("✏️ تم تعديل رتبة", color=discord.Color.gold(),
+                       fields=[("الرتبة", after.mention, True), ("التغييرات", "\n".join(changes), False)])
+    await send_log(after.guild, "role", embed)
+
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    """لوق تغيير اللقب (member-logs) وتغيير الرتب (role-logs)."""
+    if before.nick != after.nick:
+        embed = log_embed("✏️ تغيّر لقب عضو", color=discord.Color.gold(),
+                           fields=[("العضو", after.mention, True),
+                                   ("قبل", before.nick or before.name, True),
+                                   ("بعد", after.nick or after.name, True)])
+        await send_log(after.guild, "member", embed)
+
+    before_roles, after_roles = set(before.roles), set(after.roles)
+    added = after_roles - before_roles
+    removed = before_roles - after_roles
+    if added or removed:
+        entry = await fetch_audit_entry(after.guild, discord.AuditLogAction.member_role_update, target_id=after.id)
+        moderator = entry.user.mention if entry and entry.user else "—"
+        fields = [("العضو", after.mention, True), ("بواسطة", moderator, True)]
+        if added:
+            fields.append(("رتب أُضيفت", "، ".join(r.mention for r in added), False))
+        if removed:
+            fields.append(("رتب أُزيلت", "، ".join(r.mention for r in removed), False))
+        embed = log_embed("🎭 تغيّرت رتب عضو", color=discord.Color.blue(), fields=fields)
+        await send_log(after.guild, "role", embed)
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    """لوق دخول عضو (member-logs)."""
+    embed = log_embed("📥 عضو جديد انضم", color=discord.Color.green(),
+                       fields=[("العضو", f"{member.mention} ({member})", True),
+                               ("تاريخ إنشاء الحساب", discord.utils.format_dt(member.created_at, "R"), True)])
+    await send_log(member.guild, "member", embed)
+
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    """لوق خروج/طرد عضو (member-logs)."""
+    entry = await fetch_audit_entry(member.guild, discord.AuditLogAction.kick, target_id=member.id)
+    text = f"{member} ({member.id})"
+    if entry and entry.user:
+        text += f"\nطُرد بواسطة {entry.user.mention}"
+    embed = log_embed("📤 عضو غادر", color=discord.Color.red(),
+                       fields=[("العضو", text, True)])
+    await send_log(member.guild, "member", embed)
+
+
+@bot.event
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+    """لوق دخول/خروج/انتقال بالرومات الصوتية (voice-logs)."""
+    if before.channel == after.channel:
+        return
+    if before.channel is None and after.channel is not None:
+        embed = log_embed("🔊 دخل روم صوتي", color=discord.Color.green(),
+                           fields=[("العضو", member.mention, True), ("الروم", after.channel.mention, True)])
+    elif before.channel is not None and after.channel is None:
+        embed = log_embed("🔇 خرج من روم صوتي", color=discord.Color.red(),
+                           fields=[("العضو", member.mention, True), ("الروم", before.channel.mention, True)])
+    else:
+        embed = log_embed("🔀 انتقل بين رومات صوتية", color=discord.Color.blue(),
+                           fields=[("العضو", member.mention, True),
+                                   ("من", before.channel.mention, True),
+                                   ("إلى", after.channel.mention, True)])
+    await send_log(member.guild, "voice", embed)
+
+
+@bot.event
+async def on_guild_channel_create(channel):
+    """لوق إنشاء روم (channel-logs)."""
+    name = channel.mention if hasattr(channel, "mention") else f"#{channel.name}"
+    embed = log_embed("➕ تم إنشاء روم", color=discord.Color.green(), fields=[("الروم", name, True)])
+    await send_log(channel.guild, "channel", embed)
+
+
+@bot.event
+async def on_guild_channel_delete(channel):
+    """لوق حذف روم (channel-logs)."""
+    embed = log_embed("➖ تم حذف روم", color=discord.Color.red(), fields=[("الروم", f"#{channel.name}", True)])
+    await send_log(channel.guild, "channel", embed)
+
+
+@bot.event
+async def on_guild_channel_update(before, after):
+    """لوق تعديل روم — اسم/وصف (channel-logs)، وتغيير الصلاحيات (security-logs)."""
+    changes = []
+    if before.name != after.name:
+        changes.append(f"الاسم: `{before.name}` ← `{after.name}`")
+    if getattr(before, "topic", None) != getattr(after, "topic", None):
+        changes.append("تغيّر وصف الروم")
+    if changes:
+        name = after.mention if hasattr(after, "mention") else f"#{after.name}"
+        embed = log_embed("✏️ تم تعديل روم", color=discord.Color.gold(),
+                           fields=[("الروم", name, True), ("التغييرات", "\n".join(changes), False)])
+        await send_log(after.guild, "channel", embed)
+
+    if before.overwrites != after.overwrites:
+        name = after.mention if hasattr(after, "mention") else f"#{after.name}"
+        embed = log_embed("🔐 تغيّرت صلاحيات روم", color=discord.Color.dark_orange(), fields=[("الروم", name, True)])
+        await send_log(after.guild, "security", embed)
+
+
+@bot.event
+async def on_webhooks_update(channel):
+    """لوق إنشاء/تعديل ويبهوك بروم (security-logs)."""
+    guild = channel.guild
+    entry = await fetch_audit_entry(guild, discord.AuditLogAction.webhook_create)
+    if entry:
+        embed = log_embed("🪝 تم إنشاء/تعديل ويبهوك", color=discord.Color.dark_red(),
+                           fields=[("الروم", channel.mention, True),
+                                   ("بواسطة", entry.user.mention if entry.user else "—", True)])
+        await send_log(guild, "security", embed)
+
+
+@bot.event
+async def on_guild_update(before: discord.Guild, after: discord.Guild):
+    """لوق تعديل إعدادات السيرفر العامة — اسم/شعار/بووست (server-logs)."""
+    changes = []
+    if before.name != after.name:
+        changes.append(f"الاسم: `{before.name}` ← `{after.name}`")
+    if before.icon != after.icon:
+        changes.append("تغيّر شعار السيرفر")
+    if before.banner != after.banner:
+        changes.append("تغيّر بانر السيرفر")
+    if before.premium_subscription_count != after.premium_subscription_count:
+        changes.append(f"البووستات: {before.premium_subscription_count} ← {after.premium_subscription_count}")
+    if not changes:
+        return
+    embed = log_embed("⚙️ تم تعديل إعدادات السيرفر", color=discord.Color.blue(),
+                       fields=[("التغييرات", "\n".join(changes), False)])
+    await send_log(after, "server", embed)
+
+
+@bot.event
+async def on_guild_emojis_update(guild: discord.Guild, before, after):
+    """لوق تغيير إيموجيات السيرفر (server-logs)."""
+    before_set, after_set = set(before), set(after)
+    added = after_set - before_set
+    removed = before_set - after_set
+    if not added and not removed:
+        return
+    fields = []
+    if added:
+        fields.append(("إيموجيات أُضيفت", " ".join(str(e) for e in added), False))
+    if removed:
+        fields.append(("إيموجيات أُزيلت", "، ".join(f"`{e.name}`" for e in removed), False))
+    embed = log_embed("😀 تغيّرت إيموجيات السيرفر", color=discord.Color.blue(), fields=fields)
+    await send_log(guild, "server", embed)
+
 
 @bot.event
 async def on_ready():
     print(f"✅ تم تسجيل الدخول باسم {bot.user}")
+    for guild in bot.guilds:
+        embed = log_embed("🤖 البوت اشتغل", color=discord.Color.green(), fields=[("الحالة", "متصل ✅", True)])
+        await send_log(guild, "bot", embed)
+
+
+@bot.event
+async def on_command_completion(ctx: commands.Context):
+    """لوق استخدام الأوامر (bot-logs)."""
+    if not ctx.guild:
+        return
+    embed = log_embed("⌨️ استخدام أمر", color=discord.Color.light_grey(),
+                       fields=[("العضو", ctx.author.mention, True),
+                               ("الأمر", f"`.{ctx.command.qualified_name}`", True),
+                               ("الروم", ctx.channel.mention, True)])
+    await send_log(ctx.guild, "bot", embed)
 
 
 @bot.event
@@ -2598,6 +2957,12 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
     else:
         print(f"[خطأ غير متوقع] {error}")
         await ctx.send("❌ صار خطأ غير متوقع أثناء تنفيذ الأمر.")
+        if ctx.guild:
+            embed = log_embed("💥 خطأ غير متوقع بالبوت", color=discord.Color.dark_red(),
+                               fields=[("الأمر", f"`.{ctx.command.qualified_name}`" if ctx.command else "—", True),
+                                       ("العضو", ctx.author.mention, True),
+                                       ("الخطأ", str(error)[:1000], False)])
+            await send_log(ctx.guild, "bot", embed)
 
 
 # ============================================================
