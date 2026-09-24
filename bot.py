@@ -136,7 +136,7 @@ async def send_log(guild: discord.Guild | None, key: str, embed: discord.Embed) 
         return
     try:
         await channel.send(embed=embed)
-    except discord.Forbidden:
+    except (discord.Forbidden, discord.HTTPException):
         pass
 
 
