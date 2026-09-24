@@ -475,6 +475,7 @@ async def game_log_cmd(ctx: commands.Context, member: discord.Member = None):
 
 
 
+@bot.command(name="اصدار")
 async def mint_points_cmd(ctx: commands.Context, amount: int):
     """يضيف نقاط من العدم لرصيد صاحب الأمر — بس لصاحب رول Owner أو مالك السيرفر."""
     has_owner_role = isinstance(ctx.author, discord.Member) and has_role(ctx.author, [OWNER])
