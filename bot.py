@@ -162,6 +162,9 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix=".", intents=intents)
 
+import tickets
+tickets.setup_tickets(bot)
+
 
 # ============================================================
 # فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
