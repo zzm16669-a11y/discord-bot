@@ -2487,7 +2487,6 @@ async def cmd_kick(message: discord.Message, args: str):
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أطرد هذا العضو.")
 
-
 async def cmd_timeout(message: discord.Message, args: str):
     if not message.mentions:
         await reply(message, "⚠️ الصيغة: `تايم @العضو 10m السبب` (افتراضي 10 دقائق)")
