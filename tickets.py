@@ -182,7 +182,7 @@ class TicketControlView(discord.ui.View):
             c.disabled = True
         await interaction.response.edit_message(view=self)
         await interaction.channel.send("🔒 جارٍ إغلاق التكت وحفظ المحادثة خلال 5 ثواني...")
-        await close_ticket(interaction.channel, interaction.user, ticket)
+        await close_ticket(interaction.client, interaction.channel, interaction.user, ticket)
 
     @discord.ui.button(label="⚙️ خيارات", style=discord.ButtonStyle.secondary, custom_id="ticket_options")
     async def options(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -192,8 +192,8 @@ class TicketControlView(discord.ui.View):
         await interaction.response.send_message("⚙️ اختر إجراء:", view=TicketOptionsView(), ephemeral=True)
 
 
-async def close_ticket(channel: discord.TextChannel, closer: discord.Member, ticket: dict):
-    """يبني ترانسكريبت نصي، يرسله لروم ticket-logs، وبعدها يحذف روم التكت."""
+async def close_ticket(client: discord.Client, channel: discord.TextChannel, closer: discord.Member, ticket: dict):
+    """يبني ترانسكريبت نصي، يرسله لروم ticket-logs، يرسل طلب تقييم لصاحب التكت، وبعدها يحذف الروم."""
     guild = channel.guild
     lines = []
     async for msg in channel.history(limit=None, oldest_first=True):
@@ -206,7 +206,14 @@ async def close_ticket(channel: discord.TextChannel, closer: discord.Member, tic
     buffer = io.BytesIO(transcript_text.encode("utf-8"))
     file = discord.File(buffer, filename=f"{channel.name}-transcript.txt")
 
-    opener = guild.get_member(int(ticket["opener_id"]))
+    opener_id = int(ticket["opener_id"])
+    opener = guild.get_member(opener_id)
+    if opener is None:
+        try:
+            opener = await client.fetch_user(opener_id)
+        except discord.NotFound:
+            opener = None
+
     embed = discord.Embed(
         title=f"🔒 تم إغلاق تكت #{ticket['number']:04d}",
         color=discord.Color.red(), timestamp=datetime.now(timezone.utc))
@@ -224,12 +231,110 @@ async def close_ticket(channel: discord.TextChannel, closer: discord.Member, tic
         except (discord.Forbidden, discord.HTTPException):
             pass
 
+    # طلب تقييم بالخاص — بس لو فيه موظف استلم التكت وقدرنا نوصل لصاحب التكت
+    if ticket.get("claimed_by") and opener:
+        staff_id = int(ticket["claimed_by"])
+        staff_member = guild.get_member(staff_id)
+        staff_name = staff_member.display_name if staff_member else "الموظف"
+        rating_view = RatingView(guild.id, ticket["number"], staff_id, opener_id)
+        try:
+            await opener.send(
+                f"🎫 تم إغلاق تكتك #{ticket['number']:04d} بسيرفر **{guild.name}**.\n"
+                f"قيّم تعامل **{staff_name}** معك من 5 نجوم 👇",
+                view=rating_view,
+            )
+        except discord.Forbidden:
+            pass
+
     _db.close_ticket(channel.id)
     await asyncio.sleep(5)
     try:
         await channel.delete(reason=f"إغلاق تكت بواسطة {closer}")
     except (discord.Forbidden, discord.NotFound):
         pass
+
+
+# ============================================================
+# تقييم النجوم بعد إغلاق التكت (يترسل بالخاص لصاحب التكت)
+# ============================================================
+async def _record_rating(client: discord.Client, view: "RatingView", stars: int, reason: str | None):
+    """يسجل التقييم بالقاعدة ويرسل نسخة عنه لروم ticket-logs."""
+    _db.add_ticket_rating(view.guild_id, view.ticket_number, view.staff_id, view.rater_id, stars, reason)
+    guild = client.get_guild(view.guild_id)
+    if guild is None:
+        return
+    log_channel = _find_log_channel(guild)
+    if log_channel is None:
+        return
+    staff_member = guild.get_member(view.staff_id)
+    rater_member = guild.get_member(view.rater_id)
+    embed = discord.Embed(
+        title=f"⭐ تقييم تكت #{view.ticket_number:04d}",
+        color=discord.Color.gold(), timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="التقييم", value="⭐" * stars, inline=True)
+    embed.add_field(name="الموظف", value=(staff_member.mention if staff_member else f"`{view.staff_id}`"), inline=True)
+    embed.add_field(name="المقيّم", value=(rater_member.mention if rater_member else f"`{view.rater_id}`"), inline=True)
+    if reason:
+        embed.add_field(name="السبب", value=reason, inline=False)
+    try:
+        await log_channel.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
+class RatingButton(discord.ui.Button):
+    def __init__(self, stars: int):
+        super().__init__(label="⭐" * stars, style=discord.ButtonStyle.secondary, row=0)
+        self.stars = stars
+
+    async def callback(self, interaction: discord.Interaction):
+        view: RatingView = self.view
+        if interaction.user.id != view.rater_id:
+            await interaction.response.send_message("⚠️ هذا التقييم مو لك.", ephemeral=True)
+            return
+        if self.stars == 5:
+            for c in view.children:
+                c.disabled = True
+            await interaction.response.edit_message(
+                content=f"✅ شكرًا على تقييمك! أعطيت {'⭐' * self.stars}", view=view)
+            await _record_rating(interaction.client, view, self.stars, None)
+            view.stop()
+        else:
+            await interaction.response.send_modal(RatingReasonModal(view, self.stars, interaction.message))
+
+
+class RatingReasonModal(discord.ui.Modal, title="سبب التقييم"):
+    reason = discord.ui.TextInput(label="ليش هذا التقييم؟", style=discord.TextStyle.paragraph, max_length=500)
+
+    def __init__(self, view: "RatingView", stars: int, message: discord.Message):
+        super().__init__()
+        self.rating_view = view
+        self.stars = stars
+        self.message = message
+
+    async def on_submit(self, interaction: discord.Interaction):
+        for c in self.rating_view.children:
+            c.disabled = True
+        try:
+            await self.message.edit(
+                content=f"✅ شكرًا على تقييمك! أعطيت {'⭐' * self.stars}\nالسبب: {self.reason.value}",
+                view=self.rating_view)
+        except discord.HTTPException:
+            pass
+        await interaction.response.send_message("✅ تم تسجيل تقييمك.", ephemeral=True)
+        await _record_rating(interaction.client, self.rating_view, self.stars, self.reason.value)
+        self.rating_view.stop()
+
+
+class RatingView(discord.ui.View):
+    def __init__(self, guild_id: int, ticket_number: int, staff_id: int, rater_id: int):
+        super().__init__(timeout=60 * 60 * 24)
+        self.guild_id = guild_id
+        self.ticket_number = ticket_number
+        self.staff_id = staff_id
+        self.rater_id = rater_id
+        for stars in range(1, 6):
+            self.add_item(RatingButton(stars))
 
 
 # ============================================================
