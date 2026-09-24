@@ -37,6 +37,7 @@ import os
 import re
 import random
 import threading
+import time
 from io import BytesIO
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone, timedelta
@@ -3405,4 +3406,17 @@ if __name__ == "__main__":
     t = threading.Thread(target=run_web_server, daemon=True)
     t.start()
 
-    bot.run(DISCORD_TOKEN)
+    # نشغّل البوت جوا حلقة إعادة محاولة بانتظار متزايد: لو صار قطع اتصال أو حظر مؤقت (429)
+    # من ديسكورد، ننتظر قبل أي محاولة جديدة بدل ما نطيح كامل ونخلي Render يعيد التشغيل فورًا
+    # بسرعة تزيد الحظر بدل ما تحله.
+    retry_delay = 10
+    while True:
+        try:
+            bot.run(DISCORD_TOKEN)
+            break  # bot.run() ما يرجع إلا لو تم إيقاف البوت طبيعيًا (logout)
+        except discord.HTTPException as e:
+            print(f"[تشغيل] خطأ HTTP أثناء الاتصال بديسكورد: {e} — بنعيد المحاولة بعد {retry_delay} ثانية.")
+        except Exception as e:
+            print(f"[تشغيل] خطأ غير متوقع أثناء تشغيل البوت: {e} — بنعيد المحاولة بعد {retry_delay} ثانية.")
+        time.sleep(retry_delay)
+        retry_delay = min(retry_delay * 2, 300)  # يتضاعف لين حد أقصى 5 دقايق
