@@ -32,7 +32,7 @@ TICKETS_CATEGORY_NAME = "Tickets"
 TICKET_LOG_CHANNEL_HINT = "ticket-logs"     # نفس اسم الروم الموجود عندك
 TICKET_CHANNEL_PREFIX = "ticket"            # الرومات تطلع ticket-0001, ticket-0002...
 
-TICKET_PANEL_IMAGE = "ticket_assets/panel.png"
+TICKET_PANEL_IMAGE = "panel.png"
 
 TICKET_TYPES = [
     ("inquiry", "❓", "استفسار"),
