@@ -76,6 +76,21 @@ def _init():
             extra TEXT NOT NULL DEFAULT '{}',
             PRIMARY KEY (guild_id, user_id)
         );
+
+        CREATE TABLE IF NOT EXISTS tickets (
+            channel_id TEXT PRIMARY KEY,
+            guild_id TEXT NOT NULL,
+            opener_id TEXT NOT NULL,
+            ticket_type TEXT NOT NULL,
+            number INTEGER NOT NULL,
+            claimed_by TEXT,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ticket_counters (
+            guild_id TEXT PRIMARY KEY,
+            last_number INTEGER NOT NULL DEFAULT 0
+        );
         """)
         _conn.commit()
 
@@ -357,4 +372,57 @@ def remove_shop_active(guild_id, user_id) -> None:
             "DELETE FROM shop_active WHERE guild_id=? AND user_id=?",
             (str(guild_id), str(user_id)),
         )
+        _conn.commit()
+
+
+# ============================================================
+# التكتات
+# ============================================================
+def next_ticket_number(guild_id: int) -> int:
+    """يرجع رقم تكت جديد (متسلسل لكل سيرفر لحاله)."""
+    gid = str(guild_id)
+    with _lock:
+        _conn.execute(
+            "INSERT INTO ticket_counters (guild_id, last_number) VALUES (?, 1) "
+            "ON CONFLICT(guild_id) DO UPDATE SET last_number = last_number + 1",
+            (gid,),
+        )
+        _conn.commit()
+        row = _conn.execute(
+            "SELECT last_number FROM ticket_counters WHERE guild_id=?", (gid,)
+        ).fetchone()
+    return row["last_number"]
+
+
+def create_ticket(guild_id: int, channel_id: int, opener_id: int, ticket_type: str, number: int) -> None:
+    with _lock:
+        _conn.execute(
+            "INSERT INTO tickets (channel_id, guild_id, opener_id, ticket_type, number, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(channel_id), str(guild_id), str(opener_id), ticket_type, number,
+             datetime.now(timezone.utc).isoformat()),
+        )
+        _conn.commit()
+
+
+def get_ticket(channel_id: int) -> dict | None:
+    with _lock:
+        row = _conn.execute(
+            "SELECT * FROM tickets WHERE channel_id=?", (str(channel_id),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_ticket_claimed(channel_id: int, staff_id: int) -> None:
+    with _lock:
+        _conn.execute(
+            "UPDATE tickets SET claimed_by=? WHERE channel_id=?",
+            (str(staff_id), str(channel_id)),
+        )
+        _conn.commit()
+
+
+def close_ticket(channel_id: int) -> None:
+    with _lock:
+        _conn.execute("DELETE FROM tickets WHERE channel_id=?", (str(channel_id),))
         _conn.commit()
