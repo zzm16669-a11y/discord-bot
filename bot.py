@@ -105,7 +105,6 @@ LOG_CHANNEL_NAMES = {
     "member": ["member-logs"],
     "role": ["role-logs"],
     "mod": ["mod-logs"],
-    "message": ["message-logs"],
     "channel": ["channel-logs"],
     "voice": ["voice-logs"],
     "ban": ["ban-log"],
@@ -559,7 +558,7 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
     channel_id = payload.channel_id
 
     cached = payload.cached_message
-    if cached is not None and not cached.author.bot and cached.guild is not None:
+    if cached is not None and cached.guild is not None:
         embed = discord.Embed(title="🗑️ تم حذف رسالة", color=discord.Color.red(),
                                timestamp=datetime.now(timezone.utc))
         embed.add_field(name="الكاتب", value=cached.author.mention, inline=True)
@@ -3050,19 +3049,8 @@ async def shop_expiry_task():
 
 
 # ============================================================
-# دوال مساعدة للوقات العامة (رسائل / روابط دعوة)
+# دوال مساعدة للوقات العامة (روابط دعوة)
 # ============================================================
-async def log_general_message(message: discord.Message) -> None:
-    """يسجل كل رسالة عامة بروم message-logs (تسجيل عام لحركة الشات)."""
-    embed = discord.Embed(color=discord.Color.light_grey(), timestamp=message.created_at)
-    embed.add_field(name="الكاتب", value=message.author.mention, inline=True)
-    embed.add_field(name="الروم", value=message.channel.mention, inline=True)
-    content = message.content[:1000] if message.content else "(بدون نص/مرفق فقط)"
-    embed.add_field(name="المحتوى", value=content, inline=False)
-    embed.set_footer(text=f"معرف الرسالة: {message.id}")
-    await send_log(message.guild, "message", embed)
-
-
 async def log_invite_link(message: discord.Message) -> None:
     """يسجل أي رابط دعوة ديسكورد بروم security-logs."""
     embed = discord.Embed(title="🚨 رابط دعوة ديسكورد", color=discord.Color.red(),
@@ -3083,7 +3071,6 @@ async def on_message(message: discord.Message):
         return
 
     if message.guild is not None:
-        await log_general_message(message)
         if INVITE_LINK_PATTERN.search(message.content):
             await log_invite_link(message)
 
@@ -3323,21 +3310,31 @@ async def on_voice_state_update(member: discord.Member, before: discord.VoiceSta
     embed = discord.Embed(color=discord.Color.blurple(), timestamp=datetime.now(timezone.utc))
     embed.set_footer(text=f"معرف العضو: {member.id}")
     if before.channel is None and after.channel is not None:
+        count_after = len(after.channel.members)
+        count_before = max(0, count_after - 1)
         embed.title = "🔊 دخل روم صوتي"
         embed.description = f"{member.mention} دخل {after.channel.mention}"
+        embed.add_field(name="عدد الأعضاء بالروم", value=f"{count_before} ← {count_after}", inline=True)
     elif before.channel is not None and after.channel is None:
+        count_before = len(before.channel.members) + 1
+        count_after = len(before.channel.members)
         embed.title = "🔇 خرج من روم صوتي"
         embed.description = f"{member.mention} خرج من {before.channel.mention}"
+        embed.add_field(name="عدد الأعضاء بالروم", value=f"{count_before} ← {count_after}", inline=True)
     else:
+        from_count = len(before.channel.members) + 1
+        to_count = len(after.channel.members)
         embed.title = "🔀 انتقل بين رومات صوتية"
         embed.description = f"{member.mention}: {before.channel.mention} ← {after.channel.mention}"
+        embed.add_field(name=f"عدد أعضاء {before.channel.name} بعد الخروج", value=str(from_count - 1), inline=True)
+        embed.add_field(name=f"عدد أعضاء {after.channel.name} بعد الدخول", value=str(to_count), inline=True)
     await send_log(member.guild, "voice", embed)
 
 
 # ---------- لوقات تعديل الرسائل ----------
 @bot.event
 async def on_message_edit(before: discord.Message, after: discord.Message):
-    if before.author.bot or before.content == after.content or before.guild is None:
+    if before.content == after.content or before.guild is None:
         return
     embed = discord.Embed(title="✏️ تم تعديل رسالة", color=discord.Color.orange(),
                            timestamp=datetime.now(timezone.utc))
