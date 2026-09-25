@@ -162,9 +162,6 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix=".", intents=intents)
 
-import tickets
-tickets.setup_tickets(bot)
-
 
 # ============================================================
 # فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
@@ -475,7 +472,6 @@ async def game_log_cmd(ctx: commands.Context, member: discord.Member = None):
 
 
 
-@bot.command(name="اصدار")
 async def mint_points_cmd(ctx: commands.Context, amount: int):
     """يضيف نقاط من العدم لرصيد صاحب الأمر — بس لصاحب رول Owner أو مالك السيرفر."""
     has_owner_role = isinstance(ctx.author, discord.Member) and has_role(ctx.author, [OWNER])
@@ -2487,6 +2483,7 @@ async def cmd_kick(message: discord.Message, args: str):
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أطرد هذا العضو.")
 
+
 async def cmd_timeout(message: discord.Message, args: str):
     if not message.mentions:
         await reply(message, "⚠️ الصيغة: `تايم @العضو 10m السبب` (افتراضي 10 دقائق)")
@@ -2870,33 +2867,11 @@ async def try_dispatch_admin_command(message: discord.Message) -> bool:
     for trigger in SORTED_TRIGGERS:
         if content == trigger or content.startswith(trigger + " "):
             allowed_roles, handler = ADMIN_COMMANDS[trigger]
-            try:
-                if not isinstance(message.author, discord.Member) or not has_role(message.author, allowed_roles):
-                    await reply(message, f"{message.author.mention} ❌ ما عندك صلاحية لهذا الأمر.")
-                    return True
-                args = content[len(trigger):].strip()
-                await handler(message, args)
-            except discord.Forbidden as e:
-                print(f"[إدارة] صلاحيات ناقصة بأمر '{trigger}': {e}")
-                try:
-                    await message.channel.send(
-                        f"{message.author.mention} ❌ ما قدرت أنفذ الأمر — الأغلب إن رتبة البوت "
-                        f"أوطى من رتبة العضو المستهدف بترتيب رتب السيرفر، أو ناقص البوت صلاحية "
-                        f"(Timeout Members / Ban Members / Kick Members / Manage Roles / Send Messages) "
-                        f"بهذا السيرفر أو الروم.",
-                        delete_after=15,
-                    )
-                except discord.Forbidden:
-                    print(f"[إدارة] ولا حتى أقدر أرسل رسالة بروم {message.channel} — صلاحية Send Messages ناقصة.")
-            except Exception as e:
-                print(f"[إدارة] خطأ غير متوقع بأمر '{trigger}': {e}")
-                try:
-                    await message.channel.send(
-                        f"{message.author.mention} ❌ صار خطأ غير متوقع أثناء تنفيذ الأمر: `{e}`",
-                        delete_after=15,
-                    )
-                except discord.Forbidden:
-                    pass
+            if not isinstance(message.author, discord.Member) or not has_role(message.author, allowed_roles):
+                await reply(message, f"{message.author.mention} ❌ ما عندك صلاحية لهذا الأمر.")
+                return True
+            args = content[len(trigger):].strip()
+            await handler(message, args)
             return True
     return False
 
