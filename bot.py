@@ -3400,12 +3400,22 @@ class SimpleHandler(BaseHTTPRequestHandler):
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))  # Render يعطيك البورت بمتغير PORT
-    httpd = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    try:
+        httpd = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    except OSError as e:
+        print(f"[ويب سيرفر] ❌ فشل فتح البورت {port}: {e}")
+        return
+    print(f"[ويب سيرفر] ✅ فاتح وشغال على 0.0.0.0:{port}")
     httpd.serve_forever()
 
 
 if __name__ == "__main__":
-    t = threading.Thread(target=run_web_server, daemon=True)
-    t.start()
+    web_thread = threading.Thread(target=run_web_server, daemon=True)
+    web_thread.start()
+    web_thread.join(timeout=2)  # نعطيه فرصة يبدأ ويطبع حالته قبل لا نكمل
+    if not web_thread.is_alive():
+        print("[ويب سيرفر] ⚠️ الثريد وقف بسرعة غير طبيعية — راجع رسالة الخطأ فوق.")
+    else:
+        print("[ويب سيرفر] الثريد شغال بعد ثانيتين، الأغلب البورت فتح تمام.")
 
     bot.run(DISCORD_TOKEN)
