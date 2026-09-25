@@ -2870,11 +2870,33 @@ async def try_dispatch_admin_command(message: discord.Message) -> bool:
     for trigger in SORTED_TRIGGERS:
         if content == trigger or content.startswith(trigger + " "):
             allowed_roles, handler = ADMIN_COMMANDS[trigger]
-            if not isinstance(message.author, discord.Member) or not has_role(message.author, allowed_roles):
-                await reply(message, f"{message.author.mention} ❌ ما عندك صلاحية لهذا الأمر.")
-                return True
-            args = content[len(trigger):].strip()
-            await handler(message, args)
+            try:
+                if not isinstance(message.author, discord.Member) or not has_role(message.author, allowed_roles):
+                    await reply(message, f"{message.author.mention} ❌ ما عندك صلاحية لهذا الأمر.")
+                    return True
+                args = content[len(trigger):].strip()
+                await handler(message, args)
+            except discord.Forbidden as e:
+                print(f"[إدارة] صلاحيات ناقصة بأمر '{trigger}': {e}")
+                try:
+                    await message.channel.send(
+                        f"{message.author.mention} ❌ ما قدرت أنفذ الأمر — الأغلب إن رتبة البوت "
+                        f"أوطى من رتبة العضو المستهدف بترتيب رتب السيرفر، أو ناقص البوت صلاحية "
+                        f"(Timeout Members / Ban Members / Kick Members / Manage Roles / Send Messages) "
+                        f"بهذا السيرفر أو الروم.",
+                        delete_after=15,
+                    )
+                except discord.Forbidden:
+                    print(f"[إدارة] ولا حتى أقدر أرسل رسالة بروم {message.channel} — صلاحية Send Messages ناقصة.")
+            except Exception as e:
+                print(f"[إدارة] خطأ غير متوقع بأمر '{trigger}': {e}")
+                try:
+                    await message.channel.send(
+                        f"{message.author.mention} ❌ صار خطأ غير متوقع أثناء تنفيذ الأمر: `{e}`",
+                        delete_after=15,
+                    )
+                except discord.Forbidden:
+                    pass
             return True
     return False
 
