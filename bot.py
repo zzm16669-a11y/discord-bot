@@ -162,6 +162,9 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix=".", intents=intents)
 
+import tickets
+tickets.setup_tickets(bot)
+
 
 # ============================================================
 # فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
@@ -472,6 +475,7 @@ async def game_log_cmd(ctx: commands.Context, member: discord.Member = None):
 
 
 
+@bot.command(name="اصدار")
 async def mint_points_cmd(ctx: commands.Context, amount: int):
     """يضيف نقاط من العدم لرصيد صاحب الأمر — بس لصاحب رول Owner أو مالك السيرفر."""
     has_owner_role = isinstance(ctx.author, discord.Member) and has_role(ctx.author, [OWNER])
@@ -2482,7 +2486,6 @@ async def cmd_kick(message: discord.Message, args: str):
         await log_mod_action(message.guild, "👢 طرد عضو", message.author, target, reason)
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أطرد هذا العضو.")
-
 
 async def cmd_timeout(message: discord.Message, args: str):
     if not message.mentions:
