@@ -38,6 +38,7 @@ TICKET_TYPES = [
     ("inquiry", "❓", "استفسار"),
     ("complaint", "⚠️", "شكوى"),
     ("support", "🛠️", "التواصل مع الدعم الفني"),
+    ("verification", "✅", "توثيق"),
 ]
 TICKET_TYPE_LABELS = {key: label for key, _, label in TICKET_TYPES}
 
