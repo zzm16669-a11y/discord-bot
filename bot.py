@@ -1891,6 +1891,50 @@ async def roulette_cmd(ctx: commands.Context):
 
 
 # ---------- نرد ----------
+class DiceRollView(discord.ui.View):
+    """زر "ارمِ النرد" — كل لاعب يرمي بنفسه مرة وحدة، والرقم عشوائي من 1 إلى 6."""
+
+    def __init__(self, players: list[discord.Member], seconds: int = 10):
+        super().__init__(timeout=seconds + 10)
+        self.players = players
+        self.seconds = seconds
+        self.rolls: dict[int, int] = {}
+        self.auto_ids: set[int] = set()
+        self.closed = False
+        self.all_rolled = asyncio.Event()
+
+    def status_text(self, final: bool = False) -> str:
+        lines = []
+        for p in self.players:
+            if p.id in self.rolls:
+                tag = " (تلقائي)" if p.id in self.auto_ids else ""
+                lines.append(f"{p.mention}: 🎲 **{self.rolls[p.id]}**{tag}")
+            else:
+                lines.append(f"{p.mention}: ⏳ ما رمى بعد")
+        if final:
+            header = "🎲 **انتهى الوقت!**"
+        else:
+            header = f"🎲 **النرد** — اضغط الزر وارمِ النرد بنفسك! عندكم {self.seconds} ثواني"
+        return header + "\n\n" + "\n".join(lines)
+
+    @discord.ui.button(label="🎲 ارمِ النرد", style=discord.ButtonStyle.success)
+    async def roll(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.closed:
+            await interaction.response.send_message("⏳ خلص الوقت.", ephemeral=True)
+            return
+        if interaction.user.id not in {p.id for p in self.players}:
+            await interaction.response.send_message("⚠️ أنت مو باللعبة.", ephemeral=True)
+            return
+        if interaction.user.id in self.rolls:
+            await interaction.response.send_message(
+                f"✅ رميت مسبقًا ورقمك **{self.rolls[interaction.user.id]}**.", ephemeral=True)
+            return
+        self.rolls[interaction.user.id] = random.randint(1, 6)
+        if len(self.rolls) >= len(self.players):
+            self.all_rolled.set()
+        await interaction.response.edit_message(content=self.status_text(), view=self)
+
+
 @bot.command(name="نرد")
 async def dice_cmd(ctx: commands.Context):
     if is_channel_busy(ctx.channel.id):
@@ -1901,10 +1945,36 @@ async def dice_cmd(ctx: commands.Context):
         players = await run_lobby(ctx, "🎲 لعبة النرد", min_players=2, max_players=20, countdown=30, game_key="نرد")
         if not players:
             return
-        rolls = {p: random.randint(1, 6) for p in players}
+        view = DiceRollView(players, seconds=10)
+        msg = await ctx.send(view.status_text(), view=view)
+        cancel_event = track_game_message(ctx.channel.id, msg)
+        done, pending = await asyncio.wait(
+            [asyncio.create_task(view.all_rolled.wait()), asyncio.create_task(cancel_event.wait())],
+            timeout=view.seconds, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        if cancel_event.is_set():
+            view.stop()
+            return
+        view.closed = True
+        # اللي ما رمى خلال المهلة يرمي له البوت تلقائيًا
+        for p in players:
+            if p.id not in view.rolls:
+                view.rolls[p.id] = random.randint(1, 6)
+                view.auto_ids.add(p.id)
+        for c in view.children:
+            c.disabled = True
+        view.stop()
+        try:
+            await msg.edit(content=view.status_text(final=True), view=view)
+        except discord.NotFound:
+            pass
+
+        rolls = {p: view.rolls[p.id] for p in players}
         top = max(rolls.values())
         winners = [p for p in players if rolls[p] == top]
-        lines = "\n".join(f"{p.mention}: 🎲 {rolls[p]}" for p in players)
+        lines = "\n".join(
+            f"{p.mention}: 🎲 {rolls[p]}{' (تلقائي)' if p.id in view.auto_ids else ''}" for p in players)
         actual_amounts = []
         for w in winners:
             actual_amounts.append(add_game_reward(ctx.guild.id, w.id, 60))
@@ -2119,6 +2189,7 @@ class MafiaRoleView(discord.ui.View):
         super().__init__(timeout=90)
         self.players_ids = {p.id for p in players}
         self.mafia_ids = {p.id for p in mafia}
+        self.mafia_members = list(mafia)
 
     @discord.ui.button(label="🎭 اكشف دورك", style=discord.ButtonStyle.primary)
     async def reveal(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2127,6 +2198,11 @@ class MafiaRoleView(discord.ui.View):
             return
         if interaction.user.id in self.mafia_ids:
             text = "🔪 أنت **مافيا**! هدفك تضلل الكل وتفلت."
+            allies = [m for m in self.mafia_members if m.id != interaction.user.id]
+            if allies:
+                text += "\n🤝 خوياك المافيا: " + "، ".join(m.mention for m in allies)
+            else:
+                text += "\n👤 أنت المافيا الوحيد بهذي اللعبة."
         else:
             text = "😇 أنت **مواطن**! هدفك تكتشف المافيا."
         await interaction.response.send_message(text, ephemeral=True)
@@ -2350,10 +2426,10 @@ GAME_LIST = {
 GAME_HELP = {
     "روليت": "الكل ينضم باللوبي، وبعدها اللاعب المختار يطلع وحد من اللعبة كل دور، لين يبقى ناجي وحد وياخذ النقاط.",
     "xo": "اكس أو كلاسيكية بينك وبين عضو تحدده بالمنشن، أول وحد يكمل خط يفوز.",
-    "مافيا": "ينضم اللاعبين، يتوزعون أدوار مافيا/مواطنين بزر خفي يبان لهم بس، تناقشون شوي وتصوتون بالأزرار على اللي تشكون فيه، ومين يطلع أكثر أصوات يتم كشفه.",
+    "مافيا": "ينضم اللاعبين، يتوزعون أدوار مافيا/مواطنين بزر خفي يبان لهم بس (والمافيا يعرفون بعض)، تناقشون شوي وتصوتون بالأزرار على اللي تشكون فيه، ومين يطلع أكثر أصوات يتم كشفه.",
     "كراسي": "كل جولة عدد الكراسي أقل من عدد اللاعبين بواحد، اضغطوا الأزرار بسرعة، اللي ما يحصل كرسي يطيح.",
     "حجرة": "حجرة ورقة مقص بينك وبين خصم، كل واحد يختار بالخفاء والنتيجة تبان بعد اختيار الاثنين.",
-    "نرد": "كل لاعب يرمي نرد تلقائيًا، وصاحب أعلى رقم يفوز بالنقاط.",
+    "نرد": "بعد اللوبي كل لاعب يضغط زر 🎲 ويرمي النرد بنفسه (عندكم 10 ثواني)، ومن ما رمى يرمي له البوت تلقائيًا، وصاحب أعلى رقم يفوز بالنقاط.",
     "عجلة": "بعد ما يكتمل اللوبي، العجلة تدور وتختار فايز عشوائي من المنضمين.",
     "غميضة": "لاعب وحد يصير الباحث، والباقين يختبئون بين مجموعة أماكن (بعضها فاضي كفخ)، والباحث عنده عدد محاولات محدود يحاول يلقاهم فيه.",
     "ريبلكا": "تشوفون ترتيب رموز لمدة 5 ثواني، وبعدها لازم تكتبونه بنفس الترتيب بالضبط، أول وحد يجاوب صح يفوز.",
@@ -2460,13 +2536,15 @@ OWNER = "Owner"
 CO_OWNER = "Co-Owner"
 VICE_OWNER = "Vice Owner"
 ADMIN = "Admin"
+MANAGEMENT = "Management"
 HEAD_MOD = "Head Moderator"
 MODERATOR = "Moderator"
 TRIAL_MOD = "Trial Moderator"
 
 TOP_ROLES = [VICE_OWNER, CO_OWNER, OWNER]
 ADMIN_ROLES = [ADMIN] + TOP_ROLES
-HEAD_MOD_ROLES = [HEAD_MOD] + ADMIN_ROLES
+MANAGEMENT_ROLES = [MANAGEMENT] + ADMIN_ROLES
+HEAD_MOD_ROLES = [HEAD_MOD] + MANAGEMENT_ROLES
 MOD_ROLES = [MODERATOR] + HEAD_MOD_ROLES
 TRIAL_ROLES = [TRIAL_MOD] + MOD_ROLES
 
@@ -2658,11 +2736,18 @@ async def cmd_nick(message: discord.Message, args: str):
 
 
 async def cmd_remove_role(message: discord.Message, args: str):
-    if not message.mentions or not message.role_mentions:
-        await reply(message, "⚠️ الصيغة: `تنزيل @العضو @الرتبة`")
+    if not message.mentions:
+        await reply(message, "⚠️ الصيغة: `تنزيل @العضو اسم الرتبة` (اكتب اسم الرتبة بدون @ عشان ما ينزعج أصحابها)")
         return
     target = message.mentions[0]
-    role = message.role_mentions[0]
+    if message.role_mentions:
+        role = message.role_mentions[0]
+    else:
+        role_text = strip_mentions(args, message.mentions)
+        role = find_role_from_text(message.guild, role_text)
+        if role is None:
+            await reply(message, "⚠️ ما لقيت رتبة بهذا الاسم — اكتب اسمها بالضبط أو الآيدي.")
+            return
     if role not in target.roles:
         await reply(message, f"⚠️ {target.mention} أصلًا ما عنده رتبة {role.name}")
         return
@@ -2694,13 +2779,42 @@ async def cmd_restore_role(message: discord.Message, args: str):
         await reply(message, f"📥 تم إرجاع رتبة {role.name} لـ {target.mention}")
 
 
+def find_role_from_text(guild: discord.Guild, text: str) -> discord.Role | None:
+    """يدور على رتبة بالآيدي أو بالاسم (بدون منشن، عشان ما ينزعج أصحاب الرتبة)."""
+    text = text.strip()
+    if not text:
+        return None
+    if text.isdigit():
+        role = guild.get_role(int(text))
+        if role:
+            return role
+    lowered = text.lower()
+    for r in guild.roles:
+        if not r.is_default() and r.name.lower() == lowered:
+            return r
+    matches = [r for r in guild.roles if not r.is_default() and lowered in r.name.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 async def cmd_give_role(message: discord.Message, args: str):
-    if not message.mentions or not message.role_mentions:
-        await reply(message, "⚠️ الصيغة: `رول @العضو @الرتبة`")
+    if not message.mentions:
+        await reply(message, "⚠️ الصيغة: `رول @العضو اسم الرتبة` (اكتب اسم الرتبة بدون @ عشان ما ينزعج أصحابها)")
         return
     target = message.mentions[0]
-    role = message.role_mentions[0]
+    if message.role_mentions:
+        role = message.role_mentions[0]
+    else:
+        role_text = strip_mentions(args, message.mentions)
+        role = find_role_from_text(message.guild, role_text)
+        if role is None:
+            await reply(message, "⚠️ ما لقيت رتبة بهذا الاسم — اكتب اسمها بالضبط أو الآيدي.")
+            return
     author = message.author
+    if role.is_default():
+        await reply(message, "❌ هذي الرتبة ما تنعطى.")
+        return
     if role in target.roles:
         await reply(message, f"⚠️ {target.mention} عنده رتبة {role.name} أصلًا")
         return
@@ -2871,8 +2985,8 @@ ADMIN_COMMANDS = {
     "تايم": (TRIAL_ROLES, cmd_timeout),
     "اص": (TRIAL_ROLES, cmd_timeout),
     "تحرير": (TRIAL_ROLES, cmd_untimeout),
-    "اخرس": (ADMIN_ROLES, cmd_textmute),
-    "تكلم": (ADMIN_ROLES, cmd_textunmute),
+    "اخرس": (MANAGEMENT_ROLES, cmd_textmute),
+    "تكلم": (MANAGEMENT_ROLES, cmd_textunmute),
     "سجن": (ADMIN_ROLES, cmd_jail),
     "فك": (ADMIN_ROLES, cmd_unjail),
     "لقب": (MOD_ROLES, cmd_nick),
@@ -2881,8 +2995,8 @@ ADMIN_COMMANDS = {
     "رجع": (ADMIN_ROLES, cmd_restore_role),
     "رول": (TOP_ROLES, cmd_give_role),
     # إدارة الرومات
-    "اباده": (ADMIN_ROLES, cmd_purge),
-    "مسح": (ADMIN_ROLES, cmd_purge),
+    "اباده": (MANAGEMENT_ROLES, cmd_purge),
+    "مسح": (MANAGEMENT_ROLES, cmd_purge),
     "قفل": (ADMIN_ROLES, cmd_lock),
     "فتح": (ADMIN_ROLES, cmd_unlock),
     "اخفاء": (TOP_ROLES, cmd_hide),
