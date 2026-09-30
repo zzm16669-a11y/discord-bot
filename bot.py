@@ -166,7 +166,8 @@ import tickets
 tickets.setup_tickets(bot)
 import levels
 levels.setup_levels(bot)
-
+import leaderboard
+leaderboard.setup_leaderboard(bot)
 # ============================================================
 # فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
 # ============================================================
