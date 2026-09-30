@@ -3,3 +3,5 @@ aiohttp
 python-dotenv
 google-generativeai
 Pillow>=10.1
+arabic-reshaper
+python-bidi
