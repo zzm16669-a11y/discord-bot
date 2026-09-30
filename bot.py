@@ -171,6 +171,8 @@ import leaderboard
 leaderboard.setup_leaderboard(bot)
 import protection
 protection.setup_protection(bot)
+import voice_stay
+voice_stay.setup_voice_stay(bot)
 # ============================================================
 # فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
 # ============================================================
