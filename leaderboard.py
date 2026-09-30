@@ -232,12 +232,26 @@ def _draw_name(draw, panel: dict, cy: float, name: str, username: str, max_x: fl
         _draw_text(draw, ux, baseline, user_txt, user_font, COLOR_USER)
 
 
+_template_cache: dict[str, Image.Image] = {}
+
+
+def _load_template(path: str) -> Image.Image:
+    if path not in _template_cache:
+        for candidate in (path, os.path.join(_HERE, path)):
+            if os.path.isfile(candidate):
+                _template_cache[path] = Image.open(candidate).convert("RGB")
+                break
+        else:
+            raise FileNotFoundError(path)
+    return _template_cache[path]
+
+
 def render_leaderboard(chat_rows: list[dict], voice_rows: list[dict],
                        chat_me: dict | None, voice_me: dict | None,
                        template_path: str = TEMPLATE_PATH) -> bytes:
     """يرسم الصورة ويرجعها PNG bytes.
     كل صف: {name, username, avatar (bytes|None), level, xp}، وصف التاج يزيد عليه {rank}."""
-    base = Image.open(template_path).convert("RGB")
+    base = _load_template(template_path)
     img = base.copy()
     draw = ImageDraw.Draw(img)
     name_font = _load_font(FONT_BOLD_CANDIDATES, NAME_SIZE)
@@ -266,18 +280,29 @@ def render_leaderboard(chat_rows: list[dict], voice_rows: list[dict],
                    max_x=values_x - 26, prefix=prefix)
 
     buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
+    # ملاحظة: optimize=True كان يبطّئ الحفظ جدًا (6+ ثواني على جهاز سريع)، compress_level=1 ياخذ أقل من ثانية
+    img.save(buf, format="PNG", compress_level=1)
     return buf.getvalue()
 
 
 # ============================================================
 # جلب البيانات من ديسكورد + الأمر
 # ============================================================
+_avatar_cache: dict = {}   # (user_id, avatar_key) -> bytes
+
+
 async def _avatar_bytes(user) -> bytes | None:
+    key = (user.id, getattr(user.display_avatar, "key", None))
+    if key in _avatar_cache:
+        return _avatar_cache[key]
     try:
-        return await user.display_avatar.replace(size=128, format="png").read()
+        data = await user.display_avatar.replace(size=128, format="png").read()
     except Exception:
         return None
+    if len(_avatar_cache) > 300:
+        _avatar_cache.clear()
+    _avatar_cache[key] = data
+    return data
 
 
 async def _make_row(bot: commands.Bot, guild: discord.Guild, uid: int, xp: int, level: int) -> dict:
@@ -298,6 +323,15 @@ async def _make_row(bot: commands.Bot, guild: discord.Guild, uid: int, xp: int, 
 
 
 _last_use: dict[int, float] = {}
+_render_cache: dict = {}   # (guild_id, user_id) -> (signature, png_bytes, time)
+RENDER_CACHE_SECONDS = 120
+
+
+def _signature(chat_rows, voice_rows, chat_me, voice_me) -> tuple:
+    def r(row):
+        return (row.get("name"), row.get("username"), row.get("level"), row.get("xp"),
+                row.get("rank"), hash(row.get("avatar")))
+    return (tuple(map(r, chat_rows)), tuple(map(r, voice_rows)), r(chat_me), r(voice_me))
 
 
 def setup_leaderboard(bot: commands.Bot) -> None:
@@ -316,6 +350,7 @@ def setup_leaderboard(bot: commands.Bot) -> None:
             return
         _last_use[ctx.guild.id] = now
 
+        status = await ctx.send("⏳ جاري تجهيز الصورة...")
         async with ctx.typing():
             gid = ctx.guild.id
             chat_top = levels._get_top(levels.CHAT_TABLE, gid, 5)
@@ -334,11 +369,21 @@ def setup_leaderboard(bot: commands.Bot) -> None:
                 me_row(levels.CHAT_TABLE),
                 me_row(levels.VOICE_TABLE),
             )
-            try:
-                png = await asyncio.to_thread(
-                    render_leaderboard, list(chat_rows), list(voice_rows), chat_me, voice_me)
-            except Exception as e:
-                print(f"[Leaderboard] فشل رسم الصورة: {e}")
-                await ctx.send("❌ ما قدرت أرسم الصورة، راجع الكونسول.")
-                return
+            sig = _signature(chat_rows, voice_rows, chat_me, voice_me)
+            cached = _render_cache.get((gid, ctx.author.id))
+            if cached and cached[0] == sig and time.monotonic() - cached[2] < RENDER_CACHE_SECONDS:
+                png = cached[1]
+            else:
+                try:
+                    png = await asyncio.to_thread(
+                        render_leaderboard, list(chat_rows), list(voice_rows), chat_me, voice_me)
+                except Exception as e:
+                    print(f"[Leaderboard] فشل رسم الصورة: {e}")
+                    await status.edit(content="❌ ما قدرت أرسم الصورة، راجع الكونسول.")
+                    return
+                _render_cache[(gid, ctx.author.id)] = (sig, png, time.monotonic())
         await ctx.send(file=discord.File(io.BytesIO(png), filename="leaderboard.png"))
+        try:
+            await status.delete()
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            pass
