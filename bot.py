@@ -59,6 +59,7 @@ JAIL_FILE = "jail_data.json"
 ROLES_REMOVED_FILE = "removed_roles.json"
 GAME_STATS_FILE = "game_stats.json"
 SHOP_ACTIVE_FILE = "shop_active.json"
+AFK_FILE = "afk.json"
 
 # الحد الأقصى للنقاط اللي يقدر اللاعب ياخذها من الألعاب خلال 24 ساعة (يحمي من تكديس النقاط بسرعة غير طبيعية).
 # النقاط اللي تجي من .يومي أو .تحويل أو .اصدار ما تدخل بهذا الحد.
@@ -168,6 +169,8 @@ import levels
 levels.setup_levels(bot)
 import leaderboard
 leaderboard.setup_leaderboard(bot)
+import protection
+protection.setup_protection(bot)
 # ============================================================
 # فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
 # ============================================================
@@ -3034,6 +3037,74 @@ async def try_dispatch_admin_command(message: discord.Message) -> bool:
     return False
 
 
+# ---------- .اوامر اداريه: قائمة الأوامر الإدارية مع الرتب المسموح لها ----------
+# كل عنصر: (المفاتيح بجدول ADMIN_COMMANDS, طريقة الكتابة, الوصف, نص الرتبة أو None لو تنحسب تلقائيًا)
+ADMIN_HELP_SECTIONS = [
+    ("👥 إدارة الأعضاء", [
+        (["برا"], "برا @عضو [السبب]", "حظر عضو من السيرفر.", None),
+        (["سماح"], "سماح <آيدي العضو>", "فك الحظر عن عضو بالآيدي.", None),
+        (["ترحيل", "كيك"], "ترحيل / كيك @عضو [السبب]", "طرد عضو من السيرفر.", None),
+        (["تايم", "اص"], "تايم / اص @عضو [المدة] [السبب]", "كتم مؤقت (تايم أوت)، المدة مثل 10m أو 2h أو 1d.", None),
+        (["تحرير"], "تحرير @عضو", "فك التايم عن عضو.", None),
+        (["اخرس"], "اخرس @عضو", "إسكات عضو بالشات (رتبة Muted).", None),
+        (["تكلم"], "تكلم @عضو", "فك الإسكات بالشات.", None),
+        (["سجن"], "سجن @عضو", "سجن عضو (يسحب رتبه ويعطيه رتبة Jailed).", None),
+        (["فك"], "فك @عضو", "فك السجن وإرجاع رتب العضو.", None),
+        (["لقب", "اسم"], "لقب / اسم @عضو الاسم_الجديد", "تغيير لقب عضو بالسيرفر.", None),
+        (["تنزيل"], "تنزيل @عضو اسم_الرتبة", "سحب رتبة من عضو.", None),
+        (["رجع"], "رجع @عضو", "إرجاع آخر رتبة انسحبت من العضو.", None),
+        (["رول"], "رول @عضو اسم_الرتبة", "إعطاء رتبة لعضو (بشرط تكون أقل من رتبتك).", None),
+        (["تنبيه"], "تنبيه @عضو [السبب]", "تسجيل تنبيه رسمي على عضو.",
+         "أي عضو معه صلاحية **Manage Messages** (إدارة الرسائل)"),
+    ]),
+    ("💬 إدارة الرومات", [
+        (["اباده", "مسح"], "اباده / مسح [العدد]", "مسح رسائل من الروم (افتراضي 50، أقصى 200).", None),
+        (["قفل"], "قفل", "قفل الروم الحالي عن الكتابة.", None),
+        (["فتح"], "فتح", "فتح الروم الحالي للكتابة.", None),
+        (["اخفاء", "خفي"], "اخفاء / خفي", "إخفاء الروم الحالي عن الأعضاء.", None),
+        (["اظهار"], "اظهار", "إظهار الروم الحالي للأعضاء.", None),
+    ]),
+    ("🔊 إدارة الصوت", [
+        (["بره"], "بره @عضو", "إخراج عضو من الروم الصوتي.", None),
+        (["اصمت"], "اصمت @عضو", "إسكات عضو صوتيًا.", None),
+        (["انطق"], "انطق @عضو", "فك الإسكات الصوتي عن عضو.", None),
+        (["اسحب"], "اسحب @عضو", "سحب عضو لروم صوتي أنت فيه.", None),
+        (["اجمعهم"], "اجمعهم", "جمع كل اللي بالرومات الصوتية عندك.", None),
+        (["تعال", "كم هير بيبي"], "تعال / كم هير بيبي @عضو", "ينقلك لروم العضو الصوتي.", None),
+        (["اطلع"], "اطلع @عضو", "طرد عضو من الروم الصوتي وقفل الروم.", None),
+        (["مسموح"], "مسموح @عضو", "السماح لعضو بدخول روم صوتي مقفول.", None),
+    ]),
+]
+
+
+@bot.command(name="اوامر_اداريه")
+async def send_admin_commands_help(ctx: commands.Context):
+    author = ctx.author
+    is_guild_owner = ctx.guild is not None and author.id == ctx.guild.owner_id
+    if not (isinstance(author, discord.Member) and (is_guild_owner or has_role(author, TRIAL_ROLES))):
+        await ctx.send(f"{author.mention} ❌ ما عندك الصلاحية.")
+        return
+
+    hierarchy = " ➜ ".join(TRIAL_ROLES)
+    embeds = [discord.Embed(
+        title="📋 الأوامر الإدارية",
+        description=(
+            "الأوامر الإدارية تنكتب **بدون نقطة** (مثال: `تايم @عضو 10m`).\n"
+            "الرتبة المكتوبة تحت كل أمر هي **أقل رتبة** تقدر تستخدمه، وكل الرتب الأعلى منها تقدر تستخدمه بعد.\n\n"
+            f"**ترتيب الرتب من الأدنى للأعلى:**\n{hierarchy}"
+        ),
+        color=discord.Color.blurple(),
+    )]
+    for title, entries in ADMIN_HELP_SECTIONS:
+        lines = []
+        for triggers, usage, desc, roles_text in entries:
+            if roles_text is None:
+                roles_text = f"**{ADMIN_COMMANDS[triggers[0]][0][0]}** وأعلى"
+            lines.append(f"`{usage}`\n{desc}\n🔑 الرتبة: {roles_text}\n")
+        embeds.append(discord.Embed(title=title, description="\n".join(lines), color=discord.Color.blurple()))
+    await ctx.send(embeds=embeds)
+
+
 # ============================================================
 # 12) المتجر — شراء أشياء بالنقاط
 # ============================================================
@@ -3207,6 +3278,195 @@ async def shop_expiry_task():
 
 
 # ============================================================
+# 13) نظام AFK — .afk <السبب>
+# ============================================================
+# لما العضو يكتب .afk نايم يتسجل AFK بالسبب، ولما يرسل أي رسالة ثانية يرجع تلقائيًا.
+# ولو أحد منشنه وهو AFK، البوت يعلمه إنه AFK ويعرض السبب.
+AFK_MAX_REASON_LENGTH = 200
+AFK_COMMAND_PATTERN = re.compile(r"^\.afk(\s|$)", re.IGNORECASE)
+
+
+def set_afk(guild_id: int, user_id: int, reason: str) -> None:
+    data = load_json(AFK_FILE)
+    gid, uid = str(guild_id), str(user_id)
+    data.setdefault(gid, {})
+    data[gid][uid] = {"reason": reason, "since": datetime.now(timezone.utc).isoformat()}
+    save_json(AFK_FILE, data)
+
+
+def get_afk(guild_id: int, user_id: int) -> dict | None:
+    data = load_json(AFK_FILE)
+    return data.get(str(guild_id), {}).get(str(user_id))
+
+
+def clear_afk(guild_id: int, user_id: int) -> dict | None:
+    data = load_json(AFK_FILE)
+    gid, uid = str(guild_id), str(user_id)
+    entry = data.get(gid, {}).pop(uid, None)
+    if entry is not None:
+        save_json(AFK_FILE, data)
+    return entry
+
+
+def _format_afk_duration(since_iso: str) -> str:
+    try:
+        seconds = int((datetime.now(timezone.utc) - datetime.fromisoformat(since_iso)).total_seconds())
+    except (TypeError, ValueError):
+        return ""
+    if seconds < 60:
+        return "أقل من دقيقة"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} دقيقة"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} ساعة"
+    return f"{hours // 24} يوم"
+
+
+@bot.command(name="afk")
+async def afk_cmd(ctx: commands.Context, *, reason: str = None):
+    if ctx.guild is None:
+        return
+    reason = (reason or "AFK").strip()[:AFK_MAX_REASON_LENGTH] or "AFK"
+    set_afk(ctx.guild.id, ctx.author.id, reason)
+
+    embed = discord.Embed(
+        title=f"💤 {ctx.author.display_name} في وضع AFK",
+        color=discord.Color.blurple(),
+    )
+    embed.description = f"**الرسالة:** {reason}"
+    embed.set_thumbnail(url=ctx.author.display_avatar.url)
+    embed.set_footer(text="أرسل أي رسالة للعودة تلقائيًا")
+    await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+
+async def handle_afk_on_message(message: discord.Message) -> None:
+    """لو صاحب الرسالة AFK نرجّعه، ولو منشن أحد AFK نعلمه. ما يتدخل بأمر .afk نفسه."""
+    if message.guild is None:
+        return
+
+    is_afk_command = bool(AFK_COMMAND_PATTERN.match(message.content.strip()))
+
+    if not is_afk_command:
+        entry = clear_afk(message.guild.id, message.author.id)
+        if entry is not None:
+            duration = _format_afk_duration(entry.get("since", ""))
+            extra = f" (كنت AFK لمدة {duration})" if duration else ""
+            try:
+                await message.channel.send(
+                    f"👋 أهلًا بعودتك {message.author.mention}! تم إلغاء وضع AFK{extra}.",
+                    delete_after=10, allowed_mentions=discord.AllowedMentions(users=[message.author]))
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+    for member in message.mentions:
+        if member.bot or member.id == message.author.id:
+            continue
+        entry = get_afk(message.guild.id, member.id)
+        if entry is None:
+            continue
+        duration = _format_afk_duration(entry.get("since", ""))
+        extra = f" — منذ {duration}" if duration else ""
+        try:
+            await message.channel.send(
+                f"💤 **{member.display_name}** في وضع AFK{extra}\n**الرسالة:** {entry.get('reason', 'AFK')}",
+                delete_after=15, allowed_mentions=discord.AllowedMentions.none())
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+
+# ============================================================
+# 14) نظام حماية الروابط — أي رابط = مسح الرسالة + تايم يوم كامل
+# ============================================================
+# المعفيين: مالك السيرفر، أصحاب صلاحية Administrator، وأي أحد معه رتبة من Trial Moderator وفوق.
+# الدومينات المسموحة (ما ينعاقب عليها): روابط الصور/الملفات الداخلية بديسكورد وروابط الـGIF.
+# تقدر تزيد أو تشيل منها. وتقدر تحط آيديات رومات مسموح فيها الروابط بـ LINK_ALLOWED_CHANNEL_IDS.
+LINK_TIMEOUT = timedelta(days=1)
+LINK_WHITELIST_DOMAINS = {
+    "tenor.com", "media.tenor.com", "giphy.com", "media.giphy.com",
+    "cdn.discordapp.com", "media.discordapp.net", "images-ext-1.discordapp.net",
+    "images-ext-2.discordapp.net",
+}
+LINK_ALLOWED_CHANNEL_IDS: set[int] = set()
+
+_LINK_TLDS = (
+    "com|net|org|gg|io|me|xyz|info|biz|co|tv|cc|ly|to|us|uk|sa|ae|eg|kw|qa|tk|ml|ga|cf|gq|"
+    "app|dev|site|online|store|shop|club|live|link|click|fun|top|vip|pro|ru|de|fr|in"
+)
+LINK_PATTERN = re.compile(
+    rf"(?i)(?:https?://|www\.)[^\s<>]+|\b(?:[a-z0-9-]+\.)+(?:{_LINK_TLDS})\b(?:/[^\s<>]*)?"
+)
+
+
+def _link_host(raw: str) -> str:
+    host = re.sub(r"(?i)^https?://", "", raw.strip())
+    host = re.split(r"[/?#:]", host, maxsplit=1)[0].lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def message_has_blocked_link(content: str) -> bool:
+    for match in LINK_PATTERN.finditer(content):
+        host = _link_host(match.group(0))
+        allowed = any(host == d or host.endswith("." + d) for d in LINK_WHITELIST_DOMAINS)
+        if not allowed:
+            return True
+    return False
+
+
+def is_link_exempt(member) -> bool:
+    if not isinstance(member, discord.Member):
+        return True
+    if member.id == member.guild.owner_id or member.guild_permissions.administrator:
+        return True
+    return has_role(member, TRIAL_ROLES)
+
+
+async def handle_link_protection(message: discord.Message) -> bool:
+    """يرجع True لو الرسالة فيها رابط ممنوع وتم التعامل معها (مسح + تايم يوم)."""
+    if message.guild is None or message.author.bot:
+        return False
+    if message.channel.id in LINK_ALLOWED_CHANNEL_IDS or is_link_exempt(message.author):
+        return False
+    if not message.content or not message_has_blocked_link(message.content):
+        return False
+
+    author = message.author
+    try:
+        await message.delete()
+    except (discord.Forbidden, discord.NotFound):
+        pass
+
+    timed_out = True
+    try:
+        await author.timeout(LINK_TIMEOUT, reason="نظام حماية الروابط: إرسال رابط")
+    except (discord.Forbidden, discord.HTTPException):
+        timed_out = False
+
+    try:
+        if timed_out:
+            await message.channel.send(
+                f"🚫 {author.mention} ممنوع إرسال الروابط! تم إعطاؤك تايم لمدة **يوم كامل**.",
+                delete_after=10)
+        else:
+            await message.channel.send(
+                f"🚫 {author.mention} ممنوع إرسال الروابط! (ما قدرت أعطيك تايم، رتبتي أقل من رتبتك)",
+                delete_after=10)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+    embed = discord.Embed(title="🔗 حماية الروابط: تم معاقبة عضو", color=discord.Color.red(),
+                           timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="العضو", value=author.mention, inline=True)
+    embed.add_field(name="الروم", value=message.channel.mention, inline=True)
+    embed.add_field(name="العقوبة", value="تايم يوم كامل" if timed_out else "مسح الرسالة فقط (فشل التايم)", inline=True)
+    embed.add_field(name="الرسالة", value=message.content[:1000], inline=False)
+    embed.set_footer(text=f"معرف العضو: {author.id}")
+    await send_log(message.guild, "security", embed)
+    return True
+
+
+# ============================================================
 # دوال مساعدة للوقات العامة (روابط دعوة)
 # ============================================================
 async def log_invite_link(message: discord.Message) -> None:
@@ -3235,6 +3495,9 @@ async def on_message(message: discord.Message):
     # نصفّي المنشنات: لو المستخدم بس رادّ (Reply) على حد بدون ما يكتب @اسمه صراحة،
     # ما نعتبره منشن — عشان "تايم"/"برا"/... ما تنفذ غلط بمجرد الرد على رسالة الشخص.
     message.mentions = filter_explicit_mentions(message)
+
+    # نظام AFK: رجوع تلقائي لصاحب الرسالة + تنبيه لو منشنوا أحد AFK
+    await handle_afk_on_message(message)
 
     if message.content.strip().startswith("تنبيه"):
         await handle_warn_command(message)
