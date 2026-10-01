@@ -165,10 +165,6 @@ bot = commands.Bot(command_prefix=".", intents=intents)
 
 import tickets
 tickets.setup_tickets(bot)
-import levels
-levels.setup_levels(bot)
-import leaderboard
-leaderboard.setup_leaderboard(bot)
 import protection
 protection.setup_protection(bot)
 import voice_stay
