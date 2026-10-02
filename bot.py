@@ -697,13 +697,20 @@ async def wait_or_game_cancelled(event: asyncio.Event, timeout: float | None = N
         return False
 
 
+# آيديات رسائل ".قول" اللي حذفها البوت نفسه — ما نسجلها بروم delete-logs
+silent_deleted_ids: set[int] = set()
+
+
 @bot.event
 async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
     """لو انحذفت رسالة لعبة شغالة حاليًا، نوقف اللعبة فورًا ونبلّغ بالروم. وبعدها نسجل الحذف بروم delete-logs."""
     channel_id = payload.channel_id
 
+    skip_log = payload.message_id in silent_deleted_ids
+    silent_deleted_ids.discard(payload.message_id)
+
     cached = payload.cached_message
-    if cached is not None and cached.guild is not None:
+    if cached is not None and cached.guild is not None and not skip_log:
         embed = discord.Embed(title="🗑️ تم حذف رسالة", color=discord.Color.red(),
                                timestamp=datetime.now(timezone.utc))
         embed.add_field(name="الكاتب", value=cached.author.mention, inline=True)
@@ -2781,6 +2788,9 @@ async def commands_list_cmd(ctx: commands.Context):
 
 
 # ---------- .قول: البوت يكرر النص اللي تكتبه ----------
+SAY_COMMAND_PATTERN = re.compile(r"^\.قول\s+\S")
+
+
 @bot.command(name="قول")
 async def say_cmd(ctx: commands.Context, *, text: str = None):
     if not text or not text.strip():
@@ -2790,11 +2800,7 @@ async def say_cmd(ctx: commands.Context, *, text: str = None):
     if ctx.guild is not None and message_has_blocked_link(text) and not is_link_exempt(ctx.author):
         await ctx.send(f"{ctx.author.mention} ❌ ما أقدر أرسل روابط.")
         return
-    # نحذف رسالة صاحب الأمر ونكتبها عنه (لو ما عندي صلاحية الحذف نكمل الإرسال عادي)
-    try:
-        await ctx.message.delete()
-    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-        pass
+    # (حذف رسالة صاحب الأمر يتم بأول on_message عشان يختفي بأسرع وقت)
     # بدون منشنات (ما يمشي @everyone ولا @here ولا منشن رتب/أعضاء)
     await ctx.send(text, allowed_mentions=discord.AllowedMentions.none())
 
@@ -3872,6 +3878,17 @@ def is_salam_message(content: str) -> bool:
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
+
+    # ".قول <نص>": نحذف رسالة صاحب الأمر فورًا (قبل أي معالجة ثانية) عشان ما أحد يلحق يشوفها.
+    # نفس شروط say_cmd: لازم يكون فيه نص، وما نحذف لو النص فيه رابط ممنوع (البوت بيرفض الإرسال).
+    if message.guild is not None and SAY_COMMAND_PATTERN.match(message.content):
+        say_text = message.content.split(None, 1)[1]
+        if not (message_has_blocked_link(say_text) and not is_link_exempt(message.author)):
+            silent_deleted_ids.add(message.id)
+            try:
+                await message.delete()
+            except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+                silent_deleted_ids.discard(message.id)
 
     if message.guild is not None:
         if INVITE_LINK_PATTERN.search(message.content):
