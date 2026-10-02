@@ -3746,11 +3746,17 @@ async def handle_afk_on_message(message: discord.Message) -> None:
         if entry is None:
             continue
         duration = _format_afk_duration(entry.get("since", ""))
-        extra = f" — منذ {duration}" if duration else ""
+        embed = discord.Embed(
+            title=f"💤 {member.display_name} في وضع AFK",
+            color=discord.Color.blurple(),
+        )
+        embed.description = f"**الرسالة:** {entry.get('reason', 'AFK')}"
+        embed.set_thumbnail(url=member.display_avatar.url)
+        if duration:
+            embed.set_footer(text=f"منذ {duration}")
         try:
             await message.channel.send(
-                f"💤 **{member.display_name}** في وضع AFK{extra}\n**الرسالة:** {entry.get('reason', 'AFK')}",
-                delete_after=15, allowed_mentions=discord.AllowedMentions.none())
+                embed=embed, delete_after=15, allowed_mentions=discord.AllowedMentions.none())
         except (discord.Forbidden, discord.HTTPException):
             pass
 
