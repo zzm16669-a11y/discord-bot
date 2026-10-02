@@ -3045,12 +3045,17 @@ async def cmd_unjail(message: discord.Message, args: str):
 
 async def cmd_nick(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `لقب @العضو الاسم_الجديد`")
+        await reply(message, "⚠️ الصيغة: `لقب @العضو [الاسم_الجديد]` (بدون اسم يرجع اسمه الأصلي)")
         return
     target = message.mentions[0]
     new_nick = strip_mentions(args, message.mentions)
     if not new_nick:
-        await reply(message, "⚠️ لازم تكتب اللقب الجديد.")
+        # بدون اسم جديد: نشيل اللقب ويرجع اسمه الأصلي
+        try:
+            await target.edit(nick=None, reason=f"بواسطة {message.author} — إرجاع الاسم الأصلي")
+            await reply(message, f"✏️ تم إرجاع اسم {target.mention} الأصلي.")
+        except discord.Forbidden:
+            await reply(message, "❌ ما أقدر أغيّر لقب هذا العضو.")
         return
     try:
         await target.edit(nick=new_nick, reason=f"بواسطة {message.author}")
@@ -3422,7 +3427,7 @@ ADMIN_HELP_SECTIONS = [
         (["تكلم"], "تكلم @عضو", "فك الإسكات بالشات.", None),
         (["سجن"], "سجن @عضو [السبب]", "سجن عضو (يسحب رتبه ويعطيه رتبة Jailed).", None),
         (["فك"], "فك @عضو", "فك السجن وإرجاع رتب العضو.", None),
-        (["لقب", "اسم"], "لقب / اسم @عضو الاسم_الجديد", "تغيير لقب عضو بالسيرفر.", None),
+        (["لقب", "اسم"], "لقب / اسم @عضو [الاسم_الجديد]", "تغيير لقب عضو بالسيرفر، وبدون اسم جديد يرجع اسمه الأصلي.", None),
         (["تنزيل"], "تنزيل @عضو اسم_الرتبة", "سحب رتبة من عضو (السبب من الأزرار).", None),
         (["رجع"], "رجع @عضو", "إرجاع آخر رتبة انسحبت من العضو.", None),
         (["رول"], "رول @عضو اسم_الرتبة", "إعطاء رتبة لعضو (بشرط تكون أقل من رتبتك).", None),
