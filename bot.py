@@ -3306,6 +3306,40 @@ async def cmd_vc_allow(message: discord.Message, args: str):
     await reply(message, f"✅ تم السماح لـ {target.mention} بدخول {channel.name}")
 
 
+async def cmd_remove_warn(message: discord.Message, args: str):
+    """شيل تحذير @عضو  ← يشيل آخر تحذير | شيل تحذير @عضو الكل  ← يشيل كل تحذيراته."""
+    if not message.mentions:
+        await reply(message, "⚠️ الصيغة: `شيل تحذير @العضو` (يشيل آخر تحذير) أو `شيل تحذير @العضو الكل`")
+        return
+    target = message.mentions[0]
+    if target.id == message.author.id:
+        await reply(message, f"{message.author.mention} ⚠️ ما تقدر تشيل تحذير عن نفسك.")
+        return
+    remove_all = strip_mentions(args, message.mentions).strip() in ("الكل", "كل", "all")
+
+    data = load_json(WARNS_FILE)
+    gid, mid = str(message.guild.id), str(target.id)
+    user_warns = data.get(gid, {}).get(mid, [])
+    if not user_warns:
+        await reply(message, f"⚠️ {target.mention} ما عليه أي تحذير.")
+        return
+
+    if remove_all:
+        removed_count = len(user_warns)
+        data[gid][mid] = []
+        text = f"✅ تم حذف كل تحذيرات {target.mention} (**{removed_count}**)."
+    else:
+        removed = user_warns.pop()
+        data[gid][mid] = user_warns
+        text = (f"✅ تم حذف التحذير رقم **#{removed.get('number', len(user_warns) + 1)}** عن {target.mention}"
+                f" — باقي عليه **{len(user_warns)}** تحذير.")
+    save_json(WARNS_FILE, data)
+    await reply(message, text)
+    await log_mod_action(message.guild, "🧹 إزالة تحذير", message.author, target,
+                         extra={"المحذوف": "الكل" if remove_all else "آخر تحذير",
+                                "المتبقي": len(data[gid][mid])})
+
+
 # ---------- جدول الأوامر الإدارية ----------
 ADMIN_COMMANDS = {
     # إدارة الأعضاء
@@ -3325,6 +3359,7 @@ ADMIN_COMMANDS = {
     "تنزيل": (ADMIN_ROLES, cmd_remove_role),
     "رجع": (ADMIN_ROLES, cmd_restore_role),
     "رول": (TOP_ROLES, cmd_give_role),
+    "شيل تحذير": (MOD_ROLES, cmd_remove_warn),
     # إدارة الرومات
     "اباده": (MANAGEMENT_ROLES, cmd_purge),
     "مسح": (MANAGEMENT_ROLES, cmd_purge),
@@ -3382,6 +3417,7 @@ ADMIN_HELP_SECTIONS = [
         (["رول"], "رول @عضو اسم_الرتبة", "إعطاء رتبة لعضو (بشرط تكون أقل من رتبتك).", None),
         (["تحذير"], "تحذير @عضو [السبب]", "تسجيل تحذير رسمي على عضو، وتطلع لك أزرار أسباب تختار منها.",
          f"أي إداري (**{TRIAL_MOD}** وأعلى)"),
+        (["شيل تحذير"], "شيل تحذير @عضو [الكل]", "يشيل آخر تحذير مسجل على عضو، أو كل تحذيراته لو كتبت «الكل».", None),
     ]),
     ("💬 إدارة الرومات", [
         (["اباده", "مسح"], "اباده / مسح [العدد]", "مسح رسائل من الروم (افتراضي 50، أقصى 200).", None),
