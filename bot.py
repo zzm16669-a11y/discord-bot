@@ -3307,6 +3307,20 @@ async def cmd_vc_kicklock(message: discord.Message, args: str):
                           {"الروم": channel.name})
 
 
+async def cmd_vc_open(message: discord.Message, args: str):
+    """فتح الصوت ← يفتح الروم الصوتي اللي أنت فيه (يشيل القفل اللي حطه أمر اطلع)."""
+    if not (message.author.voice and message.author.voice.channel):
+        await reply(message, "⚠️ لازم تكون داخل الروم الصوتي عشان تفتحه.")
+        return
+    channel = message.author.voice.channel
+    overwrite = channel.overwrites_for(message.guild.default_role)
+    overwrite.connect = None  # يرجع للوضع الافتراضي (يشيل المنع)
+    await channel.set_permissions(message.guild.default_role, overwrite=overwrite)
+    await reply(message, f"🔓 تم فتح روم {channel.name} للكل.")
+    await log_mod_action(message.guild, "🔓 فتح روم صوتي", message.author, None, None,
+                          {"الروم": channel.name})
+
+
 async def cmd_vc_allow(message: discord.Message, args: str):
     if not message.mentions:
         await reply(message, "⚠️ الصيغة: `مسموح @العضو` (وأنت داخل الروم الصوتي)")
@@ -3394,6 +3408,7 @@ ADMIN_COMMANDS = {
     "كم هير بيبي": (HEAD_MOD_ROLES, cmd_vc_comehere),
     "اطلع": (ADMIN_ROLES, cmd_vc_kicklock),
     "مسموح": (ADMIN_ROLES, cmd_vc_allow),
+    "فتح الصوت": (ADMIN_ROLES, cmd_vc_open),
 }
 
 # رتّب المفاتيح الأطول أولًا (عشان "كم هير بيبي" ما تتعارض مع كلمة مفردة)
@@ -3451,6 +3466,7 @@ ADMIN_HELP_SECTIONS = [
         (["تعال", "كم هير بيبي"], "تعال / كم هير بيبي @عضو", "ينقلك لروم العضو الصوتي.", None),
         (["اطلع"], "اطلع @عضو [السبب]", "طرد عضو من الروم الصوتي وقفل الروم.", None),
         (["مسموح"], "مسموح @عضو", "السماح لعضو بدخول روم صوتي مقفول.", None),
+        (["فتح الصوت"], "فتح الصوت", "فتح الروم الصوتي اللي أنت فيه للكل (يشيل القفل).", None),
     ]),
 ]
 
