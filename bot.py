@@ -2774,7 +2774,7 @@ async def commands_list_cmd(ctx: commands.Context):
         "`.العاب` — قائمة كل الألعاب (الجماعية والفردية).",
         "`.شرح اسم_اللعبة` — شرح أي لعبة بالتفصيل.",
         "\n__ℹ️ عام__",
-        "`.قول <النص>` — البوت يكتب النص اللي تبيه.",
+        "`.قول <النص>` — يحذف رسالتك والبوت يكتب النص عنك.",
         "`.اوامر` — تعرض هذي القائمة.",
     ]
     await ctx.send("\n".join(lines))
@@ -2790,6 +2790,11 @@ async def say_cmd(ctx: commands.Context, *, text: str = None):
     if ctx.guild is not None and message_has_blocked_link(text) and not is_link_exempt(ctx.author):
         await ctx.send(f"{ctx.author.mention} ❌ ما أقدر أرسل روابط.")
         return
+    # نحذف رسالة صاحب الأمر ونكتبها عنه (لو ما عندي صلاحية الحذف نكمل الإرسال عادي)
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        pass
     # بدون منشنات (ما يمشي @everyone ولا @here ولا منشن رتب/أعضاء)
     await ctx.send(text, allowed_mentions=discord.AllowedMentions.none())
 
