@@ -2,7 +2,7 @@
 بوت ديسكورد شامل — نسخة كاملة مدموجة (مع مركز الألعاب الموسّع)
 =====================================================================
 الأقسام:
-  1) نظام التنبيهات (تنبيه)
+  1) نظام التحذيرات (تحذير + أزرار أسباب)
   2) نظام الاقتصاد / النقاط (رصيد / نقاطي / يومي / تحويل)
   3) نظام الجولات العام (لألعاب "أول من يجاوب يفوز")
   4) مركز الألعاب:
@@ -13,7 +13,7 @@
 
 ملاحظات مهمة قبل التشغيل:
   - كل أوامر النقاط والألعاب تبدأ بعلامة "." (مثال: .روليت ، .نقاطي ، .العاب ، .اوامر).
-  - أوامر الإدارة تبقى بدون بريفكس زي ما كانت (تنبيه ، برا ، سجن ... إلخ).
+  - أوامر الإدارة تبقى بدون بريفكس زي ما كانت (تحذير ، برا ، سجن ... إلخ).
   - غيّر أسماء الرتب بالأسفل (ROLE NAMES) إذا كانت أسماء رتبك بالسيرفر
     مختلفة شوي عن الأسماء المكتوبة هنا (لازم تطابق بالضبط حرف بحرف).
   - لازم تسوي رتبتين يدويًا بالسيرفر عشان "سجن" و"اخرس" يشتغلوا صح:
@@ -214,11 +214,8 @@ def save_json(path: str, data: dict) -> None:
 
 
 # ============================================================
-# 1) نظام التنبيهات
+# 1) نظام التحذيرات (أمر "تحذير" + أزرار الأسباب)
 # ============================================================
-REQUIRED_WARN_PERMISSION = "manage_messages"
-
-
 def add_warn(guild_id: int, member_id: int, reason: str, moderator_id: int) -> int:
     data = load_json(WARNS_FILE)
     gid, mid = str(guild_id), str(member_id)
@@ -240,7 +237,7 @@ def get_warn_count(guild_id: int, member_id: int) -> int:
 
 
 def find_warn_log_channel(guild: discord.Guild) -> discord.TextChannel | None:
-    """يدور على روم مخصص للوق التنبيهات بالاسم (يتحمل حروف كبيرة/صغيرة ومسافات/شرطات)."""
+    """يدور على روم مخصص للوق التحذيرات بالاسم (يتحمل حروف كبيرة/صغيرة ومسافات/شرطات)."""
     for ch in guild.text_channels:
         normalized_name = ch.name.lower().replace("_", "-")
         for target_name in WARN_LOG_CHANNEL_NAMES:
@@ -250,15 +247,15 @@ def find_warn_log_channel(guild: discord.Guild) -> discord.TextChannel | None:
 
 
 async def send_warn_log(guild: discord.Guild, target, moderator, reason, warn_number, channel_name):
-    """يرسل لوق التنبيه لروم مخصص — عبر الويب هوك أولًا، وإذا ما نجح يرسله مباشرة عبر البوت لروم اللوق."""
+    """يرسل لوق التحذير لروم مخصص — عبر الويب هوك أولًا، وإذا ما نجح يرسله مباشرة عبر البوت لروم اللوق."""
     embed = discord.Embed(
-        title="⚠️ تم تسجيل تنبيه رسمي",
+        title="⚠️ تم تسجيل تحذير رسمي",
         color=discord.Color.orange(),
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="العضو", value=target.mention, inline=True)
     embed.add_field(name="بواسطة", value=moderator.mention, inline=True)
-    embed.add_field(name="رقم التنبيه", value=f"#{warn_number}", inline=True)
+    embed.add_field(name="رقم التحذير", value=f"#{warn_number}", inline=True)
     embed.add_field(name="السبب", value=reason or "لم يُذكر سبب", inline=False)
     embed.add_field(name="القناة", value=f"#{channel_name}", inline=True)
     embed.set_footer(text=f"معرف العضو: {target.id}")
@@ -269,7 +266,7 @@ async def send_warn_log(guild: discord.Guild, target, moderator, reason, warn_nu
 
     if WARN_LOG_WEBHOOK_URL:
         payload = {
-            "username": "نظام التنبيهات",
+            "username": "نظام التحذيرات",
             "embeds": [embed.to_dict()],
         }
         try:
@@ -292,37 +289,191 @@ async def send_warn_log(guild: discord.Guild, target, moderator, reason, warn_nu
                 print("[WarnSystem] ما عندي صلاحية أرسل بروم اللوق.")
 
     if not delivered:
-        print("[WarnSystem] ⚠️ ما قدرت أوصل لوق التنبيه — لا الويب هوك اشتغل ولا لقيت روم اسمه warn-log.")
+        print("[WarnSystem] ⚠️ ما قدرت أوصل لوق التحذير — لا الويب هوك اشتغل ولا لقيت روم اسمه warn-log.")
+
+
+# ---------- أزرار الأسباب (تستخدم لأمر تحذير ولكل أوامر العقوبات) ----------
+# 20 زر سبب (4 صفوف × 5) + صف أخير فيه "سبب آخر" و"إلغاء". عدّل القائمة زي ما تبي.
+REASON_BUTTONS = [
+    ("🤬", "سب وشتم"), ("📢", "إزعاج"), ("🔁", "سبام"), ("🔗", "نشر روابط"), ("📣", "إعلان وترويج"),
+    ("😡", "استفزاز"), ("⚔️", "إثارة مشاكل"), ("😈", "تهديد"), ("🚷", "عنصرية"), ("🔞", "تحرش"),
+    ("🙈", "محتوى غير لائق"), ("🏷️", "منشن عشوائي"), ("🔊", "إزعاج صوتي"), ("🎵", "ميوزك مزعج"), ("🖕", "قلة احترام للإدارة"),
+    ("📜", "مخالفة القوانين"), ("🖼️", "اسم أو صورة مخالفة"), ("🎭", "انتحال شخصية"), ("💥", "تخريب"), ("♻️", "تكرار المخالفة"),
+]
+REASON_TIMEOUT = 60
+
+
+def is_staff_member(member) -> bool:
+    """أي إداري (Trial Moderator وفوق) أو مالك السيرفر أو صاحب صلاحية Administrator."""
+    if not isinstance(member, discord.Member):
+        return False
+    if member.id == member.guild.owner_id or member.guild_permissions.administrator:
+        return True
+    return has_role(member, TRIAL_ROLES)
+
+
+class ReasonButton(discord.ui.Button):
+    def __init__(self, emoji_text: str, text: str, idx: int):
+        super().__init__(label=f"{emoji_text} {text}", style=discord.ButtonStyle.secondary, row=idx // 5)
+        self.reason_text = text
+
+    async def callback(self, interaction: discord.Interaction):
+        view: ReasonView = self.view
+        if not await view.check_owner(interaction):
+            return
+        await view.finish(interaction, self.reason_text)
+
+
+class CustomReasonModal(discord.ui.Modal, title="سبب آخر"):
+    reason_input = discord.ui.TextInput(label="اكتب السبب", placeholder="اكتب السبب هنا...",
+                                         max_length=200, required=True)
+
+    def __init__(self, parent_view: "ReasonView"):
+        super().__init__()
+        self.parent_view = parent_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        text = str(self.reason_input.value).strip() or "لم يُذكر سبب"
+        await self.parent_view.finish(interaction, text)
+
+
+class CustomReasonButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="✍️ سبب آخر", style=discord.ButtonStyle.primary, row=4)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: ReasonView = self.view
+        if not await view.check_owner(interaction):
+            return
+        await interaction.response.send_modal(CustomReasonModal(view))
+
+
+class CancelReasonButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="❌ إلغاء", style=discord.ButtonStyle.danger, row=4)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: ReasonView = self.view
+        if not await view.check_owner(interaction):
+            return
+        await view.cancel(interaction)
+
+
+class ReasonView(discord.ui.View):
+    """رسالة فيها أزرار أسباب (مثل أزرار الروليت)، بس الإداري اللي كتب الأمر يقدر يضغط."""
+
+    def __init__(self, moderator: discord.Member, target, action_title: str, action_emoji: str):
+        super().__init__(timeout=REASON_TIMEOUT)
+        self.moderator = moderator
+        self.target = target
+        self.action_title = action_title
+        self.action_emoji = action_emoji
+        self.reason: str | None = None
+        self.message: discord.Message | None = None
+        for i, (emoji_text, text) in enumerate(REASON_BUTTONS):
+            self.add_item(ReasonButton(emoji_text, text, i))
+        self.add_item(CustomReasonButton())
+        self.add_item(CancelReasonButton())
+
+    def _embed(self, heading: str, color: discord.Color, reason: str | None = None, footer: str = "") -> discord.Embed:
+        embed = discord.Embed(title=f"{self.action_emoji} {heading}", color=color)
+        desc = f"**العضو:** {self.target.mention}\n**الإداري:** {self.moderator.mention}"
+        if reason:
+            desc += f"\n**السبب:** {reason}"
+        embed.description = desc
+        embed.set_thumbnail(url=self.target.display_avatar.url)
+        if footer:
+            embed.set_footer(text=footer)
+        return embed
+
+    def prompt_embed(self) -> discord.Embed:
+        return self._embed(f"{self.action_title} — اختر السبب", discord.Color.orange(),
+                            footer=f"اضغط على السبب من الأزرار تحت (عندك {REASON_TIMEOUT} ثانية)")
+
+    async def check_owner(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.moderator.id:
+            await interaction.response.send_message("⚠️ هذي الأزرار للإداري اللي كتب الأمر بس.", ephemeral=True)
+            return False
+        return True
+
+    async def finish(self, interaction: discord.Interaction, reason: str):
+        self.reason = reason
+        for c in self.children:
+            c.disabled = True
+        embed = self._embed(self.action_title, discord.Color.green(), reason=reason, footer="تم اختيار السبب ✅")
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+
+    async def cancel(self, interaction: discord.Interaction):
+        self.reason = None
+        for c in self.children:
+            c.disabled = True
+        embed = self._embed(self.action_title, discord.Color.red(), footer="تم إلغاء الأمر ❌")
+        await interaction.response.edit_message(embed=embed, view=self)
+        self.stop()
+
+    async def on_timeout(self):
+        for c in self.children:
+            c.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(
+                    embed=self._embed(self.action_title, discord.Color.dark_grey(),
+                                       footer="⏳ انتهى الوقت — ما تم تنفيذ شي"),
+                    view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass
+
+
+async def ask_reason(message: discord.Message, target, action_title: str, action_emoji: str) -> str | None:
+    """يرسل رسالة أزرار أسباب وينتظر الإداري يختار. يرجع السبب، أو None لو لغى أو انتهى الوقت."""
+    view = ReasonView(message.author, target, action_title, action_emoji)
+    view.message = await message.channel.send(embed=view.prompt_embed(), view=view)
+    await view.wait()
+    return view.reason
+
+
+async def get_reason(message: discord.Message, args: str, target, action_title: str, action_emoji: str) -> str | None:
+    """لو الإداري كتب السبب بالأمر نستخدمه مباشرة، وإلا نطلع له أزرار الأسباب."""
+    typed = strip_mentions(args, message.mentions)
+    if typed:
+        return typed
+    return await ask_reason(message, target, action_title, action_emoji)
+
+
+WARN_COMMAND_PATTERN = re.compile(r"^تحذير(?:\s|$)")
 
 
 async def handle_warn_command(message: discord.Message):
     author = message.author
-    if not isinstance(author, discord.Member) or not getattr(
-        author.guild_permissions, REQUIRED_WARN_PERMISSION
-    ):
-        await message.channel.send(f"{author.mention} ❌ ليس لديك صلاحية.")
+    if not is_staff_member(author):
+        await message.channel.send(f"{author.mention} ❌ ما عندك صلاحية لهذا الأمر.")
         return
 
     if not message.mentions:
-        await message.channel.send(f"{author.mention} ⚠️ الصيغة: `تنبيه @العضو السبب`")
+        await message.channel.send(f"{author.mention} ⚠️ الصيغة: `تحذير @العضو` (وبعدها تختار السبب من الأزرار)")
         return
 
     target = message.mentions[0]
-    reason = message.content.replace("تنبيه", "", 1)
-    for m in message.mentions:
-        reason = reason.replace(f"<@{m.id}>", "").replace(f"<@!{m.id}>", "")
-    reason = reason.strip() or "لم يُذكر سبب"
+    if target.bot or target.id == author.id:
+        await message.channel.send(f"{author.mention} ⚠️ ما تقدر تحذر نفسك أو بوت.")
+        return
+
+    typed = strip_mentions(message.content.strip()[len("تحذير"):], message.mentions)
+    reason = typed or await ask_reason(message, target, "تحذير", "⚠️")
+    if reason is None:
+        return
 
     warn_number = add_warn(message.guild.id, target.id, reason, author.id)
     await send_warn_log(message.guild, target, author, reason, warn_number, message.channel.name)
-    await message.channel.send(f"✅ تسجل تنبيه رقم **#{warn_number}** بحق {target.mention}")
+    await message.channel.send(f"✅ تم تسجيل تحذير رقم **#{warn_number}** بحق {target.mention} — السبب: {reason}")
 
 
-@bot.command(name="تنبيهاته", aliases=["warns"])
+@bot.command(name="تحذيراته", aliases=["تنبيهاته", "warns"])
 async def show_warns(ctx: commands.Context, member: discord.Member = None):
     member = member or ctx.author
     count = get_warn_count(ctx.guild.id, member.id)
-    await ctx.send(f"📋 لدى {member.mention} **{count}** تنبيه/تنبيهات مسجلة.")
+    await ctx.send(f"📋 لدى {member.mention} **{count}** تحذير/تحذيرات مسجلة.")
 
 
 # ============================================================
@@ -626,18 +777,120 @@ SPELL_BANK = [
     ("شنس", "شمس"), ("سيارت", "سيارة"), ("كتاپ", "كتاب"),
 ]
 
-FLAG_BANK = [
-    ("🇸🇦", "السعودية"), ("🇪🇬", "مصر"), ("🇦🇪", "الإمارات"), ("🇰🇼", "الكويت"),
-    ("🇯🇴", "الأردن"), ("🇲🇦", "المغرب"), ("🇶🇦", "قطر"), ("🇧🇭", "البحرين"),
-    ("🇴🇲", "عمان"), ("🇮🇶", "العراق"), ("🇱🇧", "لبنان"), ("🇹🇷", "تركيا"),
-    ("🇫🇷", "فرنسا"), ("🇯🇵", "اليابان"), ("🇧🇷", "البرازيل"),
-]
 
+def answer_matches(content: str, names: list[str]) -> bool:
+    """يطابق إجابة اللاعب مع قائمة إجابات مقبولة (كلمة كاملة، يتجاهل 'ال' والهمزات والتشكيل)."""
+    text = re.sub(r"[^\w\s]", " ", normalize(content))
+    words = text.split()
+    if not words or len(words) > 6:
+        return False
+    padded = " " + " ".join(words) + " "
+    for name in names:
+        n = re.sub(r"[^\w\s]", " ", normalize(name))
+        n = " ".join(n.split())
+        if not n:
+            continue
+        variants = {n}
+        if n.startswith("ال") and len(n) > 3:
+            variants.add(n[2:])
+        else:
+            variants.add("ال" + n)
+        for v in variants:
+            if f" {v} " in padded:
+                return True
+    return False
+
+
+# ---------- أعلام: 3 مستويات (متوسط / صعب / صعب جدًا) — كل علم معه أسماء مقبولة ----------
+FLAG_TIERS = {
+    "متوسط": {
+        "reward": (25, 45),
+        "flags": [
+            ("🇨🇭", ["سويسرا"]), ("🇸🇪", ["السويد"]), ("🇳🇴", ["النرويج"]), ("🇩🇰", ["الدنمارك"]),
+            ("🇫🇮", ["فنلندا"]), ("🇵🇹", ["البرتغال"]), ("🇬🇷", ["اليونان"]), ("🇦🇷", ["الأرجنتين"]),
+            ("🇲🇽", ["المكسيك"]), ("🇨🇦", ["كندا"]), ("🇦🇺", ["أستراليا"]),
+            ("🇰🇷", ["كوريا الجنوبية", "جنوب كوريا"]), ("🇰🇵", ["كوريا الشمالية", "شمال كوريا"]),
+            ("🇮🇳", ["الهند"]), ("🇵🇰", ["باكستان"]), ("🇮🇷", ["إيران"]), ("🇱🇾", ["ليبيا"]),
+            ("🇹🇳", ["تونس"]), ("🇩🇿", ["الجزائر"]), ("🇸🇩", ["السودان"]), ("🇾🇪", ["اليمن"]),
+            ("🇸🇾", ["سوريا"]), ("🇵🇸", ["فلسطين"]), ("🇮🇩", ["إندونيسيا"]), ("🇲🇾", ["ماليزيا"]),
+            ("🇪🇸", ["إسبانيا"]), ("🇮🇹", ["إيطاليا"]), ("🇩🇪", ["ألمانيا"]), ("🇷🇺", ["روسيا"]),
+            ("🇳🇱", ["هولندا"]), ("🇧🇪", ["بلجيكا"]), ("🇦🇹", ["النمسا"]), ("🇵🇱", ["بولندا"]),
+            ("🇺🇦", ["أوكرانيا"]), ("🇨🇺", ["كوبا"]), ("🇨🇴", ["كولومبيا"]), ("🇨🇱", ["تشيلي"]),
+            ("🇵🇪", ["بيرو"]), ("🇻🇳", ["فيتنام"]), ("🇹🇭", ["تايلاند"]), ("🇵🇭", ["الفلبين"]),
+            ("🇸🇴", ["الصومال"]), ("🇲🇷", ["موريتانيا"]), ("🇨🇳", ["الصين"]),
+        ],
+    },
+    "صعب": {
+        "reward": (40, 70),
+        "flags": [
+            ("🇨🇿", ["التشيك", "تشيكيا", "جمهورية التشيك"]), ("🇭🇺", ["المجر"]), ("🇷🇴", ["رومانيا"]),
+            ("🇧🇬", ["بلغاريا"]), ("🇷🇸", ["صربيا"]), ("🇭🇷", ["كرواتيا"]), ("🇸🇰", ["سلوفاكيا"]),
+            ("🇸🇮", ["سلوفينيا"]), ("🇮🇪", ["أيرلندا", "جمهورية أيرلندا"]), ("🇮🇸", ["آيسلندا"]),
+            ("🇪🇪", ["إستونيا"]), ("🇱🇻", ["لاتفيا"]), ("🇱🇹", ["ليتوانيا"]),
+            ("🇧🇾", ["بيلاروسيا", "روسيا البيضاء"]), ("🇬🇪", ["جورجيا"]), ("🇦🇲", ["أرمينيا"]),
+            ("🇦🇿", ["أذربيجان"]), ("🇰🇿", ["كازاخستان"]), ("🇺🇿", ["أوزبكستان"]), ("🇦🇫", ["أفغانستان"]),
+            ("🇧🇩", ["بنغلاديش"]), ("🇱🇰", ["سريلانكا"]), ("🇳🇵", ["نيبال"]), ("🇲🇳", ["منغوليا"]),
+            ("🇰🇭", ["كمبوديا"]), ("🇲🇲", ["ميانمار", "بورما"]), ("🇱🇦", ["لاوس"]), ("🇳🇬", ["نيجيريا"]),
+            ("🇰🇪", ["كينيا"]), ("🇪🇹", ["إثيوبيا"]), ("🇬🇭", ["غانا"]), ("🇹🇿", ["تنزانيا"]),
+            ("🇸🇳", ["السنغال"]), ("🇨🇮", ["ساحل العاج", "كوت ديفوار"]), ("🇿🇦", ["جنوب أفريقيا", "جنوب افريقيا"]),
+            ("🇻🇪", ["فنزويلا"]), ("🇪🇨", ["الإكوادور"]), ("🇺🇾", ["أوروغواي", "اوروجواي", "اورغواي"]),
+            ("🇵🇾", ["باراغواي", "باراجواي"]), ("🇧🇴", ["بوليفيا"]), ("🇨🇷", ["كوستاريكا"]),
+            ("🇵🇦", ["بنما"]), ("🇯🇲", ["جامايكا"]), ("🇳🇿", ["نيوزيلندا", "نيوزلندا"]),
+            ("🇲🇹", ["مالطا"]), ("🇨🇾", ["قبرص"]), ("🇱🇺", ["لوكسمبورغ", "لكسمبورغ"]),
+        ],
+    },
+    "صعب جدًا": {
+        "reward": (60, 100),
+        "flags": [
+            ("🇲🇰", ["مقدونيا الشمالية", "مقدونيا", "شمال مقدونيا"]), ("🇦🇱", ["ألبانيا"]),
+            ("🇲🇪", ["الجبل الأسود", "مونتينيغرو"]), ("🇧🇦", ["البوسنة والهرسك", "البوسنة"]),
+            ("🇲🇩", ["مولدوفا"]), ("🇱🇮", ["ليختنشتاين", "ليخنشتاين", "ليختشتاين"]),
+            ("🇲🇨", ["موناكو"]), ("🇸🇲", ["سان مارينو"]), ("🇦🇩", ["أندورا"]),
+            ("🇹🇯", ["طاجيكستان"]), ("🇰🇬", ["قرغيزستان", "قيرغيزستان"]), ("🇹🇲", ["تركمانستان"]),
+            ("🇧🇹", ["بوتان"]), ("🇲🇻", ["جزر المالديف", "المالديف"]), ("🇧🇳", ["بروناي"]),
+            ("🇹🇱", ["تيمور الشرقية"]), ("🇵🇬", ["بابوا غينيا الجديدة", "بابوا غينيا", "بابوا"]),
+            ("🇫🇯", ["فيجي", "فيدجي"]), ("🇼🇸", ["ساموا"]), ("🇹🇴", ["تونغا", "تونجا"]),
+            ("🇲🇬", ["مدغشقر"]), ("🇲🇿", ["موزمبيق"]), ("🇿🇼", ["زيمبابوي"]), ("🇧🇼", ["بوتسوانا"]),
+            ("🇳🇦", ["ناميبيا"]), ("🇲🇱", ["مالي"]), ("🇳🇪", ["النيجر"]), ("🇹🇩", ["تشاد"]),
+            ("🇧🇫", ["بوركينا فاسو"]), ("🇨🇲", ["الكاميرون"]),
+            ("🇨🇩", ["الكونغو الديمقراطية", "الكونغو", "الكونجو"]), ("🇦🇴", ["أنغولا", "انجولا"]),
+            ("🇷🇼", ["رواندا"]), ("🇺🇬", ["أوغندا", "اوجندا"]), ("🇪🇷", ["إريتريا"]),
+            ("🇸🇨", ["سيشل"]), ("🇲🇺", ["موريشيوس"]), ("🇭🇹", ["هايتي"]),
+            ("🇬🇹", ["غواتيمالا", "جواتيمالا"]), ("🇭🇳", ["هندوراس"]), ("🇳🇮", ["نيكاراغوا", "نيكاراجوا"]),
+            ("🇸🇻", ["السلفادور"]), ("🇧🇿", ["بليز"]), ("🇬🇾", ["غيانا", "جيانا"]), ("🇸🇷", ["سورينام"]),
+            ("🇧🇧", ["بربادوس"]), ("🇧🇸", ["جزر البهاما", "البهاما"]),
+            ("🇹🇹", ["ترينيداد وتوباغو", "ترينيداد"]), ("🇹🇬", ["توغو"]), ("🇧🇯", ["بنين"]),
+            ("🇿🇲", ["زامبيا"]), ("🇲🇼", ["مالاوي"]), ("🇱🇸", ["ليسوتو"]),
+        ],
+    },
+}
+
+# ---------- ايموجي: رموز مركبة (أفلام / شخصيات / قصص / أماكن) — أصعب من رمز واحد ----------
+# كل عنصر: (الرموز, [الأجوبة المقبولة], التصنيف)
 EMOJI_GUESS_BANK = [
-    ("🦁", "أسد"), ("🐘", "فيل"), ("🍕", "بيتزا"), ("🍔", "برجر"),
-    ("⚽", "كرة قدم"), ("🏀", "كرة سلة"), ("🚗", "سيارة"), ("✈️", "طائرة"),
-    ("🌙", "قمر"), ("☀️", "شمس"), ("🌧️", "مطر"), ("❄️", "ثلج"),
-    ("🐬", "دولفين"), ("🐢", "سلحفاة"), ("🎸", "قيتار"),
+    ("🕷️👨", ["سبايدرمان", "سبايدر مان", "سبيدرمان", "الرجل العنكبوت"], "شخصية"),
+    ("🦇👨", ["باتمان", "بات مان", "الرجل الوطواط"], "شخصية"),
+    ("🧊🚢💔", ["تايتانيك", "titanic"], "فيلم"),
+    ("🦁👑🌅", ["الأسد الملك", "اسد الملك", "the lion king"], "فيلم"),
+    ("🐠🔍🌊", ["نيمو", "البحث عن نيمو", "finding nemo"], "فيلم"),
+    ("❄️👸⛄", ["فروزن", "ملكة الثلج", "frozen"], "فيلم"),
+    ("💍🧙‍♂️🌋", ["سيد الخواتم", "the lord of the rings", "لورد اوف ذا رينقز"], "فيلم"),
+    ("🍎👸😴", ["بياض الثلج", "سنو وايت", "snow white"], "قصة"),
+    ("🧞‍♂️🪔", ["علاء الدين", "علاء الدين والمصباح السحري", "المصباح السحري"], "قصة"),
+    ("🐢🐇🏁", ["السلحفاة والأرنب", "الأرنب والسلحفاة"], "قصة"),
+    ("🏴‍☠️🦜", ["قراصنة الكاريبي", "قراصنة", "قرصان"], "فيلم"),
+    ("🦖🏞️", ["جوراسيك بارك", "جوراسيك", "حديقة الديناصورات"], "فيلم"),
+    ("🛸👽", ["فضائيين", "كائنات فضائية", "كائن فضائي", "فضائي"], "شيء"),
+    ("🧛🩸", ["دراكولا", "مصاص دماء", "مصاص الدماء"], "شخصية"),
+    ("🧟🧠", ["زومبي", "الزومبي"], "شيء"),
+    ("🦸‍♂️🇺🇸🛡️", ["كابتن أمريكا", "captain america"], "شخصية"),
+    ("⚡🏃", ["فلاش", "الفلاش", "the flash"], "شخصية"),
+    ("🌑☀️", ["كسوف", "كسوف الشمس"], "ظاهرة"),
+    ("🕰️🔙🚗", ["العودة للمستقبل", "back to the future"], "فيلم"),
+    ("🍫🏭", ["مصنع الشوكولاتة", "تشارلي ومصنع الشوكولاتة", "ويلي ونكا"], "فيلم"),
+    ("🗼🥖🇫🇷", ["باريس"], "مدينة"),
+    ("🗽🇺🇸🍎", ["نيويورك"], "مدينة"),
+    ("🎡🏰🐭", ["ديزني لاند", "ديزني"], "مكان"),
 ]
 
 COMPOUND_BANK = [
@@ -646,10 +899,27 @@ COMPOUND_BANK = [
     ("🌽🍿", "فشار"), ("🍇🧃", "عصير عنب"), ("🐝🍯", "عسل"),
 ]
 
+# ---------- ألوان: أسئلة خلط ألوان ومعلومات عن الألوان (بدل "وش لون البرتقالة") ----------
+# كل عنصر: (السؤال, [الأجوبة المقبولة])
 COLOR_BANK = [
-    ("🍋", "أصفر"), ("🍎", "أحمر"), ("🥦", "أخضر"), ("🍇", "بنفسجي"),
-    ("🍊", "برتقالي"), ("⚫", "أسود"), ("⚪", "أبيض"), ("🌊", "أزرق"),
-    ("🟤", "بني"), ("🩷", "وردي"),
+    ("وش اللون الناتج من خلط **الأصفر** مع **الأزرق**؟", ["أخضر"]),
+    ("وش اللون الناتج من خلط **الأحمر** مع **الأصفر**؟", ["برتقالي"]),
+    ("وش اللون الناتج من خلط **الأحمر** مع **الأزرق**؟", ["بنفسجي", "موف", "أرجواني"]),
+    ("وش اللون الناتج من خلط **الأبيض** مع **الأسود**؟", ["رمادي", "رصاصي"]),
+    ("وش اللون الناتج من خلط **الأحمر** مع **الأبيض**؟", ["وردي", "زهري"]),
+    ("وش اللون الناتج من خلط **الأزرق** مع **الأبيض**؟", ["سماوي", "أزرق فاتح", "أزرق سماوي"]),
+    ("وش اللون الناتج من خلط **الأخضر** مع **الأحمر** (بالأصباغ)؟", ["بني", "قهوائي"]),
+    ("وش لون **الصندوق الأسود** بالطائرات فعليًا؟", ["برتقالي"]),
+    ("وش لون **دم الأخطبوط**؟", ["أزرق"]),
+    ("وش لون **جلد الدب القطبي** تحت الفرو؟", ["أسود"]),
+    ("وش لون حجر **الياقوت** الأصلي؟", ["أحمر"]),
+    ("وش لون حجر **الزمرد**؟", ["أخضر"]),
+    ("وش اللون اللي يتكون من **اجتماع كل ألوان الضوء**؟", ["أبيض"]),
+    ("وش اللون اللي **يمتص كل ألوان الضوء**؟", ["أسود"]),
+    ("وش اللون **المكمّل للأزرق** بعجلة الألوان؟", ["برتقالي"]),
+    ("وش اللون **المكمّل للأحمر** بعجلة الألوان؟", ["أخضر"]),
+    ("وش اللون **المكمّل للأصفر** بعجلة الألوان؟", ["بنفسجي", "موف"]),
+    ("وش اللون المسؤول عن لون النباتات (مادة **الكلوروفيل**)؟", ["أخضر"]),
 ]
 
 PHRASE_BANK = [
@@ -731,18 +1001,22 @@ async def correct_cmd(ctx: commands.Context):
 
 @bot.command(name="اعلام")
 async def flags_cmd(ctx: commands.Context):
-    flag, country = random.choice(FLAG_BANK)
-    await start_round(ctx.channel, title="خمن الدولة", prompt=f"وش هذي الدولة؟ {flag}",
-                       checker=lambda c: normalize(country) in normalize(c),
-                       reward=(20, 40), reveal=country, game_key="اعلام")
+    tier = random.choice(list(FLAG_TIERS))
+    info = FLAG_TIERS[tier]
+    flag, names = random.choice(info["flags"])
+    await start_round(ctx.channel, title=f"خمن الدولة — مستوى {tier}",
+                       prompt=f"وش هذي الدولة؟ {flag}",
+                       checker=lambda c: answer_matches(c, names),
+                       reward=info["reward"], reveal=names[0], timeout=60, game_key="اعلام")
 
 
 @bot.command(name="ايموجي")
 async def emoji_guess_cmd(ctx: commands.Context):
-    emoji, answer = random.choice(EMOJI_GUESS_BANK)
-    await start_round(ctx.channel, title="خمن من الرمز", prompt=f"وش تتوقع هذا الرمز؟ {emoji}",
-                       checker=lambda c: normalize(c) == normalize(answer),
-                       reward=(15, 30), reveal=answer, game_key="ايموجي")
+    emojis, names, category = random.choice(EMOJI_GUESS_BANK)
+    await start_round(ctx.channel, title="خمن من الرموز",
+                       prompt=f"وش تتوقع هالرموز؟ {emojis}\n📂 التصنيف: **{category}**",
+                       checker=lambda c: answer_matches(c, names),
+                       reward=(25, 45), reveal=names[0], timeout=60, game_key="ايموجي")
 
 
 @bot.command(name="ادمج")
@@ -755,10 +1029,10 @@ async def combine_cmd(ctx: commands.Context):
 
 @bot.command(name="الوان")
 async def colors_cmd(ctx: commands.Context):
-    emoji, color = random.choice(COLOR_BANK)
-    await start_round(ctx.channel, title="خمن اللون", prompt=f"وش اللون المرتبط بـ {emoji}؟",
-                       checker=lambda c: normalize(c) == normalize(color),
-                       reward=(15, 25), reveal=color, game_key="الوان")
+    question, names = random.choice(COLOR_BANK)
+    await start_round(ctx.channel, title="خمن اللون", prompt=question,
+                       checker=lambda c: answer_matches(c, names),
+                       reward=(20, 35), reveal=names[0], timeout=45, game_key="الوان")
 
 
 @bot.command(name="اسرع")
@@ -2415,13 +2689,13 @@ GAME_LIST = {
         (".فكك", "فكك الكلمة حرف حرف (بكره ← ب ك ر ه)."),
         (".رتب", "رتب حروف الكلمة المبعثرة."),
         (".ادمج", "خمن الكلمة من دمج رمزين."),
-        (".اعلام", "خمن الدولة من علمها."),
+        (".اعلام", "خمن الدولة من علمها (مستويات: متوسط / صعب / صعب جدًا)."),
         (".اعكس", "اكتب الكلمة بالعكس."),
         (".حرف", "اذكر كلمة بالفئة المطلوبة تبدأ بحرف معين."),
         (".صحح", "صحح الكلمة المكتوبة غلط."),
         (".ترتيب", "رتب الأرقام تصاعديًا."),
-        (".الوان", "خمن اللون من الرمز."),
-        (".ايموجي", "خمن الكلمة من الرمز التعبيري."),
+        (".الوان", "أسئلة خلط ألوان ومعلومات عن الألوان."),
+        (".ايموجي", "خمن الفيلم/الشخصية/القصة من رموز مركبة."),
         (".اكشف", "لعبة الذاكرة، طابق البطاقات."),
     ],
 }
@@ -2443,13 +2717,13 @@ GAME_HELP = {
     "فكك": "البوت يعطي كلمة، وأول وحد يكتبها حرف حرف وبين كل حرف مسافة يفوز. مثال: بكره ← ب ك ر ه",
     "رتب": "البوت يبعثر حروف كلمة، وأول وحد يرتبها صح يفوز.",
     "ادمج": "رمزين مع بعض يمثلون كلمة، خمنوا الكلمة اللي يدل عليها الدمج.",
-    "اعلام": "البوت يعرض علم دولة، وأول وحد يكتب اسم الدولة صح يفوز.",
+    "اعلام": "البوت يعرض علم دولة بمستوى عشوائي (متوسط / صعب / صعب جدًا)، وأول وحد يكتب اسم الدولة صح يفوز. كل ما صعب المستوى كبرت النقاط.",
     "اعكس": "البوت يعطي كلمة، واكتبوها بالعكس (آخر حرف أول حرف).",
     "حرف": "البوت يحدد فئة وحرف، وأول وحد يذكر كلمة من الفئة تبدأ بنفس الحرف يفوز.",
     "صحح": "البوت يكتب كلمة غلط إملائيًا، وأول وحد يصححها صح يفوز.",
     "ترتيب": "البوت يعطي 6 أرقام مبعثرة، رتبوها تصاعديًا وافصلوا بينها بمسافة.",
-    "الوان": "البوت يعرض رمز، وقولوا وش اللون المرتبط فيه.",
-    "ايموجي": "البوت يعرض رمز تعبيري وحد، وخمنوا وش يمثل.",
+    "الوان": "البوت يسأل سؤال عن الألوان (خلط ألوان، لون شي معروف، ألوان مكمّلة...)، وأول وحد يجاوب صح يفوز.",
+    "ايموجي": "البوت يعرض رموز مركبة (وتحتها التصنيف: فيلم / شخصية / قصة / مكان...)، وأول وحد يخمن المقصود يفوز.",
     "اكشف": "لعبة ذاكرة فردية، دور بطاقتين متطابقتين من شبكة 16 بطاقة بأقل عدد محاولات ممكن.",
 }
 
@@ -2494,15 +2768,30 @@ async def commands_list_cmd(ctx: commands.Context):
         "`.سجلي [@عضو]` — عدد مرات الفوز والخسارة بالألعاب.",
         "`.متجر` — تشوف الأشياء المتوفرة بالمتجر.",
         "`.شراء <العنصر>` — تشتري شي من المتجر بنقاطك.",
-        "\n__⚠️ التنبيهات__",
-        "`.تنبيهاته [@عضو]` — تشوف عدد التنبيهات المسجلة على عضو (أو عليك).",
+        "\n__⚠️ التحذيرات__",
+        "`.تحذيراته [@عضو]` — تشوف عدد التحذيرات المسجلة على عضو (أو عليك).",
         "\n__🎮 الألعاب__",
         "`.العاب` — قائمة كل الألعاب (الجماعية والفردية).",
         "`.شرح اسم_اللعبة` — شرح أي لعبة بالتفصيل.",
         "\n__ℹ️ عام__",
+        "`.قول <النص>` — البوت يكتب النص اللي تبيه.",
         "`.اوامر` — تعرض هذي القائمة.",
     ]
     await ctx.send("\n".join(lines))
+
+
+# ---------- .قول: البوت يكرر النص اللي تكتبه ----------
+@bot.command(name="قول")
+async def say_cmd(ctx: commands.Context, *, text: str = None):
+    if not text or not text.strip():
+        await ctx.send("⚠️ الصيغة: `.قول النص اللي تبيه`")
+        return
+    # عشان ما أحد يستغل البوت يتجاوز حماية الروابط
+    if ctx.guild is not None and message_has_blocked_link(text) and not is_link_exempt(ctx.author):
+        await ctx.send(f"{ctx.author.mention} ❌ ما أقدر أرسل روابط.")
+        return
+    # بدون منشنات (ما يمشي @everyone ولا @here ولا منشن رتب/أعضاء)
+    await ctx.send(text, allowed_mentions=discord.AllowedMentions.none())
 
 
 # ---------- قفل تشغيل الألعاب: بس اللي معه رول الألعاب ----------
@@ -2591,12 +2880,16 @@ async def reply(message: discord.Message, text: str):
 
 
 # ---------- إدارة الأعضاء ----------
+# ملاحظة: أوامر العقوبات (برا / ترحيل / تايم / اخرس / سجن / تنزيل / اصمت / بره / اطلع)
+# لو ما كتبت فيها سبب، البوت يطلع لك أزرار أسباب تختار منها (ولو كتبت السبب ينفذ مباشرة).
 async def cmd_ban(message: discord.Message, args: str):
     if not message.mentions:
         await reply(message, "⚠️ الصيغة: `برا @العضو السبب`")
         return
     target = message.mentions[0]
-    reason = strip_mentions(args, message.mentions) or "لم يُذكر سبب"
+    reason = await get_reason(message, args, target, "حظر", "🔨")
+    if reason is None:
+        return
     try:
         await target.ban(reason=reason)
         await reply(message, f"🔨 تم حظر {target.mention} — السبب: {reason}")
@@ -2622,7 +2915,9 @@ async def cmd_kick(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `ترحيل @العضو السبب`")
         return
     target = message.mentions[0]
-    reason = strip_mentions(args, message.mentions) or "لم يُذكر سبب"
+    reason = await get_reason(message, args, target, "طرد", "👢")
+    if reason is None:
+        return
     try:
         await target.kick(reason=reason)
         await reply(message, f"👢 تم طرد {target.mention} — السبب: {reason}")
@@ -2636,11 +2931,19 @@ async def cmd_timeout(message: discord.Message, args: str):
         return
     target = message.mentions[0]
     remainder = strip_mentions(args, message.mentions)
-    duration = parse_duration(remainder)
-    reason = " ".join(remainder.split()[1:]) if remainder.split() else "لم يُذكر سبب"
+    tokens = remainder.split()
+    if tokens and re.match(r"^\d+\s*[smhdدسي]?$", tokens[0]):
+        duration = parse_duration(tokens[0])
+        typed_reason = " ".join(tokens[1:])
+    else:
+        duration = timedelta(minutes=10)
+        typed_reason = remainder
+    reason = typed_reason or await ask_reason(message, target, "تايم", "⏱️")
+    if reason is None:
+        return
     try:
         await target.timeout(discord.utils.utcnow() + duration, reason=reason)
-        await reply(message, f"⏱️ تم إعطاء {target.mention} تايم لمدة {duration}")
+        await reply(message, f"⏱️ تم إعطاء {target.mention} تايم لمدة {duration} — السبب: {reason}")
         await log_mod_action(message.guild, "⏱️ تايم (كتم مؤقت)", message.author, target, reason,
                               {"المدة": str(duration)})
     except discord.Forbidden:
@@ -2662,10 +2965,13 @@ async def cmd_textmute(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `اخرس @العضو`")
         return
     target = message.mentions[0]
+    reason = await get_reason(message, args, target, "إسكات بالشات", "🔇")
+    if reason is None:
+        return
     role = await ensure_role(message.guild, MUTE_ROLE_NAME)
-    await target.add_roles(role, reason=f"بواسطة {message.author}")
-    await reply(message, f"🔇 تم إسكات {target.mention} بالشات")
-    await log_mod_action(message.guild, "🔇 إسكات بالشات", message.author, target)
+    await target.add_roles(role, reason=f"بواسطة {message.author} — {reason}")
+    await reply(message, f"🔇 تم إسكات {target.mention} بالشات — السبب: {reason}")
+    await log_mod_action(message.guild, "🔇 إسكات بالشات", message.author, target, reason)
 
 
 async def cmd_textunmute(message: discord.Message, args: str):
@@ -2685,6 +2991,9 @@ async def cmd_jail(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `سجن @العضو`")
         return
     target = message.mentions[0]
+    reason = await get_reason(message, args, target, "سجن", "🔒")
+    if reason is None:
+        return
     jail_role = await ensure_role(message.guild, JAIL_ROLE_NAME)
 
     keep_roles = [r for r in target.roles if r.name != "@everyone"]
@@ -2696,8 +3005,9 @@ async def cmd_jail(message: discord.Message, args: str):
 
     try:
         await target.remove_roles(*keep_roles, reason="سجن")
-        await target.add_roles(jail_role, reason=f"سجن بواسطة {message.author}")
-        await reply(message, f"🔒 تم سجن {target.mention}")
+        await target.add_roles(jail_role, reason=f"سجن بواسطة {message.author} — {reason}")
+        await reply(message, f"🔒 تم سجن {target.mention} — السبب: {reason}")
+        await log_mod_action(message.guild, "🔒 سجن عضو", message.author, target, reason)
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أسجن هذا العضو.")
 
@@ -2754,13 +3064,18 @@ async def cmd_remove_role(message: discord.Message, args: str):
     if role not in target.roles:
         await reply(message, f"⚠️ {target.mention} أصلًا ما عنده رتبة {role.name}")
         return
-    await target.remove_roles(role, reason=f"بواسطة {message.author}")
+    # اسم الرتبة ياخذ نص الأمر كله، فالسبب دايمًا من الأزرار
+    reason = await ask_reason(message, target, f"سحب رتبة {role.name}", "📤")
+    if reason is None:
+        return
+    await target.remove_roles(role, reason=f"بواسطة {message.author} — {reason}")
     data = load_json(ROLES_REMOVED_FILE)
     gid, mid = str(message.guild.id), str(target.id)
     data.setdefault(gid, {})
     data[gid][mid] = role.id
     save_json(ROLES_REMOVED_FILE, data)
-    await reply(message, f"📤 تم سحب رتبة {role.name} من {target.mention}")
+    await reply(message, f"📤 تم سحب رتبة {role.name} من {target.mention} — السبب: {reason}")
+    await log_mod_action(message.guild, "📤 سحب رتبة", message.author, target, reason, {"الرتبة": role.name})
 
 
 async def cmd_restore_role(message: discord.Message, args: str):
@@ -2878,8 +3193,12 @@ async def cmd_vc_kick(message: discord.Message, args: str):
         return
     target = message.mentions[0]
     if target.voice and target.voice.channel:
-        await target.move_to(None, reason=f"بواسطة {message.author}")
-        await reply(message, f"👋 تم إخراج {target.mention} من الروم الصوتي.")
+        reason = await get_reason(message, args, target, "إخراج من الروم الصوتي", "👋")
+        if reason is None:
+            return
+        await target.move_to(None, reason=f"بواسطة {message.author} — {reason}")
+        await reply(message, f"👋 تم إخراج {target.mention} من الروم الصوتي — السبب: {reason}")
+        await log_mod_action(message.guild, "👋 إخراج من الروم الصوتي", message.author, target, reason)
     else:
         await reply(message, "⚠️ العضو مو بروم صوتي.")
 
@@ -2889,8 +3208,12 @@ async def cmd_vc_mute(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `اصمت @العضو`")
         return
     target = message.mentions[0]
-    await target.edit(mute=True, reason=f"بواسطة {message.author}")
-    await reply(message, f"🔇 تم إسكات {target.mention} صوتيًا.")
+    reason = await get_reason(message, args, target, "إسكات صوتي", "🔇")
+    if reason is None:
+        return
+    await target.edit(mute=True, reason=f"بواسطة {message.author} — {reason}")
+    await reply(message, f"🔇 تم إسكات {target.mention} صوتيًا — السبب: {reason}")
+    await log_mod_action(message.guild, "🔇 إسكات صوتي", message.author, target, reason)
 
 
 async def cmd_vc_unmute(message: discord.Message, args: str):
@@ -2956,11 +3279,16 @@ async def cmd_vc_kicklock(message: discord.Message, args: str):
         await reply(message, "⚠️ العضو مو داخل روم صوتي.")
         return
     channel = target.voice.channel
-    await target.move_to(None, reason=f"بواسطة {message.author}")
+    reason = await get_reason(message, args, target, "طرد من الصوت وقفل الروم", "🚫")
+    if reason is None:
+        return
+    await target.move_to(None, reason=f"بواسطة {message.author} — {reason}")
     overwrite = channel.overwrites_for(message.guild.default_role)
     overwrite.connect = False
     await channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-    await reply(message, f"🚫 تم طرد {target.mention} وقفل روم {channel.name}")
+    await reply(message, f"🚫 تم طرد {target.mention} وقفل روم {channel.name} — السبب: {reason}")
+    await log_mod_action(message.guild, "🚫 طرد من الصوت وقفل الروم", message.author, target, reason,
+                          {"الروم": channel.name})
 
 
 async def cmd_vc_allow(message: discord.Message, args: str):
@@ -3044,16 +3372,16 @@ ADMIN_HELP_SECTIONS = [
         (["ترحيل", "كيك"], "ترحيل / كيك @عضو [السبب]", "طرد عضو من السيرفر.", None),
         (["تايم", "اص"], "تايم / اص @عضو [المدة] [السبب]", "كتم مؤقت (تايم أوت)، المدة مثل 10m أو 2h أو 1d.", None),
         (["تحرير"], "تحرير @عضو", "فك التايم عن عضو.", None),
-        (["اخرس"], "اخرس @عضو", "إسكات عضو بالشات (رتبة Muted).", None),
+        (["اخرس"], "اخرس @عضو [السبب]", "إسكات عضو بالشات (رتبة Muted).", None),
         (["تكلم"], "تكلم @عضو", "فك الإسكات بالشات.", None),
-        (["سجن"], "سجن @عضو", "سجن عضو (يسحب رتبه ويعطيه رتبة Jailed).", None),
+        (["سجن"], "سجن @عضو [السبب]", "سجن عضو (يسحب رتبه ويعطيه رتبة Jailed).", None),
         (["فك"], "فك @عضو", "فك السجن وإرجاع رتب العضو.", None),
         (["لقب", "اسم"], "لقب / اسم @عضو الاسم_الجديد", "تغيير لقب عضو بالسيرفر.", None),
-        (["تنزيل"], "تنزيل @عضو اسم_الرتبة", "سحب رتبة من عضو.", None),
+        (["تنزيل"], "تنزيل @عضو اسم_الرتبة", "سحب رتبة من عضو (السبب من الأزرار).", None),
         (["رجع"], "رجع @عضو", "إرجاع آخر رتبة انسحبت من العضو.", None),
         (["رول"], "رول @عضو اسم_الرتبة", "إعطاء رتبة لعضو (بشرط تكون أقل من رتبتك).", None),
-        (["تنبيه"], "تنبيه @عضو [السبب]", "تسجيل تنبيه رسمي على عضو.",
-         "أي عضو معه صلاحية **Manage Messages** (إدارة الرسائل)"),
+        (["تحذير"], "تحذير @عضو [السبب]", "تسجيل تحذير رسمي على عضو، وتطلع لك أزرار أسباب تختار منها.",
+         f"أي إداري (**{TRIAL_MOD}** وأعلى)"),
     ]),
     ("💬 إدارة الرومات", [
         (["اباده", "مسح"], "اباده / مسح [العدد]", "مسح رسائل من الروم (افتراضي 50، أقصى 200).", None),
@@ -3063,13 +3391,13 @@ ADMIN_HELP_SECTIONS = [
         (["اظهار"], "اظهار", "إظهار الروم الحالي للأعضاء.", None),
     ]),
     ("🔊 إدارة الصوت", [
-        (["بره"], "بره @عضو", "إخراج عضو من الروم الصوتي.", None),
-        (["اصمت"], "اصمت @عضو", "إسكات عضو صوتيًا.", None),
+        (["بره"], "بره @عضو [السبب]", "إخراج عضو من الروم الصوتي.", None),
+        (["اصمت"], "اصمت @عضو [السبب]", "إسكات عضو صوتيًا.", None),
         (["انطق"], "انطق @عضو", "فك الإسكات الصوتي عن عضو.", None),
         (["اسحب"], "اسحب @عضو", "سحب عضو لروم صوتي أنت فيه.", None),
         (["اجمعهم"], "اجمعهم", "جمع كل اللي بالرومات الصوتية عندك.", None),
         (["تعال", "كم هير بيبي"], "تعال / كم هير بيبي @عضو", "ينقلك لروم العضو الصوتي.", None),
-        (["اطلع"], "اطلع @عضو", "طرد عضو من الروم الصوتي وقفل الروم.", None),
+        (["اطلع"], "اطلع @عضو [السبب]", "طرد عضو من الروم الصوتي وقفل الروم.", None),
         (["مسموح"], "مسموح @عضو", "السماح لعضو بدخول روم صوتي مقفول.", None),
     ]),
 ]
@@ -3088,7 +3416,8 @@ async def send_admin_commands_help(ctx: commands.Context):
         title="📋 الأوامر الإدارية",
         description=(
             "الأوامر الإدارية تنكتب **بدون نقطة** (مثال: `تايم @عضو 10m`).\n"
-            "الرتبة المكتوبة تحت كل أمر هي **أقل رتبة** تقدر تستخدمه، وكل الرتب الأعلى منها تقدر تستخدمه بعد.\n\n"
+            "الرتبة المكتوبة تحت كل أمر هي **أقل رتبة** تقدر تستخدمه، وكل الرتب الأعلى منها تقدر تستخدمه بعد.\n"
+            "لو ما كتبت سبب بأوامر العقوبات، يطلع لك البوت أزرار أسباب تختار منها.\n\n"
             f"**ترتيب الرتب من الأدنى للأعلى:**\n{hierarchy}"
         ),
         color=discord.Color.blurple(),
@@ -3479,6 +3808,23 @@ async def log_invite_link(message: discord.Message) -> None:
 
 
 # ============================================================
+# رد السلام التلقائي (كل صيغ "السلام عليكم")
+# ============================================================
+# يلقط: السلام عليكم / سلام عليكم / السلام عليك / سلامو عليكم / السلام عليكم ورحمة الله / ...ورحمة الله وبركاته
+# ويتجاهل "وعليكم السلام" عشان ما يرد على الردود.
+SALAM_PATTERN = re.compile(r"(?:^|\s)(?:ال)?سلا+م[ون]?\s*(?:عليكم|عليك|عليكن|علكيم)(?:\s|$)")
+SALAM_REPLY = "وعليكم السلام ورحمة الله وبركاته 🌹"
+
+
+def is_salam_message(content: str) -> bool:
+    text = re.sub(r"[^\w\s]", " ", normalize(content))
+    text = " ".join(text.split())
+    if not text or len(text) > 60:
+        return False
+    return bool(SALAM_PATTERN.search(text + " "))
+
+
+# ============================================================
 # معالج الرسائل الموحّد
 # ============================================================
 @bot.event
@@ -3497,7 +3843,14 @@ async def on_message(message: discord.Message):
     # نظام AFK: رجوع تلقائي لصاحب الرسالة + تنبيه لو منشنوا أحد AFK
     await handle_afk_on_message(message)
 
-    if message.content.strip().startswith("تنبيه"):
+    # رد السلام
+    if message.guild is not None and is_salam_message(message.content):
+        try:
+            await message.reply(SALAM_REPLY, mention_author=False)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    if WARN_COMMAND_PATTERN.match(message.content.strip()):
         await handle_warn_command(message)
         return
 
