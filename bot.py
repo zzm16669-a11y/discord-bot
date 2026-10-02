@@ -292,13 +292,12 @@ async def send_warn_log(guild: discord.Guild, target, moderator, reason, warn_nu
         print("[WarnSystem] ⚠️ ما قدرت أوصل لوق التحذير — لا الويب هوك اشتغل ولا لقيت روم اسمه warn-log.")
 
 
-# ---------- أزرار الأسباب (تستخدم لأمر تحذير ولكل أوامر العقوبات) ----------
-# 20 زر سبب (4 صفوف × 5) + صف أخير فيه "سبب آخر" و"إلغاء". عدّل القائمة زي ما تبي.
+# ---------- قائمة الأسباب (منيو منسدلة — تستخدم لأمر تحذير ولكل أوامر العقوبات) ----------
+# عدّل القائمة زي ما تبي. الايموجي اختياري (None = بدون ايموجي).
 REASON_BUTTONS = [
     ("🤬", "سب وشتم"), ("📢", "إزعاج"), ("🔁", "سبام"), ("🔗", "نشر روابط"), ("📣", "إعلان وترويج"),
-    ("😡", "استفزاز"), ("⚔️", "إثارة مشاكل"), ("😈", "تهديد"), ("🚷", "عنصرية"), ("🔞", "تحرش"),
-    ("🙈", "محتوى غير لائق"), ("🏷️", "منشن عشوائي"), ("🔊", "إزعاج صوتي"), ("🎵", "ميوزك مزعج"), ("🖕", "قلة احترام للإدارة"),
-    ("📜", "مخالفة القوانين"), ("🖼️", "اسم أو صورة مخالفة"), ("🎭", "انتحال شخصية"), ("💥", "تخريب"), ("♻️", "تكرار المخالفة"),
+    ("🔊", "إزعاج صوتي"), (None, "قلة احترام للإدارة"),
+    ("📜", "مخالفة القوانين"), ("💥", "تخريب"), ("♻️", "تكرار المخالفة"),
 ]
 REASON_TIMEOUT = 60
 
@@ -312,16 +311,18 @@ def is_staff_member(member) -> bool:
     return has_role(member, TRIAL_ROLES)
 
 
-class ReasonButton(discord.ui.Button):
-    def __init__(self, emoji_text: str, text: str, idx: int):
-        super().__init__(label=f"{emoji_text} {text}", style=discord.ButtonStyle.secondary, row=idx // 5)
-        self.reason_text = text
+class ReasonSelect(discord.ui.Select):
+    def __init__(self):
+        options = [discord.SelectOption(label=text, value=text, emoji=emoji_text)
+                   for emoji_text, text in REASON_BUTTONS]
+        super().__init__(placeholder="اختر السبب من القائمة...", min_values=1, max_values=1,
+                         options=options, row=0)
 
     async def callback(self, interaction: discord.Interaction):
         view: ReasonView = self.view
         if not await view.check_owner(interaction):
             return
-        await view.finish(interaction, self.reason_text)
+        await view.finish(interaction, self.values[0])
 
 
 class CustomReasonModal(discord.ui.Modal, title="سبب آخر"):
@@ -339,7 +340,7 @@ class CustomReasonModal(discord.ui.Modal, title="سبب آخر"):
 
 class CustomReasonButton(discord.ui.Button):
     def __init__(self):
-        super().__init__(label="✍️ سبب آخر", style=discord.ButtonStyle.primary, row=4)
+        super().__init__(label="✍️ سبب آخر", style=discord.ButtonStyle.primary, row=1)
 
     async def callback(self, interaction: discord.Interaction):
         view: ReasonView = self.view
@@ -350,7 +351,7 @@ class CustomReasonButton(discord.ui.Button):
 
 class CancelReasonButton(discord.ui.Button):
     def __init__(self):
-        super().__init__(label="❌ إلغاء", style=discord.ButtonStyle.danger, row=4)
+        super().__init__(label="❌ إلغاء", style=discord.ButtonStyle.danger, row=1)
 
     async def callback(self, interaction: discord.Interaction):
         view: ReasonView = self.view
@@ -370,8 +371,7 @@ class ReasonView(discord.ui.View):
         self.action_emoji = action_emoji
         self.reason: str | None = None
         self.message: discord.Message | None = None
-        for i, (emoji_text, text) in enumerate(REASON_BUTTONS):
-            self.add_item(ReasonButton(emoji_text, text, i))
+        self.add_item(ReasonSelect())
         self.add_item(CustomReasonButton())
         self.add_item(CancelReasonButton())
 
@@ -388,7 +388,7 @@ class ReasonView(discord.ui.View):
 
     def prompt_embed(self) -> discord.Embed:
         return self._embed(f"{self.action_title} — اختر السبب", discord.Color.orange(),
-                            footer=f"اضغط على السبب من الأزرار تحت (عندك {REASON_TIMEOUT} ثانية)")
+                            footer=f"اختر السبب من القائمة تحت (عندك {REASON_TIMEOUT} ثانية)")
 
     async def check_owner(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.moderator.id:
