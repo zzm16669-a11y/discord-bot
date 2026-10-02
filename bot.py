@@ -2780,6 +2780,11 @@ async def commands_list_cmd(ctx: commands.Context):
         "\n__🎮 الألعاب__",
         "`.العاب` — قائمة كل الألعاب (الجماعية والفردية).",
         "`.شرح اسم_اللعبة` — شرح أي لعبة بالتفصيل.",
+        "\n__🔎 معلومات__",
+        "`.u [@عضو]` — معلومات الحساب.",
+        "`.s` — معلومات السيرفر.",
+        "`.r` — رتب السيرفر.",
+        "`.a [@عضو]` — صورة الحساب (الافتار).",
         "\n__ℹ️ عام__",
         "`.قول <النص>` — يحذف رسالتك والبوت يكتب النص عنك.",
         "`.اوامر` — تعرض هذي القائمة.",
@@ -3308,7 +3313,7 @@ async def cmd_vc_kicklock(message: discord.Message, args: str):
 
 
 async def cmd_vc_open(message: discord.Message, args: str):
-    """فتح الصوت ← يفتح الروم الصوتي اللي أنت فيه (يشيل القفل اللي حطه أمر اطلع)."""
+    """فتح_صوتي ← يفتح الروم الصوتي اللي أنت فيه (يشيل القفل اللي حطه أمر اطلع)."""
     if not (message.author.voice and message.author.voice.channel):
         await reply(message, "⚠️ لازم تكون داخل الروم الصوتي عشان تفتحه.")
         return
@@ -3408,7 +3413,7 @@ ADMIN_COMMANDS = {
     "كم هير بيبي": (HEAD_MOD_ROLES, cmd_vc_comehere),
     "اطلع": (ADMIN_ROLES, cmd_vc_kicklock),
     "مسموح": (ADMIN_ROLES, cmd_vc_allow),
-    "فتح الصوت": (ADMIN_ROLES, cmd_vc_open),
+    "فتح_صوتي": (ADMIN_ROLES, cmd_vc_open),
 }
 
 # رتّب المفاتيح الأطول أولًا (عشان "كم هير بيبي" ما تتعارض مع كلمة مفردة)
@@ -3466,7 +3471,7 @@ ADMIN_HELP_SECTIONS = [
         (["تعال", "كم هير بيبي"], "تعال / كم هير بيبي @عضو", "ينقلك لروم العضو الصوتي.", None),
         (["اطلع"], "اطلع @عضو [السبب]", "طرد عضو من الروم الصوتي وقفل الروم.", None),
         (["مسموح"], "مسموح @عضو", "السماح لعضو بدخول روم صوتي مقفول.", None),
-        (["فتح الصوت"], "فتح الصوت", "فتح الروم الصوتي اللي أنت فيه للكل (يشيل القفل).", None),
+        (["فتح_صوتي"], "فتح_صوتي", "فتح الروم الصوتي اللي أنت فيه للكل (يشيل القفل).", None),
     ]),
 ]
 
@@ -3670,6 +3675,126 @@ async def shop_expiry_task():
             changed = True
     if changed:
         save_json(SHOP_ACTIVE_FILE, data)
+
+
+# ============================================================
+# 12.5) أوامر المعلومات السريعة — .u (يوزر) / .s (سيرفر) / .r (رتب) / .a (افتار)
+# ============================================================
+VERIFICATION_NAMES_AR = {"none": "بدون", "low": "منخفض", "medium": "متوسط", "high": "عالي", "highest": "أعلى مستوى"}
+
+
+def _ts(dt: datetime, style: str = "F") -> str:
+    """يحول وقت لتنسيق ديسكورد (يتحول تلقائيًا لتوقيت اللي يشوفه)."""
+    return f"<t:{int(dt.timestamp())}:{style}>"
+
+
+def _join_limited(items: list[str], limit: int = 1000, sep: str = " ") -> str:
+    """يجمع عناصر بنص واحد ما يتعدى limit حرف، وإذا زاد يقطع ويكتب كم عنصر انحذف."""
+    out, used = [], 0
+    for i, item in enumerate(items):
+        extra = len(item) + (len(sep) if out else 0)
+        if used + extra > limit - 20:
+            out.append(f"... و{len(items) - i} أخرى")
+            break
+        out.append(item)
+        used += extra
+    return sep.join(out)
+
+
+@bot.command(name="u")
+async def user_info_cmd(ctx: commands.Context, member: discord.Member = None):
+    """.u [@عضو] — معلومات الحساب."""
+    if ctx.guild is None:
+        return
+    member = member or ctx.author
+    color = member.color if member.color.value else discord.Color.blurple()
+    embed = discord.Embed(title=f"👤 معلومات {member.display_name}", color=color)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="اسم الحساب", value=str(member), inline=True)
+    embed.add_field(name="الآيدي", value=f"`{member.id}`", inline=True)
+    embed.add_field(name="بوت؟", value="نعم" if member.bot else "لا", inline=True)
+    if member.nick:
+        embed.add_field(name="اللقب بالسيرفر", value=member.nick, inline=True)
+    embed.add_field(name="تاريخ إنشاء الحساب",
+                    value=f"{_ts(member.created_at)}\n({_ts(member.created_at, 'R')})", inline=False)
+    if member.joined_at:
+        embed.add_field(name="تاريخ الدخول للسيرفر",
+                        value=f"{_ts(member.joined_at)}\n({_ts(member.joined_at, 'R')})", inline=False)
+    roles = [r for r in reversed(member.roles) if r != ctx.guild.default_role]
+    embed.add_field(name="أعلى رتبة", value=roles[0].mention if roles else "لا يوجد", inline=True)
+    embed.add_field(name=f"الرتب ({len(roles)})",
+                    value=_join_limited([r.mention for r in roles]) if roles else "لا يوجد", inline=False)
+    embed.set_footer(text=f"طلب بواسطة {ctx.author.display_name}")
+    await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+
+@bot.command(name="s")
+async def server_info_cmd(ctx: commands.Context):
+    """.s — معلومات السيرفر."""
+    guild = ctx.guild
+    if guild is None:
+        return
+    bots = sum(1 for m in guild.members if m.bot)
+    total = guild.member_count or len(guild.members)
+    embed = discord.Embed(title=f"🏠 {guild.name}", color=discord.Color.blurple())
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+    if guild.banner:
+        embed.set_image(url=guild.banner.url)
+    if guild.description:
+        embed.description = guild.description
+    embed.add_field(name="الآيدي", value=f"`{guild.id}`", inline=True)
+    embed.add_field(name="المالك", value=f"<@{guild.owner_id}>", inline=True)
+    embed.add_field(name="تاريخ الإنشاء",
+                    value=f"{_ts(guild.created_at)}\n({_ts(guild.created_at, 'R')})", inline=False)
+    embed.add_field(name="الأعضاء", value=f"{total} (👤 {total - bots} • 🤖 {bots})", inline=True)
+    embed.add_field(name="الرتب", value=str(max(len(guild.roles) - 1, 0)), inline=True)
+    embed.add_field(name="الإيموجي", value=str(len(guild.emojis)), inline=True)
+    embed.add_field(
+        name="الرومات",
+        value=(f"💬 كتابي: {len(guild.text_channels)}\n🔊 صوتي: {len(guild.voice_channels)}\n"
+               f"📁 تصنيفات: {len(guild.categories)}"),
+        inline=True)
+    embed.add_field(name="البوست",
+                    value=f"المستوى {guild.premium_tier} • {guild.premium_subscription_count or 0} بوست", inline=True)
+    embed.add_field(name="مستوى التحقق",
+                    value=VERIFICATION_NAMES_AR.get(guild.verification_level.name, guild.verification_level.name),
+                    inline=True)
+    embed.set_footer(text=f"طلب بواسطة {ctx.author.display_name}")
+    await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+
+@bot.command(name="r")
+async def roles_info_cmd(ctx: commands.Context):
+    """.r — كل رتب السيرفر (من الأعلى للأدنى) مع عدد أعضاء كل رتبة."""
+    guild = ctx.guild
+    if guild is None:
+        return
+    roles = [r for r in reversed(guild.roles) if r != guild.default_role]
+    if not roles:
+        await ctx.send("⚠️ ما فيه رتب بهذا السيرفر.")
+        return
+    lines = [f"{r.mention} — **{len(r.members)}**" for r in roles]
+    embed = discord.Embed(title=f"🎭 رتب السيرفر ({len(roles)})", color=discord.Color.blurple(),
+                          description=_join_limited(lines, limit=4000, sep="\n"))
+    embed.set_footer(text="الرقم = عدد الأعضاء بالرتبة")
+    await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+
+@bot.command(name="a")
+async def avatar_cmd(ctx: commands.Context, member: discord.Member = None):
+    """.a [@عضو] — صورة الحساب بحجم كبير."""
+    if ctx.guild is None:
+        return
+    member = member or ctx.author
+    avatar = member.display_avatar
+    formats = ["png", "jpg", "webp"] + (["gif"] if avatar.is_animated() else [])
+    links = " • ".join(f"[{f.upper()}]({avatar.with_format(f).with_size(1024).url})" for f in formats)
+    embed = discord.Embed(title=f"🖼️ صورة {member.display_name}", description=links, color=discord.Color.blurple())
+    embed.set_image(url=avatar.with_size(1024).url)
+    if member.guild_avatar:
+        embed.set_footer(text="هذي صورته الخاصة بالسيرفر")
+    await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
 # ============================================================
