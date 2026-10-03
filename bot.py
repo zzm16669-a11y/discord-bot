@@ -2762,11 +2762,10 @@ async def explain_cmd(ctx: commands.Context, *, game_name: str = None):
 
 
 # ---------- .اوامر: قائمة كل الأوامر اللي تبدأ بنقطة (ما عدا الألعاب) ----------
-@bot.command(name="اوامر", aliases=["الاوامر"])
-async def commands_list_cmd(ctx: commands.Context):
-    lines = [
-        "📋 **قائمة الأوامر** (كلها تبدأ بـ `.`)\n",
-        "__⭐ النقاط والاقتصاد__",
+# قائمة الأوامر: Embed بنفس قالب الـ AFK + أزرار أقسام. الرد يطلع مخفي (ephemeral) لمن يضغط الزر،
+# وقسم الإدارة ما يشوفه إلا اللي معه رتبة إدارة (Trial Moderator وفوق) أو مالك السيرفر.
+HELP_PUBLIC_SECTIONS = {
+    "points": ("⭐ النقاط والاقتصاد", [
         "`.رصيد [@عضو]` — تشوف رصيدك أو رصيد عضو ثاني.",
         "`.نقاطي` — تشوف رصيد نقاطك.",
         "`.يومي` — تاخذ جائزتك اليومية (مرة كل 24 ساعة).",
@@ -2775,23 +2774,103 @@ async def commands_list_cmd(ctx: commands.Context):
         "`.سجلي [@عضو]` — عدد مرات الفوز والخسارة بالألعاب.",
         "`.متجر` — تشوف الأشياء المتوفرة بالمتجر.",
         "`.شراء <العنصر>` — تشتري شي من المتجر بنقاطك.",
-        "\n__⚠️ التحذيرات__",
-        "`.تحذيراته [@عضو]` — تشوف عدد التحذيرات المسجلة على عضو (أو عليك).",
-        "\n__🎮 الألعاب__",
+    ]),
+    "games": ("🎮 الألعاب", [
         "`.العاب` — قائمة كل الألعاب (الجماعية والفردية).",
         "`.شرح اسم_اللعبة` — شرح أي لعبة بالتفصيل.",
-        "\n__🏦 البنك__",
-        "`.اوامر_البنك` — كل أوامر البنك والذهب والوظائف (تشتغل بروم bank).",
-        "\n__🔎 معلومات__",
+    ]),
+    "info": ("🔎 معلومات", [
         "`.u [@عضو]` — معلومات الحساب.",
         "`.s` — معلومات السيرفر.",
         "`.r` — رتب السيرفر.",
         "`.a [@عضو]` — صورة الحساب (الافتار).",
-        "\n__ℹ️ عام__",
+    ]),
+    "general": ("ℹ️ عام", [
+        "`.تحذيراته [@عضو]` — تشوف عدد التحذيرات المسجلة على عضو (أو عليك).",
         "`.قول <النص>` — يحذف رسالتك والبوت يكتب النص عنك.",
         "`.اوامر` — تعرض هذي القائمة.",
-    ]
-    await ctx.send("\n".join(lines))
+    ]),
+}
+
+# (المفتاح, النص, الايموجي, لون الزر)
+HELP_BUTTONS = [
+    ("points", "النقاط", "⭐", discord.ButtonStyle.secondary),
+    ("games", "الألعاب", "🎮", discord.ButtonStyle.secondary),
+    ("bank", "البنك", "🏦", discord.ButtonStyle.secondary),
+    ("info", "معلومات", "🔎", discord.ButtonStyle.secondary),
+    ("general", "عام", "ℹ️", discord.ButtonStyle.secondary),
+    ("admin", "الإدارة", "🛡️", discord.ButtonStyle.danger),
+]
+
+
+def _help_embed(title: str, description: str, user) -> discord.Embed:
+    """نفس قالب رسالة AFK: عنوان + وصف + صورة جنب + فوتر."""
+    embed = discord.Embed(title=title, description=description, color=discord.Color.blurple())
+    if bot.user is not None:
+        embed.set_thumbnail(url=bot.user.display_avatar.url)
+    embed.set_footer(text=f"طلب بواسطة {user.display_name}")
+    return embed
+
+
+def _can_see_admin_help(member) -> bool:
+    if not isinstance(member, discord.Member):
+        return False
+    return member.id == member.guild.owner_id or has_role(member, TRIAL_ROLES)
+
+
+class HelpCategoryButton(discord.ui.Button):
+    def __init__(self, key: str, label: str, emoji: str, style: discord.ButtonStyle):
+        super().__init__(label=label, emoji=emoji, style=style)
+        self.key = key
+
+    async def callback(self, interaction: discord.Interaction):
+        user = interaction.user
+        if self.key == "admin":
+            if not _can_see_admin_help(user):
+                await interaction.response.send_message("❌ هذا القسم لأصحاب رتب الإدارة بس.", ephemeral=True)
+                return
+            await interaction.response.send_message(embeds=build_admin_help_embeds(), ephemeral=True)
+            return
+        if self.key == "bank":
+            bank_ch = find_bank_channel(interaction.guild) if interaction.guild else None
+            where = bank_ch.mention if bank_ch else "روم **bank**"
+            parts = [f"📍 أوامر البنك تشتغل **بس** في {where}\n"]
+            parts += [f"**{name}**\n{text}\n" for name, text in BANK_HELP_SECTIONS]
+            embed = _help_embed("🏦 أوامر البنك", "\n".join(parts), user)
+        else:
+            title, lines = HELP_PUBLIC_SECTIONS[self.key]
+            embed = _help_embed(title, "\n".join(lines), user)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class HelpView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.message: discord.Message | None = None
+        for key, label, emoji, style in HELP_BUTTONS:
+            self.add_item(HelpCategoryButton(key, label, emoji, style))
+
+    async def on_timeout(self):
+        for c in self.children:
+            c.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.HTTPException):
+                pass
+
+
+@bot.command(name="اوامر", aliases=["الاوامر"])
+async def commands_list_cmd(ctx: commands.Context):
+    embed = _help_embed(
+        "📋 قائمة الأوامر",
+        "أوامر الأعضاء كلها تبدأ بـ `.`\n"
+        "اضغط على القسم اللي تبيه من الأزرار تحت وتطلع لك أوامره.\n\n"
+        "🏦 أوامر البنك تشتغل بس في روم **bank**\n"
+        "🛡️ قسم الإدارة يشوفه بس أصحاب رتب الإدارة",
+        ctx.author)
+    view = HelpView()
+    view.message = await ctx.send(embed=embed, view=view)
 
 
 # ---------- .قول: البوت يكرر النص اللي تكتبه ----------
@@ -3175,6 +3254,10 @@ async def cmd_purge(message: discord.Message, args: str):
     amount_text = args.strip().split()[0] if args.strip() else "50"
     amount = int(amount_text) if amount_text.isdigit() else 50
     amount = min(amount, 200)
+    try:
+        await message.delete()  # يحذف رسالة الأمر نفسها
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        pass
     deleted = await message.channel.purge(limit=amount, before=message)
     await reply(message, f"🧹 تم حذف {len(deleted)} رسالة.")
     await log_mod_action(message.guild, "🧹 مسح جماعي", message.author, None, None,
@@ -3378,14 +3461,14 @@ async def cmd_remove_warn(message: discord.Message, args: str):
 
 
 async def cmd_bank_add(message: discord.Message, args: str):
-    """بنك اضافة @عضو <مبلغ> ← يضيف كاش لحساب عضو بالبنك."""
+    """بنك_اضافة @عضو <مبلغ> ← يضيف كاش لحساب عضو بالبنك."""
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `بنك اضافة @العضو المبلغ`")
+        await reply(message, "⚠️ الصيغة: `بنك_اضافة @العضو المبلغ`")
         return
     target = message.mentions[0]
     amount = parse_amount(strip_mentions(args, message.mentions))
     if target.bot or not amount:
-        await reply(message, "⚠️ الصيغة: `بنك اضافة @العضو المبلغ` (المبلغ رقم أكبر من صفر).")
+        await reply(message, "⚠️ الصيغة: `بنك_اضافة @العضو المبلغ` (المبلغ رقم أكبر من صفر).")
         return
     data = bank_load()
     acct = bank_acct(data, message.guild.id, target.id)
@@ -3397,14 +3480,14 @@ async def cmd_bank_add(message: discord.Message, args: str):
 
 
 async def cmd_bank_remove(message: discord.Message, args: str):
-    """بنك خصم @عضو <مبلغ> ← يخصم من كاش العضو أولًا ثم من رصيده بالبنك (ما ينزل تحت صفر)."""
+    """بنك_خصم @عضو <مبلغ> ← يخصم من كاش العضو أولًا ثم من رصيده بالبنك (ما ينزل تحت صفر)."""
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `بنك خصم @العضو المبلغ`")
+        await reply(message, "⚠️ الصيغة: `بنك_خصم @العضو المبلغ`")
         return
     target = message.mentions[0]
     amount = parse_amount(strip_mentions(args, message.mentions))
     if target.bot or not amount:
-        await reply(message, "⚠️ الصيغة: `بنك خصم @العضو المبلغ` (المبلغ رقم أكبر من صفر).")
+        await reply(message, "⚠️ الصيغة: `بنك_خصم @العضو المبلغ` (المبلغ رقم أكبر من صفر).")
         return
     data = bank_load()
     acct = bank_acct(data, message.guild.id, target.id)
@@ -3440,8 +3523,11 @@ ADMIN_COMMANDS = {
     "رجع": (ADMIN_ROLES, cmd_restore_role),
     "رول": (TOP_ROLES, cmd_give_role),
     "شيل تحذير": (MOD_ROLES, cmd_remove_warn),
-    "بنك اضافة": (ADMIN_ROLES, cmd_bank_add),
-    "بنك خصم": (ADMIN_ROLES, cmd_bank_remove),
+    "بنك_اضافة": (ADMIN_ROLES, cmd_bank_add),
+    "بنك_اضافه": (ADMIN_ROLES, cmd_bank_add),
+    "بنك_إضافة": (ADMIN_ROLES, cmd_bank_add),
+    "بنك_إضافه": (ADMIN_ROLES, cmd_bank_add),
+    "بنك_خصم": (ADMIN_ROLES, cmd_bank_remove),
     # إدارة الرومات
     "اباده": (MANAGEMENT_ROLES, cmd_purge),
     "مسح": (MANAGEMENT_ROLES, cmd_purge),
@@ -3501,8 +3587,8 @@ ADMIN_HELP_SECTIONS = [
         (["تحذير"], "تحذير @عضو [السبب]", "تسجيل تحذير رسمي على عضو، وتطلع لك أزرار أسباب تختار منها.",
          f"أي إداري (**{TRIAL_MOD}** وأعلى)"),
         (["شيل تحذير"], "شيل تحذير @عضو [الكل]", "يشيل آخر تحذير مسجل على عضو، أو كل تحذيراته لو كتبت «الكل».", None),
-        (["بنك اضافة"], "بنك اضافة @عضو المبلغ", "إضافة كاش لحساب عضو بنظام البنك (منفصل عن النقاط).", None),
-        (["بنك خصم"], "بنك خصم @عضو المبلغ", "خصم مبلغ من كاش العضو ثم رصيده بالبنك.", None),
+        (["بنك_اضافة"], "بنك_اضافة @عضو المبلغ", "إضافة كاش لحساب عضو بنظام البنك (تقبل: اضافة / اضافه / إضافة / إضافه).", None),
+        (["بنك_خصم"], "بنك_خصم @عضو المبلغ", "خصم مبلغ من كاش العضو ثم رصيده بالبنك.", None),
     ]),
     ("💬 إدارة الرومات", [
         (["اباده", "مسح"], "اباده / مسح [العدد]", "مسح رسائل من الروم (افتراضي 50، أقصى 200).", None),
@@ -3525,14 +3611,7 @@ ADMIN_HELP_SECTIONS = [
 ]
 
 
-@bot.command(name="اوامر_اداريه")
-async def send_admin_commands_help(ctx: commands.Context):
-    author = ctx.author
-    is_guild_owner = ctx.guild is not None and author.id == ctx.guild.owner_id
-    if not (isinstance(author, discord.Member) and (is_guild_owner or has_role(author, TRIAL_ROLES))):
-        await ctx.send(f"{author.mention} ❌ ما عندك الصلاحية.")
-        return
-
+def build_admin_help_embeds() -> list[discord.Embed]:
     hierarchy = " ➜ ".join(TRIAL_ROLES)
     embeds = [discord.Embed(
         title="📋 الأوامر الإدارية",
@@ -3551,7 +3630,18 @@ async def send_admin_commands_help(ctx: commands.Context):
                 roles_text = f"**{ADMIN_COMMANDS[triggers[0]][0][0]}** وأعلى"
             lines.append(f"`{usage}`\n{desc}\n🔑 الرتبة: {roles_text}\n")
         embeds.append(discord.Embed(title=title, description="\n".join(lines), color=discord.Color.blurple()))
-    await ctx.send(embeds=embeds)
+    return embeds
+
+
+@bot.command(name="اوامر_اداريه")
+async def send_admin_commands_help(ctx: commands.Context):
+    author = ctx.author
+    is_guild_owner = ctx.guild is not None and author.id == ctx.guild.owner_id
+    if not (isinstance(author, discord.Member) and (is_guild_owner or has_role(author, TRIAL_ROLES))):
+        await ctx.send(f"{author.mention} ❌ ما عندك الصلاحية.")
+        return
+
+    await ctx.send(embeds=build_admin_help_embeds())
 
 
 # ============================================================
@@ -4424,28 +4514,34 @@ async def rich_cmd(ctx: commands.Context):
 
 
 # ---------- قائمة أوامر البنك ----------
+BANK_HELP_SECTIONS = [
+    ("🏦 الحساب والبنك",
+     "`.بنك [@عضو]` — بطاقة الحساب\n"
+     "`.ايداع <مبلغ|كل>` — كاش ← بنك\n"
+     "`.سحب <مبلغ|كل>` — بنك ← كاش\n"
+     f"`.حوالة @عضو <مبلغ>` — حوالة بنكية (رسوم {BANK_TRANSFER_FEE * 100:.0f}%)\n"
+     f"`.فائدة` — فائدة {BANK_INTEREST_RATE * 100:.0f}% يوميًا على رصيد البنك"),
+    ("🪙 الذهب",
+     "`.ذهب` — السعر والحركة\n"
+     "`.شراء_ذهب <جرام|كل>`\n"
+     "`.بيع_ذهب <جرام|كل>`"),
+    ("💼 الوظائف",
+     "`.وظائف` — القائمة والرواتب\n"
+     "`.توظف <اسم الوظيفة>`\n"
+     "`.عمل` — راتب كل ساعة\n"
+     "`.استقالة`"),
+    ("🦹 أخرى",
+     "`.سرقة @عضو` — تسرق من كاشه (فلوس البنك محمية)\n"
+     "`.اغنياء` — أغنى 10 أعضاء"),
+]
+
+
 @bot.command(name="اوامر_البنك", aliases=["اوامر_بنك"])
 @bank_only
 async def bank_help_cmd(ctx: commands.Context):
     embed = _bank_embed("🏦 أوامر البنك")
-    embed.add_field(name="🏦 الحساب والبنك", value=(
-        "`.بنك [@عضو]` — بطاقة الحساب\n"
-        "`.ايداع <مبلغ|كل>` — كاش ← بنك\n"
-        "`.سحب <مبلغ|كل>` — بنك ← كاش\n"
-        f"`.حوالة @عضو <مبلغ>` — حوالة بنكية (رسوم {BANK_TRANSFER_FEE * 100:.0f}%)\n"
-        f"`.فائدة` — فائدة {BANK_INTEREST_RATE * 100:.0f}% يوميًا على رصيد البنك"), inline=False)
-    embed.add_field(name="🪙 الذهب", value=(
-        "`.ذهب` — السعر والحركة\n"
-        "`.شراء_ذهب <جرام|كل>`\n"
-        "`.بيع_ذهب <جرام|كل>`"), inline=False)
-    embed.add_field(name="💼 الوظائف", value=(
-        "`.وظائف` — القائمة والرواتب\n"
-        "`.توظف <اسم الوظيفة>`\n"
-        "`.عمل` — راتب كل ساعة\n"
-        "`.استقالة`"), inline=False)
-    embed.add_field(name="🦹 أخرى", value=(
-        "`.سرقة @عضو` — تسرق من كاشه (فلوس البنك محمية)\n"
-        "`.اغنياء` — أغنى 10 أعضاء"), inline=False)
+    for name, text in BANK_HELP_SECTIONS:
+        embed.add_field(name=name, value=text, inline=False)
     embed.set_footer(text=f"العملة: {CURRENCY} • منفصلة تمامًا عن نقاط الألعاب")
     await _bank_send(ctx, embed)
 
@@ -4525,11 +4621,17 @@ async def handle_afk_on_message(message: discord.Message) -> None:
         entry = clear_afk(message.guild.id, message.author.id)
         if entry is not None:
             duration = _format_afk_duration(entry.get("since", ""))
-            extra = f" (كنت AFK لمدة {duration})" if duration else ""
+            embed = discord.Embed(
+                title=f"👋 أهلًا بعودتك {message.author.display_name}",
+                color=discord.Color.blurple(),
+            )
+            embed.description = "تم إلغاء وضع AFK ✅"
+            embed.set_thumbnail(url=message.author.display_avatar.url)
+            if duration:
+                embed.set_footer(text=f"كنت AFK لمدة {duration}")
             try:
                 await message.channel.send(
-                    f"👋 أهلًا بعودتك {message.author.mention}! تم إلغاء وضع AFK{extra}.",
-                    delete_after=10, allowed_mentions=discord.AllowedMentions(users=[message.author]))
+                    embed=embed, delete_after=10, allowed_mentions=discord.AllowedMentions.none())
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
@@ -4814,6 +4916,90 @@ async def on_command_completion(ctx: commands.Context):
     embed.add_field(name="بواسطة", value=ctx.author.mention, inline=True)
     embed.add_field(name="الروم", value=ctx.channel.mention, inline=True)
     await send_log(ctx.guild, "bot", embed)
+
+
+# ============================================================
+# ترحيب الأعضاء الجدد — صورة الترحيب (افتار العضو داخل الدائرة) + المنشن + الرسالة + عدد الأعضاء
+# ============================================================
+# يرسل بروم اسمه فيه "welcome" أو "ترحيب" (وإذا ما لقاه يستخدم روم رسائل النظام بالسيرفر لو موجود).
+# ملف الصورة welcome.png لازم يكون بجنب ملف البوت (نفس مكان مجلد game_images).
+WELCOME_CHANNEL_NAMES = ["welcome", "ترحيب"]
+WELCOME_IMAGE_PATH = "welcome.png"
+WELCOME_CIRCLE_CENTER = (1342, 422)   # مركز الدائرة الفاضية بالصورة (بالبكسل)
+WELCOME_CIRCLE_RADIUS = 153           # نصف قطر الافتار (أصغر شوي من إطار الدائرة عشان الإطار يبقى ظاهر)
+WELCOME_RULES_CHANNEL_ID = 1538291493779935333   # القوانين
+WELCOME_NEWS_CHANNEL_ID = 1550669151339683862    # الأخبار
+WELCOME_MAP_CHANNEL_ID = 1541934638883143831     # الخريطة
+
+
+def find_welcome_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    for ch in guild.text_channels:
+        name = ch.name.lower().replace("_", "-")
+        if any(target in name for target in WELCOME_CHANNEL_NAMES):
+            return ch
+    return guild.system_channel
+
+
+def build_welcome_image(avatar_bytes: bytes) -> BytesIO:
+    """يلصق افتار العضو (دائري) داخل الدائرة الفاضية بصورة الترحيب ويرجع الصورة النهائية PNG."""
+    resample = getattr(Image, "Resampling", Image).LANCZOS
+    base = Image.open(WELCOME_IMAGE_PATH).convert("RGBA")
+    cx, cy = WELCOME_CIRCLE_CENTER
+    radius = WELCOME_CIRCLE_RADIUS
+    size = radius * 2
+    avatar = Image.open(BytesIO(avatar_bytes)).convert("RGBA").resize((size, size), resample)
+    # نحط الافتار فوق خلفية غامقة عشان لو فيه شفافية ما تبان غلط
+    backdrop = Image.new("RGBA", (size, size), (28, 30, 40, 255))
+    backdrop.alpha_composite(avatar)
+    avatar = backdrop
+    # قناع دائري بحواف ناعمة (نرسمه أكبر ونصغره)
+    scale = 4
+    mask = Image.new("L", (size * scale, size * scale), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, size * scale - 1, size * scale - 1), fill=255)
+    mask = mask.resize((size, size), resample)
+    base.paste(avatar, (cx - radius, cy - radius), mask)
+    out = BytesIO()
+    base.convert("RGB").save(out, "PNG")
+    out.seek(0)
+    return out
+
+
+@bot.listen("on_member_join")
+async def welcome_new_member(member: discord.Member):
+    if member.bot:
+        return
+    channel = find_welcome_channel(member.guild)
+    if channel is None:
+        return
+
+    lines = [
+        "• نورت السيرفر !",
+        f"• لتجنب العقوبات، توجه إلى روم: ⟸ <#{WELCOME_RULES_CHANNEL_ID}>",
+        f"• للاطلاع على آخر الأخبار، توجه إلى روم: ⟸ <#{WELCOME_NEWS_CHANNEL_ID}>",
+        f"• لمعرفة أقسام السيرفر، توجه إلى روم: ⟸ <#{WELCOME_MAP_CHANNEL_ID}>",
+        "",
+        f"👥 عدد الأشخاص بالسيرفر: **{member.guild.member_count}**",
+    ]
+    embed = discord.Embed(description="\n".join(lines), color=discord.Color.from_rgb(139, 125, 190))
+
+    file = None
+    if PIL_AVAILABLE and os.path.exists(WELCOME_IMAGE_PATH):
+        try:
+            avatar_bytes = await member.display_avatar.replace(size=512, format="png").read()
+            buf = await asyncio.to_thread(build_welcome_image, avatar_bytes)
+            file = discord.File(buf, filename="welcome.png")
+            embed.set_image(url="attachment://welcome.png")
+        except Exception as e:
+            print(f"[Welcome] ما قدرت أسوي صورة الترحيب: {e}")
+            file = None
+    if file is None:
+        embed.set_thumbnail(url=member.display_avatar.url)  # بديل لو الصورة ما اشتغلت
+
+    try:
+        await channel.send(content=member.mention, embed=embed, file=file,
+                           allowed_mentions=discord.AllowedMentions(users=[member]))
+    except (discord.Forbidden, discord.HTTPException) as e:
+        print(f"[Welcome] ما قدرت أرسل الترحيب بروم {channel.name}: {e}")
 
 
 # ---------- لوقات الأعضاء (دخول/خروج) ----------
