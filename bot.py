@@ -169,6 +169,8 @@ import protection
 protection.setup_protection(bot)
 import voice_stay
 voice_stay.setup_voice_stay(bot)
+import ajr
+ajr.setup_ajr(bot)
 # ============================================================
 # فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
 # ============================================================
@@ -3259,7 +3261,7 @@ async def cmd_purge(message: discord.Message, args: str):
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         pass
     deleted = await message.channel.purge(limit=amount, before=message)
-    await reply(message, f"🧹 تم حذف {len(deleted)} رسالة.")
+    await message.channel.send(f"🧹 تم حذف {len(deleted)} رسالة.", delete_after=7)
     await log_mod_action(message.guild, "🧹 مسح جماعي", message.author, None, None,
                           {"العدد": str(len(deleted)), "الروم": message.channel.mention})
 
@@ -4779,12 +4781,65 @@ def is_salam_message(content: str) -> bool:
 
 
 # ============================================================
+# روم الفخ "ممنوع-الارسال" — أي أحد يرسل فيه يتبند فورًا
+# ============================================================
+# الروم: أي روم اسمه فيه "ممنوع-الارسال" (يتحمل الهمزة والمسافات والشرطات، مثل: 🚫｜ممنوع_الإرسال).
+# الإداريين (Trial Moderator وفوق) ومالك السيرفر وأصحاب Administrator ما يتبندون لو كتبوا فيه (احتياط من الغلط).
+# لو تبي حتى الإداريين يتبندون غيّر TRAP_EXEMPT_STAFF إلى False (والبوت أصلًا ما يقدر يبند رتبة أعلى منه).
+TRAP_CHANNEL_NAME = "ممنوع-الارسال"
+TRAP_EXEMPT_STAFF = True
+TRAP_DELETE_SECONDS = 3600   # يمسح رسائل العضو من آخر ساعة (يفيد لو الحساب مخترق وينشر سبام)
+
+
+def is_trap_channel(channel) -> bool:
+    name = getattr(channel, "name", "") or ""
+    cleaned = normalize(name.replace("_", "-").replace(" ", "-"))
+    return normalize(TRAP_CHANNEL_NAME) in cleaned
+
+
+async def handle_trap_message(message: discord.Message) -> bool:
+    """يبند اللي أرسل برسالة بروم الفخ. يرجع True لو تعامل مع الرسالة (يعني ما نكمل بقية المعالجة)."""
+    author = message.author
+    guild = message.guild
+    if TRAP_EXEMPT_STAFF and is_staff_member(author):
+        return False
+
+    reason = f"أرسل برسالة بروم {TRAP_CHANNEL_NAME} (بند تلقائي)"
+    try:
+        await message.delete()
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        pass
+
+    banned = False
+    try:
+        try:
+            await guild.ban(author, reason=reason, delete_message_seconds=TRAP_DELETE_SECONDS)
+        except TypeError:
+            await guild.ban(author, reason=reason)  # نسخة discord.py قديمة ما تدعم delete_message_seconds
+        banned = True
+    except (discord.Forbidden, discord.HTTPException) as e:
+        print(f"[Trap] ما قدرت أبند {author} ({author.id}): {e}")
+
+    title = "🪤 بند تلقائي — روم الفخ" if banned else "⚠️ فشل البند التلقائي — روم الفخ"
+    extra = {"الروم": message.channel.mention}
+    if not banned:
+        extra["السبب"] = "ما عندي صلاحية أبند هذا العضو (رتبته أعلى مني أو ينقصني Ban Members)"
+    await log_mod_action(guild, title, guild.me, author, reason, extra)
+    return True
+
+
+# ============================================================
 # معالج الرسائل الموحّد
 # ============================================================
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
+
+    # روم الفخ: أول شي قبل أي معالجة ثانية
+    if message.guild is not None and is_trap_channel(message.channel):
+        if await handle_trap_message(message):
+            return
 
     # ".قول <نص>": نحذف رسالة صاحب الأمر فورًا (قبل أي معالجة ثانية) عشان ما أحد يلحق يشوفها.
     # نفس شروط say_cmd: لازم يكون فيه نص، وما نحذف لو النص فيه رابط ممنوع (البوت بيرفض الإرسال).
