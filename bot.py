@@ -1976,6 +1976,46 @@ async def handle_trap_message(message: discord.Message) -> bool:
 
 
 # ============================================================
+# رياكشن تلقائي على الصور (رومات locket / streaks)
+# ============================================================
+# أي رسالة فيها صورة بهذي الرومات يحط عليها البوت رياكشن (بدون رد).
+# الرسائل اللي بدون صور يتجاهلها.
+# غيّر الإيموجيات من REACTION_EMOJIS (تقدر تحط أكثر من واحد).
+REACTION_CHANNEL_NAMES = ["locket", "streaks"]
+REACTION_EMOJIS = ["💥", "🔥", "⛔", "😼"]
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic")
+
+
+def is_reaction_channel(channel) -> bool:
+    name = (getattr(channel, "name", "") or "").lower().replace("_", "-")
+    return any(target in name for target in REACTION_CHANNEL_NAMES)
+
+
+def message_has_image(message: discord.Message) -> bool:
+    for att in message.attachments:
+        if (att.content_type or "").startswith("image/"):
+            return True
+        if att.filename.lower().endswith(IMAGE_EXTENSIONS):
+            return True
+    for emb in message.embeds:
+        if emb.type == "image" or emb.image or emb.thumbnail:
+            return True
+    return False
+
+
+async def handle_image_reaction(message: discord.Message) -> None:
+    if message.guild is None or not is_reaction_channel(message.channel):
+        return
+    if not message_has_image(message):
+        return
+    for emoji in REACTION_EMOJIS:
+        try:
+            await message.add_reaction(emoji)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+
+# ============================================================
 # معالج الرسائل الموحّد
 # ============================================================
 @bot.event
@@ -2009,6 +2049,9 @@ async def on_message(message: discord.Message):
 
     # نظام AFK: رجوع تلقائي لصاحب الرسالة + تنبيه لو منشنوا أحد AFK
     await handle_afk_on_message(message)
+
+    # رياكشن على الصور برومات locket / streaks
+    await handle_image_reaction(message)
 
     # رد السلام
     if message.guild is not None and is_salam_message(message.content):
