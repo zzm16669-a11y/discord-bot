@@ -432,6 +432,11 @@ async def handle_warn_command(message: discord.Message):
         await message.channel.send(f"{author.mention} ⚠️ ما تقدر تحذر نفسك أو بوت.")
         return
 
+    # تسلسل الرتب: ما تقدر تحذر عضو رتبته أعلى منك أو مساوية لك
+    if not can_act_on(author, target):
+        await message.channel.send(f"{author.mention} {HIERARCHY_DENY_TEXT}")
+        return
+
     typed = strip_mentions(message.content.strip()[len("تحذير"):], message.mentions)
     reason = typed or await ask_reason(message, target, "تحذير", "⚠️")
     if reason is None:
@@ -750,6 +755,36 @@ TRIAL_ROLES = [TRIAL_MOD] + MOD_ROLES
 def has_role(member: discord.Member, allowed: list[str]) -> bool:
     names = {r.name for r in member.roles}
     return any(n in names for n in allowed)
+
+
+# ---------- تسلسل الرتب (ما أحد ينفذ أمر على عضو رتبته أعلى منه أو مساوية له) ----------
+# الترتيب من الأدنى للأعلى هو نفس ترتيب TRIAL_ROLES:
+# Trial Moderator ➜ Moderator ➜ Head Moderator ➜ Management ➜ Admin ➜ Vice Owner ➜ Co-Owner ➜ Owner
+HIERARCHY_DENY_TEXT = "❌ ما تقدر تنفذ هذا الأمر على عضو رتبته أعلى منك أو مساوية لرتبتك."
+
+
+def get_rank(member) -> int:
+    """رقم رتبة العضو بتسلسل الإدارة (-1 = ما معه رتبة إدارة). مالك السيرفر أعلى من الكل."""
+    if not isinstance(member, discord.Member):
+        return -1
+    if member.id == member.guild.owner_id:
+        return 999
+    names = {r.name for r in member.roles}
+    rank = -1
+    for i, role_name in enumerate(TRIAL_ROLES):
+        if role_name in names:
+            rank = max(rank, i)
+    # صاحب صلاحية Administrator بدون رتبة إدارة من القائمة نعتبره بمستوى Admin
+    if rank < 0 and member.guild_permissions.administrator:
+        rank = TRIAL_ROLES.index(ADMIN)
+    return rank
+
+
+def can_act_on(author, target, allow_self: bool = False) -> bool:
+    """يرجع True فقط لو رتبة المنفّذ أعلى من رتبة الهدف (مو مساوية)."""
+    if allow_self and author.id == target.id:
+        return True
+    return get_rank(author) > get_rank(target)
 
 
 def strip_mentions(content: str, mentions) -> str:
@@ -1310,6 +1345,16 @@ ADMIN_COMMANDS = {
     "فتح_صوتي": (ADMIN_ROLES, cmd_vc_open),
 }
 
+# الأوامر اللي تنفذ على عضو (منشن) — لازم رتبة المنفّذ تكون أعلى من رتبة العضو (تسلسل الرتب).
+# ما دخلنا: سماح (آيدي مو منشن) / رول (له شرط رتبه الخاص) / تعال و كم هير بيبي (انتقال لعندك مو عقوبة).
+HIERARCHY_TRIGGERS = {
+    "برا", "ترحيل", "كيك", "تايم", "اص", "تحرير", "اخرس", "تكلم", "سجن", "فك",
+    "لقب", "اسم", "تنزيل", "رجع", "شيل تحذير",
+    "بره", "اصمت", "انطق", "اسحب", "اطلع", "مسموح",
+}
+# أوامر يسمح فيها المنفّذ يطبقها على نفسه (تغيير لقبك)
+HIERARCHY_SELF_ALLOWED = {"لقب", "اسم"}
+
 # رتّب المفاتيح الأطول أولًا (عشان "كم هير بيبي" ما تتعارض مع كلمة مفردة)
 SORTED_TRIGGERS = sorted(ADMIN_COMMANDS.keys(), key=len, reverse=True)
 
@@ -1322,6 +1367,12 @@ async def try_dispatch_admin_command(message: discord.Message) -> bool:
             if not isinstance(message.author, discord.Member) or not has_role(message.author, allowed_roles):
                 await reply(message, f"{message.author.mention} ❌ ما عندك صلاحية لهذا الأمر.")
                 return True
+            # تسلسل الرتب: ما تنفذ على عضو رتبته أعلى منك أو مساوية لك
+            if trigger in HIERARCHY_TRIGGERS and message.mentions:
+                target = message.mentions[0]
+                if not can_act_on(message.author, target, allow_self=(trigger in HIERARCHY_SELF_ALLOWED)):
+                    await reply(message, f"{message.author.mention} {HIERARCHY_DENY_TEXT}")
+                    return True
             args = content[len(trigger):].strip()
             await handler(message, args)
             return True
@@ -1377,7 +1428,8 @@ def build_admin_help_embeds() -> list[discord.Embed]:
         description=(
             "الأوامر الإدارية تنكتب **بدون نقطة** (مثال: `تايم @عضو 10m`).\n"
             "الرتبة المكتوبة تحت كل أمر هي **أقل رتبة** تقدر تستخدمه، وكل الرتب الأعلى منها تقدر تستخدمه بعد.\n"
-            "لو ما كتبت سبب بأوامر العقوبات، يطلع لك البوت أزرار أسباب تختار منها.\n\n"
+            "لو ما كتبت سبب بأوامر العقوبات، يطلع لك البوت أزرار أسباب تختار منها.\n"
+            "⚠️ الأوامر اللي على الأعضاء تمشي بتسلسل الرتب: ما تقدر تنفذها على عضو رتبته أعلى منك أو مساوية لك.\n\n"
             f"**ترتيب الرتب من الأدنى للأعلى:**\n{hierarchy}"
         ),
         color=discord.Color.blurple(),
@@ -1699,7 +1751,7 @@ async def avatar_cmd(ctx: commands.Context, member: discord.Member = None):
 # 13) نظام AFK — .afk <السبب>
 # ============================================================
 # لما العضو يكتب .afk نايم يتسجل AFK بالسبب، ولما يرسل أي رسالة ثانية يرجع تلقائيًا.
-# ولو أحد منشنه وهو AFK، البوت يعلمه إنه AFK ويعرض السبب.
+# ولو أحد منشنه أو رد (Reply) على رسالته وهو AFK، البوت يعلمه إنه AFK ويعرض السبب.
 AFK_MAX_REASON_LENGTH = 200
 AFK_COMMAND_PATTERN = re.compile(r"^\.afk(\s|$)", re.IGNORECASE)
 
@@ -1759,8 +1811,24 @@ async def afk_cmd(ctx: commands.Context, *, reason: str = None):
     await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
+async def _get_replied_member(message: discord.Message) -> discord.Member | None:
+    """يرجع العضو اللي رد عليه صاحب الرسالة (لو الرسالة رد Reply على رسالة عضو بالسيرفر)."""
+    ref = message.reference
+    if ref is None or message.guild is None:
+        return None
+    replied = ref.resolved if isinstance(ref.resolved, discord.Message) else None
+    if replied is None and ref.message_id:
+        try:
+            replied = await message.channel.fetch_message(ref.message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            replied = None
+    if replied is None:
+        return None
+    return message.guild.get_member(replied.author.id)
+
+
 async def handle_afk_on_message(message: discord.Message) -> None:
-    """لو صاحب الرسالة AFK نرجّعه، ولو منشن أحد AFK نعلمه. ما يتدخل بأمر .afk نفسه."""
+    """لو صاحب الرسالة AFK نرجّعه، ولو منشن أو رد على أحد AFK نعلمه. ما يتدخل بأمر .afk نفسه."""
     if message.guild is None:
         return
 
@@ -1784,7 +1852,13 @@ async def handle_afk_on_message(message: discord.Message) -> None:
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-    for member in message.mentions:
+    # الأعضاء اللي نفحص إذا هم AFK: المنشنين صراحة + صاحب الرسالة اللي انرد عليها (بدون تكرار)
+    to_check: dict[int, discord.Member] = {m.id: m for m in message.mentions}
+    replied_member = await _get_replied_member(message)
+    if replied_member is not None:
+        to_check.setdefault(replied_member.id, replied_member)
+
+    for member in to_check.values():
         if member.bot or member.id == message.author.id:
             continue
         entry = get_afk(message.guild.id, member.id)
@@ -2047,7 +2121,7 @@ async def on_message(message: discord.Message):
     # ما نعتبره منشن — عشان "تايم"/"برا"/... ما تنفذ غلط بمجرد الرد على رسالة الشخص.
     message.mentions = filter_explicit_mentions(message)
 
-    # نظام AFK: رجوع تلقائي لصاحب الرسالة + تنبيه لو منشنوا أحد AFK
+    # نظام AFK: رجوع تلقائي لصاحب الرسالة + تنبيه لو منشنوا أو ردوا على أحد AFK
     await handle_afk_on_message(message)
 
     # رياكشن على الصور برومات locket / streaks
