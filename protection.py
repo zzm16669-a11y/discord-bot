@@ -5,8 +5,11 @@ protection.py — نظام حماية للسيرفر (مستقل، ما يلمس
   1) منع السبام: رسائل كثيرة بوقت قصير → تنحذف + تايم أوت.
   2) منع روابط الدعوات: الرابط ينحذف + تنبيه للعضو.
   3) حماية من الريد: دخول أعداد كبيرة بوقت قصير → البوت يطرد (أو يكتم) الدفعة.
-  4) حماية من التخريب (anti-nuke): حذف رومات/رتب أو حظر/طرد أعضاء بسرعة → تنسحب رتب الفاعل.
+  4) حماية من التخريب (anti-nuke): حذف أو إنشاء رومات/رتب بكثرة، أو حظر/طرد أعضاء بسرعة
+     → تنسحب رتب الفاعل، ولو كان التخريب إنشاء رومات/رتب ينحذف اللي أنشأه (NUKE_CLEANUP_CREATED).
   5) منع إضافة البوتات: أي بوت يدخل يُطرد إلا لو اللي أضافه مالك السيرفر أو رتبة عليا.
+  6) حماية صلاحية Administrator: أي أحد يعطي رتبة صلاحية أدمن (أو يعدّل رتبة لتصير أدمن
+     أو ينشئ رتبة أدمن أو يعطي عضو رتبة أدمن) → يتراجع البوت عن التعديل + تايم أوت للفاعل.
 
 المستثنون من كل شي: مالك السيرفر + الرتب بـ EXEMPT_ROLE_NAMES.
 كل العقوبات تنسجل بروم security-logs (وإذا ما لقاه، mod-logs).
@@ -17,7 +20,8 @@ protection.py — نظام حماية للسيرفر (مستقل، ما يلمس
     protection.setup_protection(bot)
 
 صلاحيات البوت اللازمة: Manage Messages، Moderate Members، Kick Members،
-Manage Roles، View Audit Log — ورتبته لازم تكون أعلى من الرتب/الأعضاء اللي يتعامل معهم.
+Manage Roles، Manage Channels (لتنظيف الرومات اللي ينشئها المخرب)، View Audit Log —
+ورتبته لازم تكون أعلى من الرتب/الأعضاء اللي يتعامل معهم.
 (الإعدادات كلها هنا بالكود، فما تضيع مع إعادة تشغيل البوت.)
 """
 import asyncio
@@ -57,11 +61,17 @@ NUKE_RULES = {
     "حذف رومات/رتب": ({discord.AuditLogAction.channel_delete, discord.AuditLogAction.role_delete}, 3, 30),
     "حظر/طرد أعضاء": ({discord.AuditLogAction.ban, discord.AuditLogAction.kick,
                         discord.AuditLogAction.member_prune}, 4, 30),
+    "إنشاء رومات/رتب": ({discord.AuditLogAction.channel_create, discord.AuditLogAction.role_create}, 5, 30),
 }   # {الاسم: (الأفعال، العدد المسموح قبل العقوبة، خلال كم ثانية)}
+NUKE_CLEANUP_CREATED = True      # لو التخريب إنشاء رومات/رتب: يحذف البوت اللي أنشأه الفاعل بنفس الفترة
 
 # ---- 5) البوتات ----
 BOT_ADD_ENABLED = True
 ALLOWED_BOT_IDS = []             # آيديات بوتات مسموحة دائمًا (مثال: بوت الموسيقى): [123456789012345678]
+
+# ---- 6) حماية صلاحية Administrator ----
+ADMIN_GUARD_ENABLED = True
+ADMIN_GUARD_TIMEOUT_DAYS = 7     # مدة التايم أوت للفاعل (ديسكورد أقصاها 28 يوم)
 
 
 # ============================================================
@@ -262,10 +272,36 @@ async def _handle_bot_join(member: discord.Member) -> None:
 # ============================================================
 # 4) التخريب (anti-nuke)
 # ============================================================
+# كل عنصر بالطابور: (الوقت, نوع الفعل, آيدي الروم/الرتبة/العضو المستهدف)
 _nuke: dict[tuple, deque] = defaultdict(deque)
+_CREATE_ACTIONS = {discord.AuditLogAction.channel_create, discord.AuditLogAction.role_create}
 
 
-async def _punish_nuker(guild: discord.Guild, member: discord.Member, label: str, count: int) -> None:
+async def _cleanup_created(guild: discord.Guild, items: list) -> tuple[int, int]:
+    """يحذف الرومات والرتب اللي أنشأها المخرب (اللي بالطابور). يرجع (عدد الرومات، عدد الرتب)."""
+    channels = roles = 0
+    for _, action, target_id in items:
+        if target_id is None:
+            continue
+        try:
+            if action == discord.AuditLogAction.channel_create:
+                ch = guild.get_channel(target_id)
+                if ch is not None:
+                    await ch.delete(reason="حماية: تنظيف رومات أنشأها مخرب")
+                    channels += 1
+            elif action == discord.AuditLogAction.role_create:
+                role = guild.get_role(target_id)
+                if role is not None:
+                    await role.delete(reason="حماية: تنظيف رتب أنشأها مخرب")
+                    roles += 1
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        await asyncio.sleep(0.3)   # عشان ما نصطدم بحد سرعة ديسكورد
+    return channels, roles
+
+
+async def _punish_nuker(guild: discord.Guild, member: discord.Member, label: str, count: int,
+                         items: list | None = None) -> None:
     removed_names: list[str] = []
     ok = True
     try:
@@ -292,9 +328,151 @@ async def _punish_nuker(guild: discord.Guild, member: discord.Member, label: str
         fields.append(("الرتب اللي انسحبت (للاسترجاع يدويًا)", "، ".join(removed_names)))
     await _log(guild, "🚨 نشاط تخريبي", discord.Color.red(), fields, ping_owner=True)
 
+    # تنظيف: لو النشاط إنشاء رومات/رتب نحذف اللي أنشأه الفاعل
+    if NUKE_CLEANUP_CREATED and items:
+        created = [i for i in items if i[1] in _CREATE_ACTIONS]
+        if created:
+            channels, roles = await _cleanup_created(guild, created)
+            await _log(guild, "🧹 تنظيف بعد التخريب", discord.Color.green(), [
+                ("الفاعل", f"{member.mention} (`{member.id}`)"),
+                ("اللي انحذف", f"{channels} روم و {roles} رتبة أنشأها الفاعل"),
+            ])
+
+
+# ============================================================
+# 6) حماية صلاحية Administrator
+# ============================================================
+_ADMIN_ACTIONS = {
+    discord.AuditLogAction.role_update,
+    discord.AuditLogAction.role_create,
+    discord.AuditLogAction.member_role_update,
+}
+
+
+async def _punish_admin_abuse(guild: discord.Guild, member: discord.Member, label: str,
+                               detail: str, revert_note: str) -> None:
+    """تايم أوت للفاعل (ADMIN_GUARD_TIMEOUT_DAYS أيام). ديسكورد ما يسمح بتايم أوت لصاحب Administrator،
+    فلو فشل التايم أوت نسحب رتبه الخطرة وبعدها نعيد المحاولة. لو الفاعل بوت نطرده."""
+    duration = timedelta(days=ADMIN_GUARD_TIMEOUT_DAYS)
+    reason = f"حماية: محاولة إعطاء صلاحية Administrator ({label})"
+    removed_names: list[str] = []
+
+    if member.bot:
+        try:
+            await member.kick(reason=reason)
+            action = "تم طرد البوت"
+        except (discord.Forbidden, discord.HTTPException):
+            action = "فشل طرد البوت (رتبته أعلى من رتبة البوت أو ناقص صلاحية) — تصرف يدويًا فورًا!"
+    else:
+        timed = False
+        try:
+            await member.timeout(duration, reason=reason)
+            timed = True
+        except (discord.Forbidden, discord.HTTPException):
+            # غالبًا لأنه أدمن: نسحب رتبه ثم نعيد المحاولة
+            try:
+                me = guild.me
+                keep = [r for r in member.roles if not r.is_default() and (r.managed or r >= me.top_role)]
+                removed_names = [r.name for r in member.roles if not r.is_default() and r not in keep]
+                await member.edit(roles=keep, reason=reason)
+                await member.timeout(duration, reason=reason)
+                timed = True
+            except (discord.Forbidden, discord.HTTPException):
+                timed = False
+        if timed:
+            action = f"تايم أوت {ADMIN_GUARD_TIMEOUT_DAYS} أيام"
+        else:
+            action = "فشل (رتبته أعلى من رتبة البوت أو ناقص صلاحية) — تصرف يدويًا فورًا!"
+
+    fields = [
+        ("الفاعل", f"{member.mention} (`{member.id}`)"),
+        ("المحاولة", f"{label}\n{detail}"),
+        ("التراجع عن التعديل", revert_note),
+        ("الإجراء ضد الفاعل", action),
+    ]
+    if removed_names:
+        fields.append(("الرتب اللي انسحبت من الفاعل (للاسترجاع يدويًا)", "، ".join(removed_names)))
+    await _log(guild, "🚨 محاولة إعطاء صلاحية Administrator", discord.Color.red(), fields, ping_owner=True)
+
+
+async def _check_admin_grant(entry: discord.AuditLogEntry, executor: discord.Member) -> bool:
+    """يفحص سجل التدقيق: لو الفاعل (غير المستثنى) أعطى صلاحية Administrator بأي طريقة → يتراجع ويعاقب.
+    يرجع True لو اكتشف محاولة وتعامل معها، وإلا False (يعني العملية عادية)."""
+    guild = entry.guild
+    action = entry.action
+    reason = f"حماية: تراجع عن صلاحية Administrator (الفاعل {executor})"
+
+    try:
+        if action == discord.AuditLogAction.role_update:
+            before_p = getattr(entry.before, "permissions", None)
+            after_p = getattr(entry.after, "permissions", None)
+            if after_p is None or not after_p.administrator:
+                return False
+            if before_p is not None and before_p.administrator:
+                return False   # الرتبة كانت أدمن أصلًا، مو إعطاء جديد
+            role = guild.get_role(entry.target.id) if entry.target is not None else None
+            label = "تعديل رتبة لتصير Administrator"
+            detail = f"الرتبة: {role.mention if role else getattr(entry.target, 'id', '؟')}"
+            revert_note = "ما قدرت أتراجع (الرتبة ما انلقت)"
+            if role is not None:
+                if before_p is not None:
+                    restored = discord.Permissions(before_p.value)
+                else:
+                    restored = discord.Permissions(after_p.value)
+                    restored.administrator = False
+                try:
+                    await role.edit(permissions=restored, reason=reason)
+                    revert_note = "تم إرجاع صلاحيات الرتبة لما كانت عليه"
+                except (discord.Forbidden, discord.HTTPException):
+                    revert_note = "فشل التراجع (رتبة البوت أقل من هذي الرتبة) — شيل الصلاحية يدويًا!"
+
+        elif action == discord.AuditLogAction.role_create:
+            after_p = getattr(entry.after, "permissions", None)
+            if after_p is None or not after_p.administrator:
+                return False
+            role = guild.get_role(entry.target.id) if entry.target is not None else None
+            label = "إنشاء رتبة بصلاحية Administrator"
+            detail = f"الرتبة: {role.mention if role else getattr(entry.target, 'id', '؟')}"
+            revert_note = "ما قدرت أتراجع (الرتبة ما انلقت)"
+            if role is not None:
+                try:
+                    await role.delete(reason=reason)
+                    revert_note = "تم حذف الرتبة"
+                except (discord.Forbidden, discord.HTTPException):
+                    revert_note = "فشل حذف الرتبة (رتبة البوت أقل منها) — احذفها يدويًا!"
+
+        elif action == discord.AuditLogAction.member_role_update:
+            added = getattr(entry.after, "roles", None) or []
+            admin_roles = []
+            for r in added:
+                role = guild.get_role(r.id)
+                if role is not None and role.permissions.administrator:
+                    admin_roles.append(role)
+            if not admin_roles:
+                return False
+            target = guild.get_member(entry.target.id) if entry.target is not None else None
+            label = "إعطاء عضو رتبة فيها Administrator"
+            detail = (f"العضو: {target.mention if target else getattr(entry.target, 'id', '؟')}\n"
+                      f"الرتب: {'، '.join(r.name for r in admin_roles)}")
+            revert_note = "ما قدرت أتراجع (العضو ما انلقى)"
+            if target is not None:
+                try:
+                    await target.remove_roles(*admin_roles, reason=reason)
+                    revert_note = "تم سحب الرتب من العضو"
+                except (discord.Forbidden, discord.HTTPException):
+                    revert_note = "فشل سحب الرتب (رتبة البوت أقل منها أو رتبة تابعة لبوت) — اسحبها يدويًا!"
+        else:
+            return False
+    except Exception as e:
+        print(f"[Protection] خطأ بفحص صلاحية Administrator: {e}")
+        return False
+
+    await _punish_admin_abuse(guild, executor, label, detail, revert_note)
+    return True
+
 
 async def _on_audit_entry(entry: discord.AuditLogEntry) -> None:
-    if not NUKE_ENABLED or _bot_ref is None:
+    if _bot_ref is None:
         return
     guild = entry.guild
     executor_id = entry.user_id
@@ -303,19 +481,29 @@ async def _on_audit_entry(entry: discord.AuditLogEntry) -> None:
     member = guild.get_member(executor_id)
     if member is None or _is_exempt(member):
         return
+
+    # 6) حماية صلاحية Administrator (لو انكشفت محاولة وتعاملنا معها نوقف هنا)
+    if ADMIN_GUARD_ENABLED and entry.action in _ADMIN_ACTIONS:
+        if await _check_admin_grant(entry, member):
+            return
+
+    # 4) التخريب (حذف / حظر وطرد / إنشاء بكثرة)
+    if not NUKE_ENABLED:
+        return
     for label, (actions, limit, window) in NUKE_RULES.items():
         if entry.action not in actions:
             continue
         key = (guild.id, executor_id, label)
         now = time.monotonic()
         q = _nuke[key]
-        q.append(now)
-        while q and now - q[0] > window:
+        q.append((now, entry.action, getattr(entry.target, "id", None)))
+        while q and now - q[0][0] > window:
             q.popleft()
         if len(q) >= limit:
             count = len(q)
+            items = list(q)
             q.clear()
-            await _punish_nuker(guild, member, label, count)
+            await _punish_nuker(guild, member, label, count, items)
         break
 
 
