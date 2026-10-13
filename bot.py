@@ -142,6 +142,10 @@ import voice_stay
 voice_stay.setup_voice_stay(bot)
 import ajr
 ajr.setup_ajr(bot)
+import bank
+bank.setup_bank(bot)
+import games
+games.setup_games(bot)
 # ============================================================
 # فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
 # ============================================================
@@ -2138,6 +2142,9 @@ async def on_message(message: discord.Message):
         await handle_warn_command(message)
         return
 
+    if await bank.try_dispatch_bank_admin(message):
+        return
+
     if await try_dispatch_admin_command(message):
         return
 
@@ -2157,7 +2164,11 @@ async def on_ready():
 
 @bot.event
 async def on_command_error(ctx: commands.Context, error: commands.CommandError):
-    if isinstance(error, commands.MemberNotFound):
+    if isinstance(error, bank.BankChannelRequired):
+        await bank.handle_bank_channel_error(ctx)
+    elif isinstance(error, games.GamesRoleRequired):
+        await games.handle_games_role_error(ctx)
+    elif isinstance(error, commands.MemberNotFound):
         await ctx.send("⚠️ ما لقيت هذا العضو — تأكد إنك تعمل منشن حقيقي (@) من قائمة الاقتراحات.")
     elif isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f"⚠️ ناقص معطى بالأمر. مثال صحيح: `.{ctx.command.name} @عضو`")
