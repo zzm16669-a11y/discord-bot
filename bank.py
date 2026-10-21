@@ -97,6 +97,11 @@ async def reply(message: discord.Message, text: str):
 
 
 # ---------- اللوقات (mod-logs / bot-logs) ----------
+LOG_CHANNEL_IDS = {
+    "mod": 1538326815142060072,
+    "bot": 1538327078162927716,
+}
+
 LOG_CHANNEL_NAMES = {
     "mod": ["mod-logs"],
     "bot": ["bot-logs"],
@@ -104,6 +109,11 @@ LOG_CHANNEL_NAMES = {
 
 
 def find_log_channel(guild: discord.Guild, key: str) -> discord.TextChannel | None:
+    channel_id = LOG_CHANNEL_IDS.get(key)
+    if channel_id:
+        ch = guild.get_channel(channel_id)
+        if ch is not None:
+            return ch
     names = LOG_CHANNEL_NAMES.get(key, [])
     for ch in guild.text_channels:
         normalized_name = ch.name.lower().replace("_", "-")
