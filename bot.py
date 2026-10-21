@@ -66,13 +66,28 @@ AFK_FILE = "afk.json"
 JAIL_ROLE_NAME = "Jailed"
 MUTE_ROLE_NAME = "Muted"
 WARN_LOG_CHANNEL_NAMES = ["warn-log", "توثيق-التنبيهات", "سجل-التنبيهات", "تنبيهات-اللوق", "log-تنبيهات"]
+WARN_LOG_CHANNEL_ID = 1547197859169042442
 
 # ============================================================
 # 0) نظام اللوقات العام (روومات تسجيل منفصلة لكل نوع حدث)
 # ============================================================
-# كل مفتاح تحته أسماء الروم اللي يدور عليها البوت بالسيرفر (بالاسم، يتحمل حروف كبيرة/صغيرة وشرطات/سفلات).
-# روم "ticket-logs" ما ضفناه لأنه مخصص لبوت ثاني حسب كلامك، وروم "moderator-only" مخصص لتواصل الإدارة
+# كل مفتاح له آيدي الروم (الأساسي). الأسماء تبقى احتياط لو الآيدي ما انلقى.
+# روم "ticket-logs" ما ضفناه لأنه مخصص لبوت ثاني، وروم "moderator-only" مخصص لتواصل الإدارة
 # يدويًا وما يحتاج البوت يرسل فيه شي تلقائي.
+LOG_CHANNEL_IDS = {
+    "member": 1538326595994001448,
+    "role": 1538326865469505576,
+    "mod": 1538326815142060072,
+    "channel": 1538326970755063808,
+    "voice": 1538327045342502942,
+    "ban": 1538335749920006246,
+    "modified_message": 1538339026065690624,
+    "server": 1538327009837449266,
+    "bot": 1538327078162927716,
+    "security": 1538327174124408872,
+    "delete": 1552223827449221140,
+}
+
 LOG_CHANNEL_NAMES = {
     "member": ["member-logs"],
     "role": ["role-logs"],
@@ -89,7 +104,12 @@ LOG_CHANNEL_NAMES = {
 
 
 def find_log_channel(guild: discord.Guild, key: str) -> discord.TextChannel | None:
-    """يدور على روم لوق معيّن بالاسم (يتحمل حروف كبيرة/صغيرة وشرطات/سفلات)."""
+    """يدور على روم لوق معيّن بالآيدي أول، وإذا ما لقاه يدور بالاسم."""
+    channel_id = LOG_CHANNEL_IDS.get(key)
+    if channel_id:
+        ch = guild.get_channel(channel_id)
+        if ch is not None:
+            return ch
     names = LOG_CHANNEL_NAMES.get(key, [])
     for ch in guild.text_channels:
         normalized_name = ch.name.lower().replace("_", "-")
@@ -214,7 +234,10 @@ def get_warn_count(guild_id: int, member_id: int) -> int:
 
 
 def find_warn_log_channel(guild: discord.Guild) -> discord.TextChannel | None:
-    """يدور على روم مخصص للوق التحذيرات بالاسم (يتحمل حروف كبيرة/صغيرة ومسافات/شرطات)."""
+    """يدور على روم لوق التحذيرات بالآيدي أول، وإذا ما لقاه يدور بالاسم."""
+    ch = guild.get_channel(WARN_LOG_CHANNEL_ID)
+    if ch is not None:
+        return ch
     for ch in guild.text_channels:
         normalized_name = ch.name.lower().replace("_", "-")
         for target_name in WARN_LOG_CHANNEL_NAMES:
@@ -266,7 +289,7 @@ async def send_warn_log(guild: discord.Guild, target, moderator, reason, warn_nu
                 print("[WarnSystem] ما عندي صلاحية أرسل بروم اللوق.")
 
     if not delivered:
-        print("[WarnSystem] ⚠️ ما قدرت أوصل لوق التحذير — لا الويب هوك اشتغل ولا لقيت روم اسمه warn-log.")
+        print("[WarnSystem] ⚠️ ما قدرت أوصل لوق التحذير — لا الويب هوك اشتغل ولا لقيت روم warn-log.")
 
 
 # ---------- قائمة الأسباب (منيو منسدلة — تستخدم لأمر تحذير ولكل أوامر العقوبات) ----------
@@ -2008,18 +2031,17 @@ def is_salam_message(content: str) -> bool:
 # ============================================================
 # روم الفخ "ممنوع-الارسال" — أي أحد يرسل فيه يتبند فورًا
 # ============================================================
-# الروم: أي روم اسمه فيه "ممنوع-الارسال" (يتحمل الهمزة والمسافات والشرطات، مثل: 🚫｜ممنوع_الإرسال).
+# الروم يتحدد بالآيدي (روم الترحيل / الباند).
 # الإداريين (Trial Moderator وفوق) ومالك السيرفر وأصحاب Administrator ما يتبندون لو كتبوا فيه (احتياط من الغلط).
 # لو تبي حتى الإداريين يتبندون غيّر TRAP_EXEMPT_STAFF إلى False (والبوت أصلًا ما يقدر يبند رتبة أعلى منه).
 TRAP_CHANNEL_NAME = "ممنوع-الارسال"
+TRAP_CHANNEL_ID = 1552574286605197396
 TRAP_EXEMPT_STAFF = True
 TRAP_DELETE_SECONDS = 3600   # يمسح رسائل العضو من آخر ساعة (يفيد لو الحساب مخترق وينشر سبام)
 
 
 def is_trap_channel(channel) -> bool:
-    name = getattr(channel, "name", "") or ""
-    cleaned = normalize(name.replace("_", "-").replace(" ", "-"))
-    return normalize(TRAP_CHANNEL_NAME) in cleaned
+    return getattr(channel, "id", None) == TRAP_CHANNEL_ID
 
 
 async def handle_trap_message(message: discord.Message) -> bool:
@@ -2059,14 +2081,16 @@ async def handle_trap_message(message: discord.Message) -> bool:
 # أي رسالة فيها صورة بهذي الرومات يحط عليها البوت رياكشن (بدون رد).
 # الرسائل اللي بدون صور يتجاهلها.
 # غيّر الإيموجيات من REACTION_EMOJIS (تقدر تحط أكثر من واحد).
-REACTION_CHANNEL_NAMES = ["locket", "streaks"]
+REACTION_CHANNEL_IDS = {
+    1538293753306161192,   # locket
+    1540256888761876480,   # streaks
+}
 REACTION_EMOJIS = ["💥", "🔥", "⛔", "😼"]
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic")
 
 
 def is_reaction_channel(channel) -> bool:
-    name = (getattr(channel, "name", "") or "").lower().replace("_", "-")
-    return any(target in name for target in REACTION_CHANNEL_NAMES)
+    return getattr(channel, "id", None) in REACTION_CHANNEL_IDS
 
 
 def message_has_image(message: discord.Message) -> bool:
@@ -2204,8 +2228,9 @@ async def on_command_completion(ctx: commands.Context):
 # ============================================================
 # ترحيب الأعضاء الجدد — صورة الترحيب (افتار العضو داخل الدائرة) + المنشن + الرسالة + عدد الأعضاء
 # ============================================================
-# يرسل بروم اسمه فيه "welcome" أو "ترحيب" (وإذا ما لقاه يستخدم روم رسائل النظام بالسيرفر لو موجود).
+# يرسل بروم الترحيب بالآيدي (وإذا ما لقاه يدور بالاسم، وبعدها روم رسائل النظام بالسيرفر لو موجود).
 # ملف الصورة welcome.png لازم يكون بجنب ملف البوت (نفس مكان مجلد game_images).
+WELCOME_CHANNEL_ID = 1538292045649543168
 WELCOME_CHANNEL_NAMES = ["welcome", "ترحيب"]
 WELCOME_IMAGE_PATH = "welcome.png"
 WELCOME_CIRCLE_CENTER = (1342, 422)   # مركز الدائرة الفاضية بالصورة (بالبكسل)
@@ -2216,6 +2241,9 @@ WELCOME_MAP_CHANNEL_ID = 1541934638883143831     # الخريطة
 
 
 def find_welcome_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    ch = guild.get_channel(WELCOME_CHANNEL_ID)
+    if ch is not None:
+        return ch
     for ch in guild.text_channels:
         name = ch.name.lower().replace("_", "-")
         if any(target in name for target in WELCOME_CHANNEL_NAMES):
