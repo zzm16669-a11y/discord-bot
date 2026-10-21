@@ -2,7 +2,7 @@
 bank.py — نظام البنك (وحدة داخل بوت الكنترول bot.py)
 ====================================================
 منقول من bank_bot.py كما هو (الحساب، إيداع/سحب/حوالة/فائدة، الذهب، الوظائف، السرقة، الأغنياء)
-مع أمرين الإدارة (بنك_اضافة / بنك_خصم).
+مع أمرين الإدارة (بنك_اضافة / بنك_خصم) + لوحة أزرار: اكتب "بنك" في روم البنك وتطلع لك كل الأزرار.
 
 الربط داخل bot.py (نفس طريقة tickets / protection / ajr):
     import bank
@@ -12,7 +12,7 @@ bank.py — نظام البنك (وحدة داخل بوت الكنترول bot.p
   - ملف البيانات: bank.json (انقله من مجلد بوت البنك القديم لمجلد بوت الكنترول).
   - الوحدة ما تسجل أي events (on_message / on_ready / ...) عشان ما تتعارض مع bot.py.
     اللي يحتاجه البنك من bot.py شيئين بس:
-      1) bank.try_dispatch_bank_admin(message)  ← أوامر بنك_اضافة / بنك_خصم
+      1) bank.try_dispatch_bank_admin(message)  ← أوامر بنك_اضافة / بنك_خصم + كلمة "بنك" (لوحة الأزرار)
       2) bank.BankChannelRequired               ← رسالة "أوامر البنك تشتغل بس في روم البنك"
   - مستقلة بالكامل: ما تستورد شي من bot.py (ما فيه استيراد دائري).
 """
@@ -142,9 +142,10 @@ async def log_mod_action(guild: discord.Guild, title: str, moderator: discord.Me
 # ============================================================
 # نظام البنك — منفصل تمامًا عن النقاط (ملف bank.json وعملة اسمها "ريال")
 # ============================================================
-# كل أوامر البنك تشتغل بس داخل روم اسمه فيه "bank" (لو ما فيه روم بهذا الاسم تشتغل بأي روم).
+# كل أوامر البنك تشتغل بس داخل روم البنك (بالآيدي، ولو ما لقيناه نبحث باسم فيه "bank").
 # الأقسام: حساب + بنك (إيداع/سحب/حوالة/فائدة) + ذهب (سعر متغير) + وظائف + سرقة + أغنياء.
 BANK_FILE = "bank.json"
+BANK_CHANNEL_ID = 1539151569826877450
 BANK_CHANNEL_NAMES = ["bank"]
 CURRENCY = "ريال"
 
@@ -193,6 +194,9 @@ class BankChannelRequired(commands.CheckFailure):
 
 
 def find_bank_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    ch = guild.get_channel(BANK_CHANNEL_ID)
+    if ch is not None:
+        return ch
     for ch in guild.text_channels:
         name = ch.name.lower().replace("_", "-")
         if any(target in name for target in BANK_CHANNEL_NAMES):
@@ -200,13 +204,19 @@ def find_bank_channel(guild: discord.Guild) -> discord.TextChannel | None:
     return None
 
 
+def _in_bank_channel(channel, guild: discord.Guild | None) -> bool:
+    if guild is None:
+        return False
+    bank_ch = find_bank_channel(guild)
+    if bank_ch is None:
+        return True  # ما فيه روم bank: نسمح بأي روم
+    return channel.id == bank_ch.id or getattr(channel, "parent_id", None) == bank_ch.id
+
+
 async def _bank_channel_check(ctx: commands.Context) -> bool:
     if ctx.guild is None:
         raise BankChannelRequired()
-    bank_ch = find_bank_channel(ctx.guild)
-    if bank_ch is None:
-        return True  # ما فيه روم bank: نسمح بأي روم
-    if ctx.channel.id == bank_ch.id or getattr(ctx.channel, "parent_id", None) == bank_ch.id:
+    if _in_bank_channel(ctx.channel, ctx.guild):
         return True
     raise BankChannelRequired()
 
@@ -758,6 +768,481 @@ async def bank_help_cmd(ctx: commands.Context):
 
 
 # ============================================================
+# لوحة الأزرار — اكتب "بنك" في روم البنك وتطلع لك كل الأزرار (بدون ما تكتب أوامر)
+# ============================================================
+def _account_embed(data: dict, member: discord.abc.User, acct: dict) -> discord.Embed:
+    price = data["_gold"]["price"]
+    embed = _bank_embed(f"🏦 حساب {member.display_name}")
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="💵 الكاش", value=f"{fmt(acct['cash'])} {CURRENCY}", inline=True)
+    embed.add_field(name="🏦 البنك", value=f"{fmt(acct['bank'])} {CURRENCY}", inline=True)
+    embed.add_field(name="🪙 الذهب",
+                    value=f"{fmt(acct['gold'])} جرام (≈ {fmt(acct['gold'] * price)} {CURRENCY})", inline=True)
+    job = _find_job(acct["job"]) if acct.get("job") else None
+    job_text = f"{job[4]} {job[0]} • مستوى {_level(acct)}" if job else f"عاطل • مستوى {_level(acct)}"
+    embed.add_field(name="💼 الوظيفة", value=job_text, inline=True)
+    embed.add_field(name="💎 صافي الثروة", value=f"{fmt(_net_worth(acct, price))} {CURRENCY}", inline=True)
+    embed.set_footer(text="الكاش ممكن ينسرق — فلوس البنك بأمان 🔒")
+    return embed
+
+
+def _gold_embed(data: dict, acct: dict) -> discord.Embed:
+    gold = data["_gold"]
+    price = gold["price"]
+    sell_price = int(price * (1 - GOLD_SELL_FEE))
+    embed = _bank_embed("🪙 سوق الذهب")
+    embed.add_field(name="سعر الشراء (للجرام)", value=f"{fmt(price)} {CURRENCY}", inline=True)
+    embed.add_field(name="سعر البيع (للجرام)", value=f"{fmt(sell_price)} {CURRENCY}", inline=True)
+    embed.add_field(name="الحركة", value=_gold_trend(gold["history"]), inline=True)
+    embed.add_field(name="آخر الأسعار", value=" ← ".join(str(p) for p in gold["history"][-8:]), inline=False)
+    embed.add_field(name="ذهبك", value=f"{fmt(acct['gold'])} جرام (≈ {fmt(acct['gold'] * sell_price)} {CURRENCY})",
+                    inline=False)
+    embed.set_footer(text=f"السعر يتغير كل {GOLD_STEP_SECONDS // 60} دقيقة")
+    return embed
+
+
+def _jobs_embed(acct: dict) -> discord.Embed:
+    level = _level(acct)
+    lines = []
+    for name, min_level, low, high, emoji in BANK_JOBS:
+        lock = "" if level >= min_level else " 🔒"
+        current = " ✅" if acct.get("job") == name else ""
+        lines.append(f"{emoji} **{name}** — مستوى {min_level}+ — {fmt(low)}–{fmt(high)} {CURRENCY}{lock}{current}")
+    embed = _bank_embed("💼 الوظائف", "\n".join(lines))
+    embed.set_footer(text=f"مستواك: {level} • اختر وظيفة من القائمة تحت للتوظف • كل {WORK_PER_LEVEL} مرات عمل = مستوى")
+    return embed
+
+
+async def _err(interaction: discord.Interaction, text: str) -> None:
+    await interaction.response.send_message(text, ephemeral=True)
+
+
+async def _out(interaction: discord.Interaction, panel, embed: discord.Embed,
+               content: str | None = None, ping=None) -> None:
+    """لو فيه لوحة: يعدّل رسالة اللوحة. لو لا: يرسل رسالة عامة (للحوالة والسرقة)."""
+    if panel is not None:
+        await interaction.response.edit_message(embed=embed, view=panel)
+    else:
+        mentions = discord.AllowedMentions(users=[ping]) if ping is not None else discord.AllowedMentions.none()
+        await interaction.response.send_message(content=content, embed=embed, allowed_mentions=mentions)
+
+
+# ---------- منطق الأزرار ----------
+async def _act_account(interaction, panel):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    bank_save(data)
+    await _out(interaction, panel, _account_embed(data, interaction.user, acct))
+
+
+async def _act_deposit(interaction, text, panel):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    n = parse_amount(text, acct["cash"])
+    if not n:
+        return await _err(interaction, "⚠️ اكتب رقم أكبر من صفر أو كلمة `كل` (وكاشك لازم يكون أكبر من صفر).")
+    if n > acct["cash"]:
+        return await _err(interaction, f"❌ كاشك ما يكفي. معك **{fmt(acct['cash'])}** {CURRENCY} كاش.")
+    acct["cash"] -= n
+    acct["bank"] += n
+    bank_save(data)
+    embed = _bank_embed("🏦 تم الإيداع", f"أودعت **{fmt(n)}** {CURRENCY} بالبنك.", discord.Color.green())
+    embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
+    embed.add_field(name="🏦 البنك", value=fmt(acct["bank"]), inline=True)
+    await _out(interaction, panel, embed)
+
+
+async def _act_withdraw(interaction, text, panel):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    n = parse_amount(text, acct["bank"])
+    if not n:
+        return await _err(interaction, "⚠️ اكتب رقم أكبر من صفر أو كلمة `كل` (ورصيدك بالبنك لازم يكون أكبر من صفر).")
+    if n > acct["bank"]:
+        return await _err(interaction, f"❌ رصيدك بالبنك ما يكفي. عندك **{fmt(acct['bank'])}** {CURRENCY}.")
+    acct["bank"] -= n
+    acct["cash"] += n
+    bank_save(data)
+    embed = _bank_embed("🏦 تم السحب", f"سحبت **{fmt(n)}** {CURRENCY} للكاش.", discord.Color.green())
+    embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
+    embed.add_field(name="🏦 البنك", value=fmt(acct["bank"]), inline=True)
+    await _out(interaction, panel, embed)
+
+
+async def _act_transfer(interaction, member, text):
+    if member.bot or member.id == interaction.user.id:
+        return await _err(interaction, "⚠️ ما تقدر تحول لنفسك أو لبوت.")
+    data = bank_load()
+    sender = bank_acct(data, interaction.guild.id, interaction.user.id)
+    n = parse_amount(text, sender["bank"])
+    if not n or n < BANK_TRANSFER_MIN:
+        return await _err(interaction, f"⚠️ اكتب مبلغ صحيح (أقل مبلغ {BANK_TRANSFER_MIN} {CURRENCY}).")
+    if n > sender["bank"]:
+        return await _err(interaction, f"❌ رصيدك بالبنك ما يكفي. عندك **{fmt(sender['bank'])}** {CURRENCY}.")
+    receiver = bank_acct(data, interaction.guild.id, member.id)
+    fee = max(1, round(n * BANK_TRANSFER_FEE))
+    received = n - fee
+    sender["bank"] -= n
+    receiver["bank"] += received
+    bank_save(data)
+    embed = _bank_embed("💸 حوالة بنكية ناجحة", color=discord.Color.green())
+    embed.add_field(name="من", value=interaction.user.mention, inline=True)
+    embed.add_field(name="إلى", value=member.mention, inline=True)
+    embed.add_field(name="المبلغ", value=f"{fmt(n)} {CURRENCY}", inline=True)
+    embed.add_field(name="الرسوم", value=f"{fmt(fee)} {CURRENCY}", inline=True)
+    embed.add_field(name="وصل للمستلم", value=f"{fmt(received)} {CURRENCY}", inline=True)
+    await _out(interaction, None, embed, content=member.mention, ping=member)
+
+
+async def _act_interest(interaction, panel):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    wait = _cooldown_left(acct["last_interest"], BANK_INTEREST_COOLDOWN)
+    if wait:
+        return await _err(interaction, f"⏳ استلمت فائدتك اليوم. ارجع بعد **{_fmt_wait(wait)}**.")
+    if acct["bank"] < BANK_INTEREST_MIN_BALANCE:
+        return await _err(interaction, f"⚠️ لازم يكون رصيدك بالبنك **{BANK_INTEREST_MIN_BALANCE}** {CURRENCY} على الأقل عشان تاخذ فائدة.")
+    interest = min(BANK_INTEREST_MAX, max(1, int(acct["bank"] * BANK_INTEREST_RATE)))
+    acct["bank"] += interest
+    acct["last_interest"] = _now_iso()
+    bank_save(data)
+    embed = _bank_embed("📈 فائدة البنك",
+                        f"انضاف لرصيدك **{fmt(interest)}** {CURRENCY} ({BANK_INTEREST_RATE * 100:.0f}% من رصيدك).",
+                        discord.Color.green())
+    embed.add_field(name="🏦 رصيدك الحين", value=f"{fmt(acct['bank'])} {CURRENCY}", inline=True)
+    await _out(interaction, panel, embed)
+
+
+async def _act_gold(interaction, panel):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    await _out(interaction, panel, _gold_embed(data, acct))
+
+
+async def _act_buy_gold(interaction, text, panel):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    price = data["_gold"]["price"]
+    n = parse_amount(text, acct["cash"] // price)
+    if not n:
+        if acct["cash"] < price:
+            return await _err(interaction, f"❌ كاشك ما يكفي لجرام واحد (السعر **{fmt(price)}** {CURRENCY}).")
+        return await _err(interaction, "⚠️ اكتب عدد الجرامات (رقم) أو كلمة `كل`.")
+    cost = n * price
+    if cost > acct["cash"]:
+        return await _err(interaction, f"❌ كاشك ما يكفي. تكلفة {fmt(n)} جرام = **{fmt(cost)}** {CURRENCY} وكاشك **{fmt(acct['cash'])}**.")
+    acct["cash"] -= cost
+    acct["gold"] += n
+    bank_save(data)
+    embed = _bank_embed("🪙 تم شراء الذهب",
+                        f"اشتريت **{fmt(n)}** جرام بسعر {fmt(price)} للجرام = **{fmt(cost)}** {CURRENCY}.",
+                        discord.Color.green())
+    embed.add_field(name="🪙 ذهبك", value=f"{fmt(acct['gold'])} جرام", inline=True)
+    embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
+    await _out(interaction, panel, embed)
+
+
+async def _act_sell_gold(interaction, text, panel):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    price = data["_gold"]["price"]
+    n = parse_amount(text, acct["gold"])
+    if not n:
+        if acct["gold"] == 0:
+            return await _err(interaction, "❌ ما عندك ذهب تبيعه.")
+        return await _err(interaction, "⚠️ اكتب عدد الجرامات (رقم) أو كلمة `كل`.")
+    if n > acct["gold"]:
+        return await _err(interaction, f"❌ ما عندك كفاية. معك **{fmt(acct['gold'])}** جرام.")
+    revenue = int(n * price * (1 - GOLD_SELL_FEE))
+    acct["gold"] -= n
+    acct["cash"] += revenue
+    bank_save(data)
+    embed = _bank_embed("🪙 تم بيع الذهب",
+                        f"بعت **{fmt(n)}** جرام بسعر {fmt(price)} للجرام (بعد عمولة {GOLD_SELL_FEE * 100:.0f}%) "
+                        f"وأخذت **{fmt(revenue)}** {CURRENCY}.",
+                        discord.Color.green())
+    embed.add_field(name="🪙 ذهبك", value=f"{fmt(acct['gold'])} جرام", inline=True)
+    embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
+    await _out(interaction, panel, embed)
+
+
+async def _act_jobs(interaction, panel):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    await _out(interaction, panel, _jobs_embed(acct))
+
+
+async def _act_apply_job(interaction, job_name, panel):
+    job = _find_job(job_name)
+    if job is None:
+        return await _err(interaction, "⚠️ ما لقيت هذي الوظيفة.")
+    name, min_level, low, high, emoji = job
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    if _level(acct) < min_level:
+        return await _err(interaction, f"🔒 وظيفة **{name}** تحتاج مستوى **{min_level}** ومستواك **{_level(acct)}**. اشتغل أكثر بزر ⚒️ عمل.")
+    if acct.get("job") == name:
+        return await _err(interaction, f"⚠️ أنت أصلًا شغال **{name}**.")
+    acct["job"] = name
+    bank_save(data)
+    embed = _bank_embed("💼 تم التوظيف", f"مبروك! صرت **{emoji} {name}**.\nالراتب: {fmt(low)}–{fmt(high)} {CURRENCY} بالمرة.",
+                        discord.Color.green())
+    await _out(interaction, panel, embed)
+
+
+async def _act_quit(interaction, panel):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    if not acct.get("job"):
+        return await _err(interaction, "⚠️ أنت عاطل أصلًا.")
+    old = acct["job"]
+    acct["job"] = None
+    bank_save(data)
+    await _out(interaction, panel, _bank_embed("📝 استقالة", f"تركت وظيفة **{old}**. مستواك محفوظ."))
+
+
+async def _act_work(interaction, panel):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    job = _find_job(acct["job"]) if acct.get("job") else None
+    if job is None:
+        return await _err(interaction, "⚠️ ما عندك وظيفة. اضغط 💼 الوظائف واختر وظيفة من القائمة.")
+    wait = _cooldown_left(acct["last_work"], WORK_COOLDOWN)
+    if wait:
+        return await _err(interaction, f"⏳ تعبان! ارجع للشغل بعد **{_fmt_wait(wait)}**.")
+    name, _, low, high, emoji = job
+    pay = random.randint(low, high)
+    bonus = random.random() < WORK_BONUS_CHANCE
+    if bonus:
+        pay = int(pay * 1.5)
+    old_level = _level(acct)
+    acct["cash"] += pay
+    acct["works"] += 1
+    acct["last_work"] = _now_iso()
+    new_level = _level(acct)
+    bank_save(data)
+    desc = f"اشتغلت **{emoji} {name}** وأخذت **{fmt(pay)}** {CURRENCY} كاش."
+    if bonus:
+        desc += "\n🎉 جاك مكافأة من المدير (x1.5)!"
+    embed = _bank_embed("💼 يوم عمل", desc, discord.Color.green())
+    embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
+    embed.add_field(name="⭐ المستوى", value=str(new_level), inline=True)
+    if new_level > old_level:
+        embed.add_field(name="🆙 ترقية!", value=f"وصلت مستوى **{new_level}** — شوف 💼 الوظائف للوظايف الجديدة.", inline=False)
+    await _out(interaction, panel, embed)
+
+
+async def _act_rob(interaction, member):
+    if member.bot or member.id == interaction.user.id:
+        return await _err(interaction, "⚠️ ما تقدر تسرق نفسك أو بوت.")
+    data = bank_load()
+    thief = bank_acct(data, interaction.guild.id, interaction.user.id)
+    victim = bank_acct(data, interaction.guild.id, member.id)
+    wait = _cooldown_left(thief["last_rob"], ROB_COOLDOWN)
+    if wait:
+        return await _err(interaction, f"⏳ الشرطة تدور عليك! حاول بعد **{_fmt_wait(wait)}**.")
+    if thief["cash"] < ROB_MIN_THIEF_CASH:
+        return await _err(interaction, f"❌ لازم يكون معك **{ROB_MIN_THIEF_CASH}** {CURRENCY} كاش على الأقل (عشان الغرامة لو انمسكت).")
+    if victim["cash"] < ROB_MIN_VICTIM_CASH:
+        return await _err(interaction, f"⚠️ كاش {member.display_name} قليل ما يستاهل السرقة (وفلوس البنك محمية).")
+    thief["last_rob"] = _now_iso()
+    if random.random() < ROB_SUCCESS_CHANCE:
+        stolen = min(ROB_MAX_STEAL, max(1, int(victim["cash"] * random.uniform(0.10, 0.30))))
+        victim["cash"] -= stolen
+        thief["cash"] += stolen
+        embed = _bank_embed("🦹 سرقة ناجحة",
+                            f"{interaction.user.mention} سرق **{fmt(stolen)}** {CURRENCY} من {member.mention}!",
+                            discord.Color.red())
+    else:
+        fine = min(thief["cash"], max(ROB_MIN_THIEF_CASH, int(thief["cash"] * ROB_FINE_PERCENT)))
+        thief["cash"] -= fine
+        victim["cash"] += fine
+        embed = _bank_embed("🚔 انمسكت!",
+                            f"{interaction.user.mention} حاول يسرق {member.mention} وانمسك، ودفع غرامة **{fmt(fine)}** {CURRENCY} للضحية.",
+                            discord.Color.dark_grey())
+    bank_save(data)
+    embed.set_footer(text="تنبيه: حط فلوسك بالبنك عشان ما تنسرق")
+    await _out(interaction, None, embed, content=member.mention, ping=member)
+
+
+async def _act_rich(interaction, panel):
+    data = bank_load()
+    price = data["_gold"]["price"]
+    rows = []
+    for uid, acct in data.get(str(interaction.guild.id), {}).items():
+        if not uid.isdigit() or not isinstance(acct, dict):
+            continue
+        member = interaction.guild.get_member(int(uid))
+        if member is None or member.bot:
+            continue
+        rows.append((member, _net_worth(acct, price)))
+    rows.sort(key=lambda r: r[1], reverse=True)
+    if not rows:
+        return await _err(interaction, "📉 ما فيه حسابات بنكية لين الحين.")
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, (member, worth) in enumerate(rows[:10]):
+        rank = medals[i] if i < 3 else f"`#{i + 1}`"
+        lines.append(f"{rank} {member.mention} — **{fmt(worth)}** {CURRENCY}")
+    await _out(interaction, panel, _bank_embed("💎 أغنى الأعضاء", "\n".join(lines)))
+
+
+# ---------- مودال المبلغ (نافذة صغيرة تكتب فيها الرقم) ----------
+class AmountModal(discord.ui.Modal):
+    def __init__(self, title: str, label: str, handler, panel=None):
+        super().__init__(title=title)
+        self.handler = handler
+        self.panel = panel
+        self.amount = discord.ui.TextInput(label=label, placeholder="مثال: 500 أو كل", max_length=15, required=True)
+        self.add_item(self.amount)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await self.handler(interaction, str(self.amount.value), self.panel)
+
+
+# ---------- اختيار عضو (للحوالة والسرقة) ----------
+class TransferSelectView(discord.ui.View):
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=120)
+        self.owner_id = owner_id
+
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="اختر العضو اللي تحول له", min_values=1, max_values=1)
+    async def pick(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        member = select.values[0]
+        if member.bot or member.id == interaction.user.id:
+            return await _err(interaction, "⚠️ ما تقدر تحول لنفسك أو لبوت.")
+
+        async def handler(inter, text, _panel):
+            await _act_transfer(inter, member, text)
+
+        await interaction.response.send_modal(
+            AmountModal(f"حوالة إلى {member.display_name}"[:45], "المبلغ (من رصيد البنك)", handler))
+
+
+class RobSelectView(discord.ui.View):
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=120)
+        self.owner_id = owner_id
+
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="اختر الضحية", min_values=1, max_values=1)
+    async def pick(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+        await _act_rob(interaction, select.values[0])
+
+
+# ---------- قائمة الوظائف (للتوظف) ----------
+class JobSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label=name, value=name, emoji=emoji,
+                                 description=f"مستوى {lvl}+ • {low}–{high} {CURRENCY}")
+            for name, lvl, low, high, emoji in BANK_JOBS
+        ]
+        super().__init__(placeholder="💼 اختر وظيفة للتوظف", options=options, min_values=1, max_values=1, row=3)
+
+    async def callback(self, interaction: discord.Interaction):
+        await _act_apply_job(interaction, self.values[0], self.view)
+
+
+# ---------- اللوحة الرئيسية ----------
+class BankPanel(discord.ui.View):
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.message: discord.Message | None = None
+        self.add_item(JobSelect())
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("⚠️ هذي اللوحة مو لك، اكتب `بنك` وتطلع لك لوحتك.", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+
+    # ----- صف 1: الحساب والبنك -----
+    @discord.ui.button(label="حسابي", emoji="🏦", style=discord.ButtonStyle.primary, row=0)
+    async def b_account(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _act_account(interaction, self)
+
+    @discord.ui.button(label="إيداع", emoji="💰", style=discord.ButtonStyle.success, row=0)
+    async def b_deposit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(AmountModal("إيداع", "المبلغ (أو كل)", _act_deposit, self))
+
+    @discord.ui.button(label="سحب", emoji="💸", style=discord.ButtonStyle.success, row=0)
+    async def b_withdraw(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(AmountModal("سحب", "المبلغ (أو كل)", _act_withdraw, self))
+
+    @discord.ui.button(label="حوالة", emoji="📤", style=discord.ButtonStyle.secondary, row=0)
+    async def b_transfer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("اختر العضو اللي تبي تحول له:",
+                                                view=TransferSelectView(self.owner_id), ephemeral=True)
+
+    @discord.ui.button(label="فائدة", emoji="📈", style=discord.ButtonStyle.secondary, row=0)
+    async def b_interest(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _act_interest(interaction, self)
+
+    # ----- صف 2: الذهب والأغنياء -----
+    @discord.ui.button(label="سوق الذهب", emoji="🪙", style=discord.ButtonStyle.primary, row=1)
+    async def b_gold(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _act_gold(interaction, self)
+
+    @discord.ui.button(label="شراء ذهب", emoji="🛒", style=discord.ButtonStyle.success, row=1)
+    async def b_buy_gold(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(AmountModal("شراء ذهب", "عدد الجرامات (أو كل)", _act_buy_gold, self))
+
+    @discord.ui.button(label="بيع ذهب", emoji="💱", style=discord.ButtonStyle.danger, row=1)
+    async def b_sell_gold(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(AmountModal("بيع ذهب", "عدد الجرامات (أو كل)", _act_sell_gold, self))
+
+    @discord.ui.button(label="الأغنياء", emoji="🏆", style=discord.ButtonStyle.secondary, row=1)
+    async def b_rich(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _act_rich(interaction, self)
+
+    # ----- صف 3: الوظائف والسرقة -----
+    @discord.ui.button(label="الوظائف", emoji="💼", style=discord.ButtonStyle.primary, row=2)
+    async def b_jobs(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _act_jobs(interaction, self)
+
+    @discord.ui.button(label="عمل", emoji="⚒️", style=discord.ButtonStyle.success, row=2)
+    async def b_work(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _act_work(interaction, self)
+
+    @discord.ui.button(label="استقالة", emoji="📝", style=discord.ButtonStyle.secondary, row=2)
+    async def b_quit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _act_quit(interaction, self)
+
+    @discord.ui.button(label="سرقة", emoji="🦹", style=discord.ButtonStyle.danger, row=2)
+    async def b_rob(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("اختر الضحية:", view=RobSelectView(self.owner_id), ephemeral=True)
+
+
+async def open_bank_panel(message: discord.Message) -> None:
+    """يفتح لوحة الأزرار لما أحد يكتب "بنك". خارج روم البنك يرد بالتنبيه."""
+    if not _in_bank_channel(message.channel, message.guild):
+        bank_ch = find_bank_channel(message.guild)
+        where = f" {bank_ch.mention}" if bank_ch else ""
+        await message.channel.send(
+            f"{message.author.mention} ❌ مايمديك تستخدم البنك في هذا الروم، فقط في روم البنك{where}",
+            delete_after=8,
+            allowed_mentions=discord.AllowedMentions(users=[message.author]))
+        return
+    data = bank_load()
+    acct = bank_acct(data, message.guild.id, message.author.id)
+    bank_save(data)
+    panel = BankPanel(message.author.id)
+    msg = await message.channel.send(embed=_account_embed(data, message.author, acct), view=panel,
+                                     allowed_mentions=discord.AllowedMentions.none())
+    panel.message = msg
+
+
+# ============================================================
 # أوامر الإدارة الخاصة بالبنك — بدون بريفكس (Admin وفوق)
 # ============================================================
 async def cmd_bank_add(message: discord.Message, args: str):
@@ -831,7 +1316,12 @@ async def try_dispatch_admin_command(message: discord.Message) -> bool:
 # الربط مع بوت الكنترول
 # ============================================================
 async def try_dispatch_bank_admin(message: discord.Message) -> bool:
-    """يرجع True لو الرسالة كانت أمر إدارة بنك (بنك_اضافة / بنك_خصم) وتم التعامل معها."""
+    """يرجع True لو الرسالة كانت "بنك" (لوحة الأزرار) أو أمر إدارة بنك (بنك_اضافة / بنك_خصم) وتم التعامل معها."""
+    if message.author.bot or message.guild is None:
+        return False
+    if message.content.strip() == "بنك":
+        await open_bank_panel(message)
+        return True
     return await try_dispatch_admin_command(message)
 
 
@@ -839,7 +1329,8 @@ async def handle_bank_channel_error(ctx: commands.Context) -> None:
     """رسالة التنبيه لما أمر بنك ينكتب بغير روم البنك."""
     bank_ch = find_bank_channel(ctx.guild) if ctx.guild else None
     if bank_ch is not None:
-        await ctx.send(f"{ctx.author.mention} 🏦 أوامر البنك تشتغل بس في {bank_ch.mention}", delete_after=8)
+        await ctx.send(f"{ctx.author.mention} ❌ مايمديك تستخدم البنك في هذا الروم، فقط في روم البنك {bank_ch.mention}",
+                       delete_after=8)
 
 
 def setup_bank(bot: commands.Bot) -> None:
