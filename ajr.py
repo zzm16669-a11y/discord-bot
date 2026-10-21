@@ -1,12 +1,12 @@
 """
-ajr.py — إرسال تلقائي (كل 4 ساعات) لآية / دعاء / ذكر / حديث بروم اسمه فيه "ajr-bot".
+ajr.py — إرسال تلقائي (كل 4 ساعات) لآية / دعاء / ذكر / حديث بروم محدد بالايدي.
 
 التركيب بملف البوت الرئيسي (بجنب import voice_stay):
     import ajr
     ajr.setup_ajr(bot)
 
 ملاحظات:
-  - الروم يتدور عليه بالاسم (يتحمل الإيموجي والشرطات والسفلات، مثل: 🕌｜ajr_bot).
+  - الروم يتدور عليه بالايدي (AJR_CHANNEL_ID) عشان لو تغيّر اسمه ما ينكسر الكود.
   - يحفظ وقت آخر إرسال بملف ajr_state.json، فلو البوت انعاد تشغيله (Render) ما يرسل مرة ثانية قبل ما يمر 4 ساعات.
   - يستخدم طابور عشوائي عشان ما يتكرر نفس النص إلا بعد ما تخلص القائمة كلها.
   - تقدر تزيد على القائمة بنفسك، بس تأكد من صحة النص والمصدر قبل الإضافة.
@@ -20,7 +20,7 @@ from datetime import datetime, timezone, timedelta
 import discord
 from discord.ext import tasks
 
-AJR_CHANNEL_NAME = "ajr-bot"
+AJR_CHANNEL_ID = 1540902833321410600
 AJR_INTERVAL = timedelta(hours=4)
 AJR_STATE_FILE = "ajr_state.json"
 
@@ -207,10 +207,10 @@ def _save_state(state: dict) -> None:
 
 
 def find_ajr_channel(guild: discord.Guild) -> discord.TextChannel | None:
-    target = AJR_CHANNEL_NAME.lower()
-    for ch in guild.text_channels:
-        if target in ch.name.lower().replace("_", "-"):
-            return ch
+    """يجيب الروم بالايدي (يرجع None لو الروم مو بهذا السيرفر)."""
+    ch = guild.get_channel(AJR_CHANNEL_ID)
+    if isinstance(ch, discord.TextChannel):
+        return ch
     return None
 
 
