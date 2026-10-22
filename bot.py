@@ -2239,11 +2239,16 @@ async def on_command_completion(ctx: commands.Context):
 WELCOME_CHANNEL_ID = 1538292045649543168
 WELCOME_CHANNEL_NAMES = ["welcome", "ترحيب"]
 WELCOME_IMAGE_PATH = "welcome.png"
-WELCOME_CIRCLE_CENTER = (1342, 422)   # مركز الدائرة الفاضية بالصورة (بالبكسل)
-WELCOME_CIRCLE_RADIUS = 153           # نصف قطر الافتار (أصغر شوي من إطار الدائرة عشان الإطار يبقى ظاهر)
+# مكان الدائرة الفاضية بالصورة — بنسبة من حجم الصورة (مو بكسلات ثابتة)، عشان يركب على أي حجم صورة.
+#   X: 0.0 = أقصى اليسار ... 1.0 = أقصى اليمين
+#   Y: 0.0 = أعلى الصورة ... 1.0 = أسفل الصورة
+#   RADIUS: نصف قطر الافتار كنسبة من ارتفاع الصورة (أصغر شوي من إطار الدائرة عشان الإطار يبقى ظاهر)
+# لو الافتار ما ركب مضبوط على دائرتك عدّل هذي الأرقام الثلاثة بس.
+WELCOME_CIRCLE_X = 0.75
+WELCOME_CIRCLE_Y = 0.55
+WELCOME_CIRCLE_RADIUS = 0.20
 WELCOME_RULES_CHANNEL_ID = 1538291493779935333   # القوانين
 WELCOME_NEWS_CHANNEL_ID = 1550669151339683862    # الأخبار
-WELCOME_MAP_CHANNEL_ID = 1541934638883143831     # الخريطة
 
 
 def find_welcome_channel(guild: discord.Guild) -> discord.TextChannel | None:
@@ -2261,8 +2266,11 @@ def build_welcome_image(avatar_bytes: bytes) -> BytesIO:
     """يلصق افتار العضو (دائري) داخل الدائرة الفاضية بصورة الترحيب ويرجع الصورة النهائية PNG."""
     resample = getattr(Image, "Resampling", Image).LANCZOS
     base = Image.open(WELCOME_IMAGE_PATH).convert("RGBA")
-    cx, cy = WELCOME_CIRCLE_CENTER
-    radius = WELCOME_CIRCLE_RADIUS
+    width, height = base.size
+    # المكان والحجم يتحسبون من حجم الصورة الفعلي (نسب)، فيركب مضبوط حتى لو غيّرت الصورة
+    cx = int(width * WELCOME_CIRCLE_X)
+    cy = int(height * WELCOME_CIRCLE_Y)
+    radius = int(height * WELCOME_CIRCLE_RADIUS)
     size = radius * 2
     avatar = Image.open(BytesIO(avatar_bytes)).convert("RGBA").resize((size, size), resample)
     # نحط الافتار فوق خلفية غامقة عشان لو فيه شفافية ما تبان غلط
@@ -2293,7 +2301,6 @@ async def welcome_new_member(member: discord.Member):
         "• نورت السيرفر !",
         f"• لتجنب العقوبات، توجه إلى روم: ⟸ <#{WELCOME_RULES_CHANNEL_ID}>",
         f"• للاطلاع على آخر الأخبار، توجه إلى روم: ⟸ <#{WELCOME_NEWS_CHANNEL_ID}>",
-        f"• لمعرفة أقسام السيرفر، توجه إلى روم: ⟸ <#{WELCOME_MAP_CHANNEL_ID}>",
         "",
         f"👥 عدد الأشخاص بالسيرفر: **{member.guild.member_count}**",
     ]
@@ -2535,6 +2542,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):  # يمنع سبام اللوق مع كل بينق
         return
+
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
