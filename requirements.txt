@@ -7,3 +7,4 @@ arabic-reshaper
 python-bidi
 PyNaCl
 davey
+flask
