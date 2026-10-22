@@ -2536,6 +2536,16 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):  # يمنع سبام اللوق مع كل بينق
         return
 
+def run_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    try:
+        httpd = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    except OSError as e:
+        print(f"[ويب سيرفر] ❌ فشل فتح البورت {port}: {e}")
+        return
+    print(f"[ويب سيرفر] ✅ فاتح وشغال على 0.0.0.0:{port}")
+    httpd.serve_forever()
+
 
 if __name__ == "__main__":
     web_thread = threading.Thread(target=run_web_server, daemon=True)
