@@ -2556,11 +2556,4 @@ if __name__ == "__main__":
     else:
         print("[ويب سيرفر] الثريد شغال بعد ثانيتين، الأغلب البورت فتح تمام.")
 
-    try:
-        bot.run(DISCORD_TOKEN)
-    except discord.errors.HTTPException as e:
-        if e.status == 429:
-            print("[حظر] ديسكورد حاظر الـ IP، أنتظر 15 دقيقة قبل ما أقفل")
-            import time
-            time.sleep(900)
-        raise
+    bot.run(DISCORD_TOKEN)
