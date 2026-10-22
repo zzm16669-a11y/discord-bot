@@ -13,6 +13,7 @@ games.py — مركز الألعاب (وحدة داخل بوت الكنترول 
   - اللي يحتاجه bot.py منها: games.GamesRoleRequired و games.handle_games_role_error(ctx) بمعالج الأخطاء.
   - رول التشغيل: "Event Team" (GAMES_ROLE_NAME). مجلد الصور game_images بجنب bot.py.
   - النقاط تنحفظ بنفس economy.json و game_stats.json اللي يستخدمها bot.py (صار البوت واحد، فالرصيد موحّد).
+  - المتجر: مخزون اللاعبين ينحفظ بملف inventory.json (جنب economy.json)، والشراء يخصم من نفس رصيد النقاط.
   - مستقلة بالكامل: ما تستورد شي من bot.py.
 """
 
@@ -36,6 +37,7 @@ except ImportError:
 
 ECONOMY_FILE = "economy.json"
 GAME_STATS_FILE = "game_stats.json"
+INVENTORY_FILE = "inventory.json"
 
 # الحد الأقصى للنقاط اللي يقدر اللاعب ياخذها من الألعاب خلال 24 ساعة (يحمي من تكديس النقاط بسرعة غير طبيعية).
 # النقاط اللي تجي من .يومي أو .تحويل أو .اصدار ما تدخل بهذا الحد.
@@ -44,6 +46,13 @@ DAILY_GAME_POINTS_CAP = 500
 # مهلة التفاعل بالثواني: اللاعب اللي دوره/اختياره مطلوب منه ولا تفاعل خلال هذي المدة يطلع من اللعبة
 # (روليت: اللاعب المختار يطيح — XO: اللي دوره يخسر — حجرة ورقة مقص: اللي ما اختار يخسر).
 TURN_TIMEOUT = 15
+
+# ---------- إعدادات المتجر ----------
+# القنبلة: كم لاعب تطلّع بالعشوائي (من الحد الأدنى للأقصى) — الحماية تنقذ اللي تصيبه
+BOMB_MIN_KILLS = 2
+BOMB_MAX_KILLS = 3
+# محاولات إضافية تنضاف للباحث بلعبة الغميضة عند استخدام الميزة
+EXTRA_ATTEMPTS = 2
 
 # ---------- صور الألعاب ----------
 # مجلد الصور لازم يكون بجنب ملف البوت (نفس المجلد) باسم game_images.
@@ -104,6 +113,12 @@ UI_ICONS = {
     "decline": "✕",
     "dice": "⚄",
     "stop": "■",
+    "shop": "¤",
+    "bomb": "✸",
+    "hint": "✦",
+    "peek": "◉",
+    "scout": "◎",
+    "extra": "＋",
 }
 
 
@@ -167,6 +182,118 @@ def record_game_result(guild_id: int, user_id: int, won: bool) -> None:
 
 
 # ============================================================
+# المتجر: مخزون اللاعبين + الشراء بالنقاط
+# ============================================================
+# الميزات: key -> الاسم + السعر. تقدر تغيّر الأسعار من هنا.
+SHOP_ITEMS = {
+    "protect": {"name": "حماية", "price": 150},     # روليت / زر / كراسي: تمنع طردك مرة وحدة وتروح للراوند اللي بعده
+    "reverse": {"name": "عكسية", "price": 200},     # روليت: لو أحد طلّعك ينعكس عليه ويطلع هو
+    "bomb": {"name": "قنبلة", "price": 300},        # روليت: لو العجلة اختارتك تفجرها وتطلّع كم واحد
+    "hint": {"name": "تلميح", "price": 50},         # ألعاب الجولات (اعلام، ايموجي...) + خمن: تلميح خاص لك
+    "scout": {"name": "كشّاف", "price": 120},       # مافيا: يكشف لك دور لاعب عشوائي
+    "reroll": {"name": "إعادة رمي", "price": 80},   # نرد: ترمي النرد مرة ثانية
+    "extra": {"name": "محاولات إضافية", "price": 100},  # غميضة: تزيد محاولات الباحث
+    "peek": {"name": "نظرة", "price": 70},          # اكشف: تشوف كل البطاقات ثواني
+}
+
+
+def get_balance(guild_id: int, user_id: int) -> int:
+    data = load_json(ECONOMY_FILE)
+    return int(data.get(str(guild_id), {}).get(str(user_id), 0))
+
+
+def spend_points(guild_id: int, user_id: int, amount: int) -> bool:
+    """يخصم نقاط من رصيد اللاعب (للشراء). يرجع False لو الرصيد ما يكفي."""
+    data = load_json(ECONOMY_FILE)
+    gid, uid = str(guild_id), str(user_id)
+    balance = int(data.get(gid, {}).get(uid, 0))
+    if balance < amount:
+        return False
+    data.setdefault(gid, {})
+    data[gid][uid] = balance - amount
+    save_json(ECONOMY_FILE, data)
+    return True
+
+
+def get_item_count(guild_id: int, user_id: int, item: str) -> int:
+    data = load_json(INVENTORY_FILE)
+    return int(data.get(str(guild_id), {}).get(str(user_id), {}).get(item, 0))
+
+
+def add_item(guild_id: int, user_id: int, item: str, amount: int = 1) -> int:
+    """يضيف ميزة لمخزون اللاعب ويرجع عددها الجديد."""
+    data = load_json(INVENTORY_FILE)
+    gid, uid = str(guild_id), str(user_id)
+    inv = data.setdefault(gid, {}).setdefault(uid, {})
+    inv[item] = int(inv.get(item, 0)) + amount
+    save_json(INVENTORY_FILE, data)
+    return inv[item]
+
+
+def consume_item(guild_id: int, user_id: int, item: str) -> bool:
+    """يستهلك وحدة من الميزة لو موجودة بالمخزون. يرجع True لو انستهلكت."""
+    data = load_json(INVENTORY_FILE)
+    gid, uid = str(guild_id), str(user_id)
+    inv = data.get(gid, {}).get(uid, {})
+    if int(inv.get(item, 0)) <= 0:
+        return False
+    inv[item] = int(inv[item]) - 1
+    save_json(INVENTORY_FILE, data)
+    return True
+
+
+class ShopBuyButton(discord.ui.Button):
+    def __init__(self, key: str):
+        item = SHOP_ITEMS[key]
+        super().__init__(label=f"اشتري {item['name']} · {item['price']}", style=discord.ButtonStyle.secondary)
+        self.key = key
+
+    async def callback(self, interaction: discord.Interaction):
+        item = SHOP_ITEMS[self.key]
+        if interaction.guild is None:
+            await interaction.response.send_message("المتجر يشتغل داخل السيرفر بس.", ephemeral=True)
+            return
+        gid, uid = interaction.guild.id, interaction.user.id
+        if not spend_points(gid, uid, item["price"]):
+            balance = get_balance(gid, uid)
+            await interaction.response.send_message(
+                f"رصيدك (**{balance}**) ما يكفي، سعر {item['name']} **{item['price']}** نقطة.", ephemeral=True)
+            return
+        count = add_item(gid, uid, self.key)
+        balance = get_balance(gid, uid)
+        await interaction.response.send_message(
+            f"{UI_ICONS['accept']} اشتريت **{item['name']}** — عندك منها **{count}**، ورصيدك **{balance}** نقطة.",
+            ephemeral=True)
+
+
+class ShopView(discord.ui.LayoutView):
+    """واجهة المتجر: أزرار شراء بس (بدون أي نص)، وتبان للضاغط لحاله (ephemeral).
+    لو انفتحت لأن اللاعب ما عنده ميزة، يطلع فوق الأزرار سطر ينبّهه."""
+
+    def __init__(self, note: str | None = None):
+        super().__init__(timeout=180)
+        if note:
+            self.add_item(discord.ui.TextDisplay(note))
+        keys = list(SHOP_ITEMS)
+        for i in range(0, len(keys), 5):
+            self.add_item(discord.ui.ActionRow(*[ShopBuyButton(k) for k in keys[i:i + 5]]))
+
+
+async def open_shop(interaction: discord.Interaction, note: str | None = None) -> None:
+    """يفتح المتجر للاعب برسالة خفية (ما يشوفها غيره)."""
+    if interaction.guild is None:
+        await interaction.response.send_message("المتجر يشتغل داخل السيرفر بس.", ephemeral=True)
+        return
+    await interaction.response.send_message(view=ShopView(note), ephemeral=True)
+
+
+async def deny_missing_item(interaction: discord.Interaction, key: str) -> None:
+    """لما اللاعب يحاول يستخدم ميزة ما يملكها: نفتح له المتجر مباشرة عشان يشتريها."""
+    name = SHOP_ITEMS[key]["name"]
+    await open_shop(interaction, note=f"ما عندك **{name}** — اشتريها من هنا:")
+
+
+# ============================================================
 # 3) نظام الجولات العام — لألعاب "أول من يجاوب صح يفوز"
 # ============================================================
 def normalize(text: str) -> str:
@@ -194,6 +321,16 @@ def draw_no_repeat(key: str, items: list):
         random.shuffle(bag)
         _bags[key] = bag
     return items[bag.pop()]
+
+
+def make_text_hint(answer: str) -> str:
+    """تلميح نصي للمتجر: أول حرف من الإجابة + عدد حروفها (يتجاهل "ال" التعريف بالبداية)."""
+    word = answer.strip()
+    stripped = word.startswith("ال") and len(word) > 3
+    base = word[2:] if stripped else word
+    count = len(base.replace(" ", ""))
+    suffix = " (بدون \"ال\")" if stripped else ""
+    return f"أول حرف: **{base[0]}** — عدد الحروف: **{count}**{suffix}"
 
 
 # ---------- قفل عام يمنع تداخل الألعاب: روم واحد = لعبة وحدة بنفس اللحظة ----------
@@ -269,16 +406,41 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
 
 class StopRoundView(discord.ui.View):
     """زر "إيقاف" يطلع تحت رسالة الألعاب الفردية: يوقف اللعبة ويكشف الجواب.
-    يقدر يوقفها بس اللي بدأ اللعبة أو أونر السيرفر."""
+    يقدر يوقفها بس اللي بدأ اللعبة أو أونر السيرفر.
+    لو اللعبة فيها تلميح، يطلع جنبه زر "تلميح" (ميزة من المتجر، يبان لصاحبه بس)."""
 
-    def __init__(self, channel_id: int, token: int, starter, timeout: float):
+    def __init__(self, channel_id: int, token: int, starter, timeout: float, hint: str = ""):
         super().__init__(timeout=timeout + 10)
         self.channel_id = channel_id
         self.token = token
         self.starter = starter
+        self.hint = hint
+        self.hinted: set[int] = set()
         btn = discord.ui.Button(label=f"{UI_ICONS['stop']} إيقاف", style=discord.ButtonStyle.secondary)
         btn.callback = self.on_stop
         self.add_item(btn)
+        if hint:
+            hint_btn = discord.ui.Button(label=f"{UI_ICONS['hint']} تلميح", style=discord.ButtonStyle.secondary)
+            hint_btn.callback = self.on_hint
+            self.add_item(hint_btn)
+
+    async def on_hint(self, interaction: discord.Interaction):
+        info = active_rounds.get(self.channel_id)
+        if not info or info.get("token") != self.token:
+            await interaction.response.send_message("اللعبة خلصت أصلًا.", ephemeral=True)
+            return
+        allowed = info.get("allowed_ids")
+        if allowed is not None and interaction.user.id not in allowed:
+            await interaction.response.send_message("أنت مو باللعبة.", ephemeral=True)
+            return
+        if interaction.user.id in self.hinted:
+            await interaction.response.send_message(f"تلميحك: {self.hint}", ephemeral=True)
+            return
+        if not consume_item(interaction.guild.id, interaction.user.id, "hint"):
+            await deny_missing_item(interaction, "hint")
+            return
+        self.hinted.add(interaction.user.id)
+        await interaction.response.send_message(f"{UI_ICONS['hint']} التلميح: {self.hint}", ephemeral=True)
 
     async def on_stop(self, interaction: discord.Interaction):
         info = active_rounds.get(self.channel_id)
@@ -315,7 +477,7 @@ async def _remove_round_button(msg) -> None:
 
 async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 40),
                        allowed_ids: set | None = None, timeout: int = 45, reveal: str = "",
-                       game_key: str = "", starter=None):
+                       game_key: str = "", starter=None, hint: str = ""):
     """يبدأ جولة سؤال/جواب بالروم. أول رسالة تطابق checker تفوز."""
     if channel.id in active_rounds or is_channel_busy(channel.id):
         busy_name = active_channel_games.get(channel.id, title)
@@ -329,7 +491,7 @@ async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 
     mark_busy(channel.id, title)
     embed = discord.Embed(title=title, description=prompt, color=VIBE_COLOR)
     image = attach_game_image(embed, game_key)
-    stop_view = StopRoundView(channel.id, token, starter, timeout)
+    stop_view = StopRoundView(channel.id, token, starter, timeout, hint)
     if image:
         msg = await channel.send(embed=embed, file=image, view=stop_view)
     else:
@@ -664,7 +826,7 @@ async def unscramble_cmd(ctx: commands.Context):
     scrambled = scramble(word)
     await start_round(ctx.channel, starter=ctx.author, title="رتب الحروف", prompt=f"رتب الحروف: **{scrambled}**",
                        checker=lambda c: normalize(c) == normalize(word),
-                       reward=(25, 45), reveal=word, game_key="رتب")
+                       reward=(25, 45), reveal=word, game_key="رتب", hint=make_text_hint(word))
 
 
 @commands.command(name="اعكس")
@@ -682,7 +844,7 @@ async def correct_cmd(ctx: commands.Context):
     await start_round(ctx.channel, starter=ctx.author, title="صحح الكلمة",
                        prompt=f"هذي الكلمة مكتوبة غلط: **{wrong}**\nاكتبها صح.",
                        checker=lambda c: normalize(c) == normalize(correct),
-                       reward=(20, 35), reveal=correct)
+                       reward=(20, 35), reveal=correct, hint=make_text_hint(correct))
 
 
 # ---------- اعلام: اختيار المستوى بالأزرار قبل بدء الجولة ----------
@@ -752,7 +914,8 @@ async def flags_cmd(ctx: commands.Context):
     await start_round(ctx.channel, starter=ctx.author, title=f"خمن الدولة — مستوى {tier}",
                        prompt=f"وش هذي الدولة؟ {flag}",
                        checker=lambda c: answer_matches(c, names),
-                       reward=info["reward"], reveal=names[0], timeout=60, game_key="اعلام")
+                       reward=info["reward"], reveal=names[0], timeout=60, game_key="اعلام",
+                       hint=make_text_hint(names[0]))
 
 
 @commands.command(name="ايموجي")
@@ -761,7 +924,8 @@ async def emoji_guess_cmd(ctx: commands.Context):
     await start_round(ctx.channel, starter=ctx.author, title="خمن من الرموز",
                        prompt=f"وش تتوقع هالرموز؟ {emojis}\nالتصنيف: **{category}**",
                        checker=lambda c: answer_matches(c, names),
-                       reward=(25, 45), reveal=names[0], timeout=60, game_key="ايموجي")
+                       reward=(25, 45), reveal=names[0], timeout=60, game_key="ايموجي",
+                       hint=make_text_hint(names[0]))
 
 
 @commands.command(name="ادمج")
@@ -769,7 +933,7 @@ async def combine_cmd(ctx: commands.Context):
     emojis, answer = random.choice(COMPOUND_BANK)
     await start_round(ctx.channel, starter=ctx.author, title="ادمج وخمن", prompt=f"وش الكلمة اللي يرمز لها دمج: {emojis}",
                        checker=lambda c: normalize(c) == normalize(answer),
-                       reward=(25, 45), reveal=answer, game_key="ادمج")
+                       reward=(25, 45), reveal=answer, game_key="ادمج", hint=make_text_hint(answer))
 
 
 @commands.command(name="الوان")
@@ -777,7 +941,8 @@ async def colors_cmd(ctx: commands.Context):
     question, names = random.choice(COLOR_BANK)
     await start_round(ctx.channel, starter=ctx.author, title="خمن اللون", prompt=question,
                        checker=lambda c: answer_matches(c, names),
-                       reward=(20, 35), reveal=names[0], timeout=45, game_key="الوان")
+                       reward=(20, 35), reveal=names[0], timeout=45, game_key="الوان",
+                       hint=make_text_hint(names[0]))
 
 
 @commands.command(name="اسرع")
@@ -813,11 +978,17 @@ async def letter_game_cmd(ctx: commands.Context):
             return text in accepted_letters
         return text in accepted_words
 
+    # تلميح المتجر: الحرف الناقص مع حرفين مضللين (ما يكوّنون كلمة صحيحة)
+    decoys = random.sample([l for l in ARABIC_LETTERS if normalize(l) not in accepted_letters], 2)
+    options = [missing] + decoys
+    random.shuffle(options)
+    letter_hint = "الحرف الناقص واحد من: " + " ، ".join(f"**{o}**" for o in options)
+
     await start_round(ctx.channel, starter=ctx.author, title="الحرف الناقص",
                        prompt=(f"الكلمة: **{shown}**\n"
                                f"فيه حرف ناقص من الكلمة، خمنوه واكتبوا الحرف بس! (عدد حروف الكلمة: {len(word)})"),
                        checker=checker, reward=(20, 35), reveal=f"{missing} ({word})",
-                       timeout=30, game_key="حرف")
+                       timeout=30, game_key="حرف", hint=letter_hint)
 
 
 @commands.command(name="ترتيب")
@@ -835,7 +1006,8 @@ async def ordering_cmd(ctx: commands.Context):
     reveal_text = "  ".join(str(n) for n in correct)
     await start_round(ctx.channel, starter=ctx.author, title="رتب الأرقام",
                        prompt=f"رتب هذي الأرقام تصاعديًا (اكتبهم بمسافة بينهم):\n**{nums_text}**",
-                       checker=checker, reward=(20, 35), reveal=reveal_text, timeout=40, game_key="ترتيب")
+                       checker=checker, reward=(20, 35), reveal=reveal_text, timeout=40, game_key="ترتيب",
+                       hint=f"أصغر رقم: **{correct[0]}** — وأكبر رقم: **{correct[-1]}**")
 
 
 @commands.command(name="كلمة")
@@ -856,6 +1028,32 @@ async def word_chain_cmd(ctx: commands.Context):
 active_guess_games: dict[int, dict] = {}
 
 
+class GuessHintView(discord.ui.View):
+    """زر "تلميح" (ميزة من المتجر) تحت رسالة لعبة التخمين: يعطي صاحبه مدى ضيّق فيه الرقم، ويبان له بس."""
+
+    def __init__(self, channel_id: int):
+        super().__init__(timeout=None)
+        self.channel_id = channel_id
+        btn = discord.ui.Button(label=f"{UI_ICONS['hint']} تلميح", style=discord.ButtonStyle.secondary)
+        btn.callback = self.on_hint
+        self.add_item(btn)
+
+    async def on_hint(self, interaction: discord.Interaction):
+        game = active_guess_games.get(self.channel_id)
+        if not game:
+            await interaction.response.send_message("اللعبة خلصت أصلًا.", ephemeral=True)
+            return
+        if not consume_item(interaction.guild.id, interaction.user.id, "hint"):
+            await deny_missing_item(interaction, "hint")
+            return
+        number, top = game["number"], game["max"]
+        width = max(5, top // 5)
+        low = max(1, number - random.randint(0, width))
+        high = min(top, low + width)
+        await interaction.response.send_message(
+            f"{UI_ICONS['hint']} التلميح: الرقم بين **{low}** و **{high}**", ephemeral=True)
+
+
 @commands.command(name="خمن", aliases=["تخمين"])
 async def guess_start(ctx: commands.Context, max_number: int = 100):
     if ctx.channel.id in active_guess_games or is_channel_busy(ctx.channel.id):
@@ -870,10 +1068,11 @@ async def guess_start(ctx: commands.Context, max_number: int = 100):
     embed = discord.Embed(
         description=f"اخترت رقم سري بين **1** و **{max_number}**! اكتبوا تخمينكم.", color=VIBE_COLOR)
     image = attach_game_image(embed, "خمن")
+    hint_view = GuessHintView(ctx.channel.id)
     if image:
-        msg = await ctx.send(embed=embed, file=image)
+        msg = await ctx.send(embed=embed, file=image, view=hint_view)
     else:
-        msg = await ctx.send(embed=embed)
+        msg = await ctx.send(embed=embed, view=hint_view)
     track_game_message(ctx.channel.id, msg)
 
 
@@ -978,9 +1177,16 @@ async def _run_button_game(ctx: commands.Context, players: list):
             continue
         idle_rounds = 0
         out = [p for p in alive if p.id not in view.claimed]
-        alive = survivors
+        # الحماية (من المتجر): اللي ما لحق زر ومعه حماية ينجو من هالجولة
+        saved = [p for p in out if consume_item(ctx.guild.id, p.id, "protect")]
+        if saved:
+            out = [p for p in out if p not in saved]
+        alive = [p for p in alive if p not in out]
         target = max(1, n - 1)
-        await ctx.send(f"طاح: {'، '.join(p.mention for p in out)}")
+        if out:
+            await ctx.send(f"طاح: {'، '.join(p.mention for p in out)}")
+        if saved:
+            await ctx.send(f"نجا بالحماية: {'، '.join(p.mention for p in saved)}")
         if len(alive) > 1:
             await ctx.send(f"الباقين ({len(alive)}): {'، '.join(p.mention for p in alive)}")
         round_num += 1
@@ -1036,6 +1242,39 @@ class MemoryView(discord.ui.View):
         self.selection: list[int] = []
         self.moves = 0
         self.locked = False
+        # زر "نظرة" (ميزة من المتجر) بالصف الخامس: يكشف كل البطاقات ثواني ويرجعها
+        self.peeked = False
+        self.peek_btn = discord.ui.Button(label=f"{UI_ICONS['peek']} نظرة", style=discord.ButtonStyle.secondary, row=4)
+        self.peek_btn.callback = self.on_peek
+        self.add_item(self.peek_btn)
+
+    async def on_peek(self, interaction: discord.Interaction):
+        if interaction.user != self.player:
+            await interaction.response.send_message("هذي مو لعبتك.", ephemeral=True)
+            return
+        if self.locked:
+            await interaction.response.send_message("انتظر شوي.", ephemeral=True)
+            return
+        if self.peeked:
+            await interaction.response.send_message("استخدمت النظرة بهذي اللعبة.", ephemeral=True)
+            return
+        if not consume_item(interaction.guild.id, interaction.user.id, "peek"):
+            await deny_missing_item(interaction, "peek")
+            return
+        self.peeked = True
+        self.locked = True
+        saved_labels = [b.label for b in self.buttons]
+        for i, b in enumerate(self.buttons):
+            b.label = self.cards[i]
+        await interaction.response.edit_message(view=self)
+        await asyncio.sleep(2.5)
+        for b, label in zip(self.buttons, saved_labels):
+            b.label = label
+        self.locked = False
+        try:
+            await interaction.message.edit(view=self)
+        except (discord.NotFound, discord.HTTPException):
+            pass
 
     async def flip(self, interaction: discord.Interaction, idx: int, button: MemoryButton):
         if self.locked or self.matched[idx] or button.label != "؟":
@@ -1059,6 +1298,7 @@ class MemoryView(discord.ui.View):
                 actual = add_game_reward(interaction.guild.id, self.player.id, pts)
                 for b in self.buttons:
                     b.disabled = True
+                self.peek_btn.disabled = True
                 emb = interaction.message.embeds[0] if interaction.message.embeds else discord.Embed(color=VIBE_COLOR)
                 emb.description = f"خلصت اللعبة بعدد **{self.moves}** محاولة! (+{actual} نقطة)"
                 await interaction.message.edit(embed=emb, view=self)
@@ -1463,7 +1703,7 @@ async def rps_cmd(ctx: commands.Context, opponent: discord.Member):
 # ============================================================
 class GameLobby(discord.ui.LayoutView):
     """لوبي الانضمام لكل الألعاب الجماعية (بما فيها الروليت): كل شي داخل إطار واحد —
-    صورة اللعبة + عداد تنازلي حي + عدد المشاركين + اللاعبين + أزرار دخول / خروج / بدء.
+    صورة اللعبة + عداد تنازلي حي + عدد المشاركين + اللاعبين + أزرار دخول / خروج / بدء / متجر.
     (يحتاج discord.py 2.6 أو أحدث)"""
 
     def __init__(self, host: discord.Member, game_title: str, min_players: int = 3,
@@ -1499,10 +1739,12 @@ class GameLobby(discord.ui.LayoutView):
         self.join_btn = discord.ui.Button(label=f"{UI_ICONS['join']} دخول", style=discord.ButtonStyle.secondary)
         self.leave_btn = discord.ui.Button(label=f"{UI_ICONS['leave']} خروج", style=discord.ButtonStyle.secondary)
         self.start_btn = discord.ui.Button(label=f"{UI_ICONS['start']} ابدأ الآن", style=discord.ButtonStyle.secondary)
+        self.shop_btn = discord.ui.Button(label=f"{UI_ICONS['shop']} المتجر", style=discord.ButtonStyle.secondary)
         self.join_btn.callback = self.on_join
         self.leave_btn.callback = self.on_leave
         self.start_btn.callback = self.on_start
-        self.container.add_item(discord.ui.ActionRow(self.join_btn, self.leave_btn, self.start_btn))
+        self.shop_btn.callback = self.on_shop
+        self.container.add_item(discord.ui.ActionRow(self.join_btn, self.leave_btn, self.start_btn, self.shop_btn))
         self.add_item(self.container)
         self.refresh()
 
@@ -1520,8 +1762,11 @@ class GameLobby(discord.ui.LayoutView):
         self.footer_text.content = f"-# الحد الأدنى {self.min_players} لاعبين  |  المضيف: {self.host.display_name}"
 
     def disable_buttons(self) -> None:
-        for b in (self.join_btn, self.leave_btn, self.start_btn):
+        for b in (self.join_btn, self.leave_btn, self.start_btn, self.shop_btn):
             b.disabled = True
+
+    async def on_shop(self, interaction: discord.Interaction):
+        await open_shop(interaction)
 
     async def on_join(self, interaction: discord.Interaction):
         if interaction.user.bot:
@@ -1874,6 +2119,11 @@ class RouletteView(discord.ui.View):
         withdraw_btn = discord.ui.Button(label="انسحاب", style=discord.ButtonStyle.secondary)
         withdraw_btn.callback = self._withdraw_callback
         self.add_item(withdraw_btn)
+        # زر القنبلة (ميزة من المتجر): بس اللاعب المختار اللي معه قنبلة يقدر يفجرها
+        if len(self.remaining) > 2:
+            bomb_btn = discord.ui.Button(label=f"{UI_ICONS['bomb']} قنبلة", style=discord.ButtonStyle.secondary)
+            bomb_btn.callback = self._bomb_callback
+            self.add_item(bomb_btn)
 
     def _turn_text(self, header: str = "") -> str:
         """نص رسالة الدور الحالي (اللاعبين الباقين + مين دوره)."""
@@ -2006,6 +2256,56 @@ class RouletteView(discord.ui.View):
         await interaction.response.edit_message(content=self._turn_text(), view=self)
         await interaction.channel.send(f"{user.mention} انسحب من اللعبة.")
 
+    async def _bomb_callback(self, interaction: discord.Interaction):
+        """قنبلة (من المتجر): اللاعب المختار يفجرها بدل ما يطلّع وحد، وتطلّع كم لاعب عشوائي.
+        اللي معه حماية ينجو (وتنستهلك حمايته)."""
+        user = interaction.user
+        if self.spinning:
+            await interaction.response.send_message("العجلة تدور، انتظر...", ephemeral=True)
+            return
+        if user != self.chosen:
+            await interaction.response.send_message("مو دورك!", ephemeral=True)
+            return
+        others = [m for m in self.remaining if m != self.chosen]
+        if len(others) < 2:
+            await interaction.response.send_message("ما يصلح تستخدم القنبلة الحين.", ephemeral=True)
+            return
+        if not consume_item(self.guild.id, user.id, "bomb"):
+            await deny_missing_item(interaction, "bomb")
+            return
+        self.spinning = True
+        self._cancel_turn_timer()   # اللاعب تصرف بوقته، نوقف عداد الـ 15 ثانية
+        count = min(random.randint(BOMB_MIN_KILLS, BOMB_MAX_KILLS), len(others))
+        targets = random.sample(others, count)
+        dead, saved = [], []
+        for t in targets:
+            if consume_item(self.guild.id, t.id, "protect"):
+                saved.append(t)
+            else:
+                dead.append(t)
+                self.remaining.remove(t)
+        lines = [f"{user.mention} فجّر **قنبلة**!"]
+        if dead:
+            lines.append("طاح: " + "، ".join(m.mention for m in dead))
+        if saved:
+            lines.append("نجا بالحماية: " + "، ".join(m.mention for m in saved))
+        bomb_text = "\n".join(lines)
+        try:
+            if len(self.remaining) == 1:
+                for c in self.children:
+                    c.disabled = True
+                await interaction.response.edit_message(view=self)
+                await interaction.channel.send(bomb_text)
+                await self._announce_winner(self.remaining[0])
+                return
+            await interaction.response.edit_message(content="العجلة تدور...", view=None)
+            await interaction.channel.send(bomb_text)
+            await self._spin_next()
+        except discord.NotFound:
+            self.stop()
+        finally:
+            self.spinning = False
+
     async def _eliminate(self, interaction: discord.Interaction, target: discord.Member,
                          text: str | None = None, pick_wins: bool = False):
         if target not in self.remaining:
@@ -2028,8 +2328,21 @@ class RouletteView(discord.ui.View):
             return
         self.spinning = True
         self._cancel_turn_timer()   # اللاعب اختار بوقته، نوقف عداد الـ 15 ثانية
-        self.remaining.remove(target)
+
+        # ميزات المتجر: العكسية تقلب الطرد على اللي طلّع، والحماية تلغي الطرد (والانسحاب بإرادة اللاعب ما تنطبق عليه)
+        victim = target
         elim_text = text or f"{interaction.user.mention} أقصى {target.mention} من اللعبة!"
+        if text is None and target != interaction.user:
+            if consume_item(self.guild.id, target.id, "reverse"):
+                victim = interaction.user
+                elim_text = (f"{interaction.user.mention} حاول يطلّع {target.mention} بس معه **عكسية**! "
+                             f"انعكس عليه وطلع هو من اللعبة!")
+            elif consume_item(self.guild.id, target.id, "protect"):
+                victim = None
+                elim_text = (f"{interaction.user.mention} حاول يطلّع {target.mention} بس معه **حماية**! "
+                             f"ما طلع أحد، وننتقل للراوند اللي بعده.")
+        if victim is not None:
+            self.remaining.remove(victim)
         try:
             if len(self.remaining) == 1:
                 winner = self.remaining[0]
@@ -2088,7 +2401,8 @@ async def roulette_cmd(ctx: commands.Context):
 
 # ---------- نرد ----------
 class DiceRollView(discord.ui.View):
-    """زر "ارمِ النرد" — كل لاعب يرمي بنفسه مرة وحدة، والرقم عشوائي من 1 إلى 6."""
+    """زر "ارمِ النرد" — كل لاعب يرمي بنفسه مرة وحدة، والرقم عشوائي من 1 إلى 6.
+    زر "إعادة الرمي" (ميزة من المتجر): بعد ما ترمي، تعيد الرمية مرة وحدة بالمهلة."""
 
     def __init__(self, players: list[discord.Member], seconds: int = 10):
         super().__init__(timeout=seconds + 10)
@@ -2096,6 +2410,7 @@ class DiceRollView(discord.ui.View):
         self.seconds = seconds
         self.rolls: dict[int, int] = {}
         self.auto_ids: set[int] = set()
+        self.rerolled: set[int] = set()
         self.closed = False
         self.all_rolled = asyncio.Event()
 
@@ -2128,6 +2443,27 @@ class DiceRollView(discord.ui.View):
         self.rolls[interaction.user.id] = random.randint(1, 6)
         if len(self.rolls) >= len(self.players):
             self.all_rolled.set()
+        await interaction.response.edit_message(content=self.status_text(), view=self)
+
+    @discord.ui.button(label=f"{UI_ICONS['dice']} إعادة الرمي", style=discord.ButtonStyle.secondary)
+    async def reroll(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.closed:
+            await interaction.response.send_message("خلص الوقت.", ephemeral=True)
+            return
+        if interaction.user.id not in {p.id for p in self.players}:
+            await interaction.response.send_message("أنت مو باللعبة.", ephemeral=True)
+            return
+        if interaction.user.id not in self.rolls:
+            await interaction.response.send_message("ارمِ النرد أول، وبعدها تقدر تعيد.", ephemeral=True)
+            return
+        if interaction.user.id in self.rerolled:
+            await interaction.response.send_message("استخدمت إعادة الرمي بهذي اللعبة.", ephemeral=True)
+            return
+        if not consume_item(interaction.guild.id, interaction.user.id, "reroll"):
+            await deny_missing_item(interaction, "reroll")
+            return
+        self.rerolled.add(interaction.user.id)
+        self.rolls[interaction.user.id] = random.randint(1, 6)
         await interaction.response.edit_message(content=self.status_text(), view=self)
 
 
@@ -2279,6 +2615,31 @@ class HideSeekView(discord.ui.View):
         for n in range(1, self.spot_count + 1):
             self.add_item(HideSeekButton(n))
 
+        # زر "محاولات إضافية" (ميزة من المتجر) بالصف الخامس: للباحث بس
+        self.extra_btn = discord.ui.Button(label=f"{UI_ICONS['extra']} محاولات إضافية",
+                                           style=discord.ButtonStyle.secondary, row=4)
+        self.extra_btn.callback = self.on_extra
+        self.add_item(self.extra_btn)
+
+    def intro_text(self) -> str:
+        return (f"{self.seeker.mention} هو الباحث! الباقين مختبئين بين **{self.spot_count}** مكان.\n"
+                f"عندك **{self.max_attempts}** محاولة بس — اضغط على رقم عشان تبحث فيه")
+
+    async def on_extra(self, interaction: discord.Interaction):
+        if interaction.user != self.seeker:
+            await interaction.response.send_message("أنت مو الباحث بهذي اللعبة.", ephemeral=True)
+            return
+        if self.all_found.is_set() or self.attempts_exhausted.is_set():
+            await interaction.response.send_message("اللعبة خلصت.", ephemeral=True)
+            return
+        if not consume_item(interaction.guild.id, interaction.user.id, "extra"):
+            await deny_missing_item(interaction, "extra")
+            return
+        self.max_attempts += EXTRA_ATTEMPTS
+        remaining_attempts = self.max_attempts - self.attempts_used
+        await interaction.response.edit_message(
+            content=f"{self.intro_text()}\nزادت محاولاتك! باقي لك **{remaining_attempts}** محاولة.", view=self)
+
     def status_text(self, remaining_attempts: int) -> str:
         return (f"{self.seeker.mention} هو الباحث! الباقين مختبئين بين **{self.spot_count}** مكان.\n"
                 f"محاولة غلط! باقي لك **{remaining_attempts}** محاولة.")
@@ -2362,7 +2723,8 @@ async def replica_cmd(ctx: commands.Context):
     unmark_busy(ctx.channel.id)  # نسلّم القفل لنظام الجولة اللي بيدير حالته بنفسه لين الحل أو انتهاء الوقت
     await start_round(ctx.channel, starter=ctx.author, title="ريبلكا", prompt="اكتبوا الترتيب اللي حفظتوه",
                        checker=lambda c: normalize(c) == normalize(seq_text),
-                       reward=(60, 100), allowed_ids=allowed, timeout=30, reveal=seq_text)
+                       reward=(60, 100), allowed_ids=allowed, timeout=30, reveal=seq_text,
+                       hint=f"أول رمز بالترتيب: {sequence[0]}")
 
 
 # ---------- مافيا (نسخة مبسطة: جولة تصويت وحدة) ----------
@@ -2379,13 +2741,17 @@ async def mafia_cmd(ctx: commands.Context):
 
 
 class MafiaRoleView(discord.ui.View):
-    """زر "اكشف دورك" — كل لاعب يضغطه ويشوف دوره برسالة خفية بنفس الروم (محد يشوفها غيره)."""
+    """زر "اكشف دورك" — كل لاعب يضغطه ويشوف دوره برسالة خفية بنفس الروم (محد يشوفها غيره).
+    زر "كشّاف" (ميزة من المتجر): يكشف لك دور لاعب عشوائي، مرة وحدة بهذي اللعبة."""
 
     def __init__(self, players: list[discord.Member], mafia: set):
         super().__init__(timeout=90)
+        self.players = players
+        self.guild_id = players[0].guild.id
         self.players_ids = {p.id for p in players}
         self.mafia_ids = {p.id for p in mafia}
         self.mafia_members = list(mafia)
+        self.scouted: set[int] = set()
 
     @discord.ui.button(label="اكشف دورك", style=discord.ButtonStyle.secondary)
     async def reveal(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2402,6 +2768,27 @@ class MafiaRoleView(discord.ui.View):
         else:
             text = "أنت **مواطن**! هدفك تكتشف المافيا."
         await interaction.response.send_message(text, ephemeral=True)
+
+    @discord.ui.button(label=f"{UI_ICONS['scout']} كشّاف", style=discord.ButtonStyle.secondary)
+    async def scout(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id not in self.players_ids:
+            await interaction.response.send_message("أنت مو باللعبة.", ephemeral=True)
+            return
+        if interaction.user.id in self.scouted:
+            await interaction.response.send_message("استخدمت الكشّاف بهذي اللعبة.", ephemeral=True)
+            return
+        others = [p for p in self.players if p.id != interaction.user.id]
+        if not others:
+            await interaction.response.send_message("ما فيه أحد تكشفه.", ephemeral=True)
+            return
+        if not consume_item(self.guild_id, interaction.user.id, "scout"):
+            await deny_missing_item(interaction, "scout")
+            return
+        self.scouted.add(interaction.user.id)
+        target = random.choice(others)
+        role = "مافيا" if target.id in self.mafia_ids else "مواطن"
+        await interaction.response.send_message(
+            f"{UI_ICONS['scout']} الكشّاف كشف لك: {target.mention} **{role}**", ephemeral=True)
 
 
 class MafiaVoteView(discord.ui.View):
@@ -2571,6 +2958,11 @@ async def _run_chairs(ctx: commands.Context):
             pass
         out = [p for p in players if p.id not in view.taken]
         eliminated = random.choice(out) if out else random.choice(players)
+        # الحماية (من المتجر): لو اللي بيطيح معه حماية ينجو وننتقل للجولة اللي بعدها
+        if consume_item(ctx.guild.id, eliminated.id, "protect"):
+            await ctx.send(f"{eliminated.mention} كان بيطيح بس معه **حماية**! نجا من هالجولة.")
+            round_num += 1
+            continue
         players = [p for p in players if p != eliminated]
         if players:
             await ctx.send(f"طاح {eliminated.mention}! الباقين: {'، '.join(p.mention for p in players)}")
@@ -2644,6 +3036,18 @@ GAME_HELP = {
     "الوان": "البوت يسأل سؤال عن الألوان (خلط ألوان، لون شي معروف، ألوان مكمّلة...)، وأول وحد يجاوب صح يفوز.",
     "ايموجي": "البوت يعرض رموز مركبة (وتحتها التصنيف: فيلم / شخصية / قصة / مكان...)، وأول وحد يخمن المقصود يفوز.",
     "اكشف": "لعبة ذاكرة فردية، دور بطاقتين متطابقتين من شبكة 16 بطاقة بأقل عدد محاولات ممكن.",
+    "متجر": (
+        "زر **المتجر** موجود بلوبي كل لعبة جماعية، تشتري فيه ميزات بنقاطك (كلها أزرار شراء، والميزة تنخزن عندك لين تستخدمها):\n"
+        "• **حماية**: لو أحد حاول يطلّعك بالروليت ما تطلع وننتقل للراوند اللي بعده. تنفع بالروليت (ضد الطرد والقنبلة)، لعبة الأزرار، والكراسي.\n"
+        "• **عكسية**: بالروليت لو أحد حاول يطلّعك ينعكس عليه ويطلع هو.\n"
+        "• **قنبلة**: بالروليت لو العجلة اختارتك اضغط زر القنبلة وتطلّع كم لاعب عشوائي (اللي معه حماية ينجو).\n"
+        "• **تلميح**: زر تحت ألعاب الجولات (اعلام، ايموجي، ادمج، الوان، حرف، رتب، صحح، ترتيب، ريبلكا) ولعبة خمن، والتلميح يبان لك بس.\n"
+        "• **كشّاف**: بالمافيا يكشف لك دور لاعب عشوائي مرة وحدة.\n"
+        "• **إعادة رمي**: بالنرد بعد ما ترمي تقدر تعيد الرمية مرة وحدة.\n"
+        "• **محاولات إضافية**: بالغميضة تزيد محاولات الباحث.\n"
+        "• **نظرة**: بلعبة اكشف تشوف كل البطاقات ثواني.\n"
+        "لو ضغطت زر ميزة وما عندك منها، يفتح لك المتجر مباشرة."
+    ),
 }
 
 
@@ -2657,6 +3061,7 @@ async def games_list_cmd(ctx: commands.Context):
         lines.append(f"`{cmd}`")
     lines.append("\nاكتب `.نقاطي` عشان تشوف رصيدك.")
     lines.append("اكتب `.شرح اسم_اللعبة` (بدون النقطة داخل الاسم) عشان أشرحلك أي لعبة بالتفصيل.")
+    lines.append("اكتب `.شرح متجر` عشان تعرف ميزات المتجر (حماية، عكسية، قنبلة...).")
     lines.append("اكتب `.اوامر` عشان تشوف باقي الأوامر.")
     await ctx.send("\n".join(lines))
 
