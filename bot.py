@@ -2537,24 +2537,20 @@ class SimpleHandler(BaseHTTPRequestHandler):
         return
 
 
-def run_web_server():
-    port = int(os.environ.get("PORT", 10000))  # Render يعطيك البورت بمتغير PORT
-    try:
-        httpd = HTTPServer(("0.0.0.0", port), SimpleHandler)
-    except OSError as e:
-        print(f"[ويب سيرفر] ❌ فشل فتح البورت {port}: {e}")
-        return
-    print(f"[ويب سيرفر] ✅ فاتح وشغال على 0.0.0.0:{port}")
-    httpd.serve_forever()
-
-
 if __name__ == "__main__":
     web_thread = threading.Thread(target=run_web_server, daemon=True)
     web_thread.start()
-    web_thread.join(timeout=2)  # نعطيه فرصة يبدأ ويطبع حالته قبل لا نكمل
+    web_thread.join(timeout=2)
     if not web_thread.is_alive():
         print("[ويب سيرفر] ⚠️ الثريد وقف بسرعة غير طبيعية — راجع رسالة الخطأ فوق.")
     else:
         print("[ويب سيرفر] الثريد شغال بعد ثانيتين، الأغلب البورت فتح تمام.")
 
-    bot.run(DISCORD_TOKEN)
+    try:
+        bot.run(DISCORD_TOKEN)
+    except discord.errors.HTTPException as e:
+        if e.status == 429:
+            print("[حظر] ديسكورد حاظر الـ IP، أنتظر 15 دقيقة قبل ما أقفل")
+            import time
+            time.sleep(900)
+        raise
