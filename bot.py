@@ -54,7 +54,11 @@ load_dotenv()
 
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 WARN_LOG_WEBHOOK_URL = os.environ.get("WARN_WEBHOOK_URL", "")
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
 
+bot = commands.Bot(command_prefix="!", intents=intents)
 WARNS_FILE = "warns.json"
 ECONOMY_FILE = "economy.json"
 JAIL_FILE = "jail_data.json"
@@ -2124,6 +2128,8 @@ async def handle_image_reaction(message: discord.Message) -> None:
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
+
+    await bot.process_commands(message)
 
     # روم الفخ: أول شي قبل أي معالجة ثانية
     if message.guild is not None and is_trap_channel(message.channel):
