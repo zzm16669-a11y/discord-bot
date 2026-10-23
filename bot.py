@@ -170,6 +170,8 @@ import bank
 bank.setup_bank(bot)
 import games
 games.setup_games(bot)
+import colors
+colors.setup_colors(bot)
 # ============================================================
 # فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
 # ============================================================
@@ -2129,7 +2131,6 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    await bot.process_commands(message)
 
     # روم الفخ: أول شي قبل أي معالجة ثانية
     if message.guild is not None and is_trap_channel(message.channel):
