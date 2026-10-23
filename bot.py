@@ -2244,9 +2244,9 @@ WELCOME_IMAGE_PATH = "welcome.png"
 #   Y: 0.0 = أعلى الصورة ... 1.0 = أسفل الصورة
 #   RADIUS: نصف قطر الافتار كنسبة من ارتفاع الصورة (أصغر شوي من إطار الدائرة عشان الإطار يبقى ظاهر)
 # لو الافتار ما ركب مضبوط على دائرتك عدّل هذي الأرقام الثلاثة بس.
-WELCOME_CIRCLE_X = 0.750
-WELCOME_CIRCLE_Y = 0.549
-WELCOME_CIRCLE_RADIUS = 0.200
+WELCOME_CIRCLE_X = 0.8386
+WELCOME_CIRCLE_Y = 0.5065
+WELCOME_CIRCLE_RADIUS = 0.177
 WELCOME_RULES_CHANNEL_ID = 1538291493779935333   # القوانين
 WELCOME_NEWS_CHANNEL_ID = 1550669151339683862    # الأخبار
 
