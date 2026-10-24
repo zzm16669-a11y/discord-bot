@@ -77,19 +77,22 @@ def filter_explicit_mentions(message: discord.Message) -> list:
     return [by_id[uid] for uid in ids_in_order if uid in by_id]
 
 
-# ---------- الرتب (نفس أسماء البوت الأساسي) ----------
-OWNER = "Owner"
-CO_OWNER = "Co-Owner"
-VICE_OWNER = "Vice Owner"
-ADMIN = "Admin"
+# ---------- الرتب (بالآيدي — نفس آيديات البوت الأساسي) ----------
+FOUNDER = 1557117850508992552
+OWNER = 1524910780875673652
+CO_OWNER = 1524916030718214325
+VICE_OWNER = 1544178168678580234
+ADMIN = 1524915462943801374
 
-TOP_ROLES = [VICE_OWNER, CO_OWNER, OWNER]
+ADMIN_LABEL = "Admin"   # اسم العرض بس (للنصوص)
+
+TOP_ROLES = [VICE_OWNER, CO_OWNER, OWNER, FOUNDER]
 ADMIN_ROLES = [ADMIN] + TOP_ROLES
 
 
-def has_role(member: discord.Member, allowed: list[str]) -> bool:
-    names = {r.name for r in member.roles}
-    return any(n in names for n in allowed)
+def has_role(member: discord.Member, allowed: list[int]) -> bool:
+    ids = {r.id for r in member.roles}
+    return any(rid in ids for rid in allowed)
 
 
 async def reply(message: discord.Message, text: str):
@@ -771,7 +774,7 @@ async def bank_help_cmd(ctx: commands.Context):
             name="🛡️ للإدارة (بدون نقطة)",
             value=("`بنك_اضافة @عضو المبلغ` — إضافة كاش لحساب عضو\n"
                    "`بنك_خصم @عضو المبلغ` — خصم من كاش العضو ثم رصيده بالبنك\n"
-                   f"الرتبة: **{ADMIN}** وأعلى"),
+                   f"الرتبة: **{ADMIN_LABEL}** وأعلى"),
             inline=False)
     embed.set_footer(text=f"العملة: {CURRENCY} • منفصلة تمامًا عن نقاط الألعاب")
     await _bank_send(ctx, embed)
