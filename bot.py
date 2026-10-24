@@ -14,8 +14,8 @@
 ملاحظات مهمة قبل التشغيل:
   - كل أوامر النقاط والألعاب تبدأ بعلامة "." (مثال: .روليت ، .نقاطي ، .العاب ، .اوامر).
   - أوامر الإدارة تبقى بدون بريفكس زي ما كانت (تحذير ، برا ، سجن ... إلخ).
-  - غيّر أسماء الرتب بالأسفل (ROLE NAMES) إذا كانت أسماء رتبك بالسيرفر
-    مختلفة شوي عن الأسماء المكتوبة هنا (لازم تطابق بالضبط حرف بحرف).
+  - الرتب صارت تتحدد بالآيدي (مو بالاسم) — لو غيّرت أسماء الرتب ما يتأثر شي.
+    الآيديات بقسم "11) نظام الإدارة الكامل" تحت.
   - لازم تسوي رتبتين يدويًا بالسيرفر عشان "سجن" و"اخرس" يشتغلوا صح:
         * رتبة اسمها بالضبط: Jailed  (احجب عنها كل الرومات إلا روم السجن)
         * رتبة اسمها بالضبط: Muted   (احجب عنها إرسال الرسائل بكل الرومات)
@@ -149,6 +149,22 @@ async def log_mod_action(guild: discord.Guild, title: str, moderator: discord.Me
         for k, v in extra.items():
             embed.add_field(name=k, value=str(v), inline=True)
     await send_log(guild, "mod", embed)
+
+
+async def get_audit_executor(guild: discord.Guild, action: discord.AuditLogAction,
+                              target_id: int, max_age: int = 20):
+    """يدور بسجل التدقيق (Audit Log) على آخر عملية من نوع معيّن على هدف معيّن ويرجع اللي سواها (أو None)."""
+    await asyncio.sleep(1.5)  # ننتظر شوي عشان ديسكورد يسجل العملية بالأوديت لوق
+    try:
+        async for entry in guild.audit_logs(action=action, limit=10):
+            if entry.target is None or entry.target.id != target_id:
+                continue
+            if (discord.utils.utcnow() - entry.created_at).total_seconds() > max_age:
+                continue
+            return entry.user
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+    return None
 
 
 intents = discord.Intents.default()
@@ -595,8 +611,8 @@ async def game_log_cmd(ctx: commands.Context, member: discord.Member = None):
 
 @bot.command(name="اصدار")
 async def mint_points_cmd(ctx: commands.Context, amount: int):
-    """يضيف نقاط من العدم لرصيد صاحب الأمر — بس لصاحب رول Owner أو مالك السيرفر."""
-    has_owner_role = isinstance(ctx.author, discord.Member) and has_role(ctx.author, [OWNER])
+    """يضيف نقاط من العدم لرصيد صاحب الأمر — بس لصاحب رول Owner / founder أو مالك السيرفر."""
+    has_owner_role = isinstance(ctx.author, discord.Member) and has_role(ctx.author, [OWNER, FOUNDER])
     is_guild_owner = ctx.guild is not None and ctx.author.id == ctx.guild.owner_id
     if not (has_owner_role or is_guild_owner):
         await ctx.send(f"{ctx.author.mention} ❌ ما عندك الصلاحية.")
@@ -768,16 +784,38 @@ async def say_cmd(ctx: commands.Context, *, text: str = None):
 # ============================================================
 # 11) نظام الإدارة الكامل — بدون بريفكس، حسب الرتب
 # ============================================================
-OWNER = "Owner"
-CO_OWNER = "Co-Owner"
-VICE_OWNER = "Vice Owner"
-ADMIN = "Admin"
-MANAGEMENT = "Management"
-HEAD_MOD = "Head Moderator"
-MODERATOR = "Moderator"
-TRIAL_MOD = "Trial Moderator"
+# الرتب تتحدد بالآيدي (مو بالاسم) — لو غيّرت اسم رتبة بالسيرفر ما يتأثر شي.
+FOUNDER = 1557117850508992552
+OWNER = 1524910780875673652
+CO_OWNER = 1524916030718214325
+VICE_OWNER = 1544178168678580234
+ADMIN = 1524915462943801374
+MANAGEMENT = 1545041689444614264
+VERIFICATION_HEAD = 1554430227688718456
+HEAD_MOD = 1544180741015998486
+MODERATOR = 1524915277266026537
+TRIAL_MOD = 1548014045825863750
+SUPPORT = 1544184383626281030
+STAFF = 1545041865869365309
 
-TOP_ROLES = [VICE_OWNER, CO_OWNER, OWNER]
+# أسماء العرض (تنكتب بقوائم الأوامر الإدارية فقط، مو للمقارنة)
+ROLE_LABELS = {
+    FOUNDER: "founder",
+    OWNER: "Owner",
+    CO_OWNER: "Co-Owner",
+    VICE_OWNER: "Vice Owner",
+    ADMIN: "Admin",
+    MANAGEMENT: "Management",
+    VERIFICATION_HEAD: "Verification Head",
+    HEAD_MOD: "Head Moderator",
+    MODERATOR: "Moderator",
+    TRIAL_MOD: "Trial Moderator",
+    SUPPORT: "Support",
+    STAFF: "staff",
+}
+
+# الترتيب من الأدنى للأعلى — الـ founder فوق الـ Owner وله كل صلاحياته
+TOP_ROLES = [VICE_OWNER, CO_OWNER, OWNER, FOUNDER]
 ADMIN_ROLES = [ADMIN] + TOP_ROLES
 MANAGEMENT_ROLES = [MANAGEMENT] + ADMIN_ROLES
 HEAD_MOD_ROLES = [HEAD_MOD] + MANAGEMENT_ROLES
@@ -785,14 +823,14 @@ MOD_ROLES = [MODERATOR] + HEAD_MOD_ROLES
 TRIAL_ROLES = [TRIAL_MOD] + MOD_ROLES
 
 
-def has_role(member: discord.Member, allowed: list[str]) -> bool:
-    names = {r.name for r in member.roles}
-    return any(n in names for n in allowed)
+def has_role(member: discord.Member, allowed: list[int]) -> bool:
+    ids = {r.id for r in member.roles}
+    return any(rid in ids for rid in allowed)
 
 
 # ---------- تسلسل الرتب (ما أحد ينفذ أمر على عضو رتبته أعلى منه أو مساوية له) ----------
 # الترتيب من الأدنى للأعلى هو نفس ترتيب TRIAL_ROLES:
-# Trial Moderator ➜ Moderator ➜ Head Moderator ➜ Management ➜ Admin ➜ Vice Owner ➜ Co-Owner ➜ Owner
+# Trial Moderator ➜ Moderator ➜ Head Moderator ➜ Management ➜ Admin ➜ Vice Owner ➜ Co-Owner ➜ Owner ➜ founder
 HIERARCHY_DENY_TEXT = "❌ ما تقدر تنفذ هذا الأمر على عضو رتبته أعلى منك أو مساوية لرتبتك."
 
 
@@ -802,10 +840,10 @@ def get_rank(member) -> int:
         return -1
     if member.id == member.guild.owner_id:
         return 999
-    names = {r.name for r in member.roles}
+    ids = {r.id for r in member.roles}
     rank = -1
-    for i, role_name in enumerate(TRIAL_ROLES):
-        if role_name in names:
+    for i, role_id in enumerate(TRIAL_ROLES):
+        if role_id in ids:
             rank = max(rank, i)
     # صاحب صلاحية Administrator بدون رتبة إدارة من القائمة نعتبره بمستوى Admin
     if rank < 0 and member.guild_permissions.administrator:
@@ -1430,7 +1468,7 @@ ADMIN_HELP_SECTIONS = [
         (["رجع"], "رجع @عضو", "إرجاع آخر رتبة انسحبت من العضو.", None),
         (["رول"], "رول @عضو اسم_الرتبة", "إعطاء رتبة لعضو (بشرط تكون أقل من رتبتك).", None),
         (["تحذير"], "تحذير @عضو [السبب]", "تسجيل تحذير رسمي على عضو، وتطلع لك أزرار أسباب تختار منها.",
-         f"أي إداري (**{TRIAL_MOD}** وأعلى)"),
+         f"أي إداري (**{ROLE_LABELS[TRIAL_MOD]}** وأعلى)"),
         (["شيل تحذير"], "شيل تحذير @عضو [الكل]", "يشيل آخر تحذير مسجل على عضو، أو كل تحذيراته لو كتبت «الكل».", None),
     ]),
     ("💬 إدارة الرومات", [
@@ -1455,7 +1493,7 @@ ADMIN_HELP_SECTIONS = [
 
 
 def build_admin_help_embeds() -> list[discord.Embed]:
-    hierarchy = " ➜ ".join(TRIAL_ROLES)
+    hierarchy = " ➜ ".join(ROLE_LABELS[r] for r in TRIAL_ROLES)
     embeds = [discord.Embed(
         title="📋 الأوامر الإدارية",
         description=(
@@ -1471,7 +1509,7 @@ def build_admin_help_embeds() -> list[discord.Embed]:
         lines = []
         for triggers, usage, desc, roles_text in entries:
             if roles_text is None:
-                roles_text = f"**{ADMIN_COMMANDS[triggers[0]][0][0]}** وأعلى"
+                roles_text = f"**{ROLE_LABELS[ADMIN_COMMANDS[triggers[0]][0][0]]}** وأعلى"
             lines.append(f"`{usage}`\n{desc}\n🔑 الرتبة: {roles_text}\n")
         embeds.append(discord.Embed(title=title, description="\n".join(lines), color=discord.Color.blurple()))
     return embeds
@@ -2094,7 +2132,8 @@ REACTION_CHANNEL_IDS = {
 REACTION_EMOJIS = ["💥", "🔥", "⛔", "😼"]
 LOCKET_CHANNEL_ID = 1538293753306161192
 DIVIDER_IMAGE_PATH = "divider.png"
-IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic")
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic",
+                    ".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v")
 
 
 def is_reaction_channel(channel) -> bool:
@@ -2103,7 +2142,8 @@ def is_reaction_channel(channel) -> bool:
 
 def message_has_image(message: discord.Message) -> bool:
     for att in message.attachments:
-        if (att.content_type or "").startswith("image/"):
+        ctype = att.content_type or ""
+        if ctype.startswith("image/") or ctype.startswith("video/"):
             return True
         if att.filename.lower().endswith(IMAGE_EXTENSIONS):
             return True
@@ -2130,6 +2170,27 @@ async def handle_image_reaction(message: discord.Message) -> None:
             pass
 
 
+# ---------- روم locket: صور ومقاطع فقط (الباقي ينحذف إلا الإدارة العليا) ----------
+def is_locket_exempt(member) -> bool:
+    """الإدارة العليا (Vice Owner / Co-Owner / Owner / founder) ومالك السيرفر يكتبون بروم locket عادي."""
+    if not isinstance(member, discord.Member):
+        return False
+    return member.id == member.guild.owner_id or has_role(member, TOP_ROLES)
+
+
+async def handle_locket_filter(message: discord.Message) -> bool:
+    """يحذف أي رسالة بروم locket ما فيها صورة أو مقطع (إلا لو الكاتب من الإدارة العليا). يرجع True لو انحذفت."""
+    if message.guild is None or message.channel.id != LOCKET_CHANNEL_ID:
+        return False
+    if message_has_image(message) or is_locket_exempt(message.author):
+        return False
+    try:
+        await message.delete()
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        pass
+    return True
+
+
 @bot.command(name="ارسل")
 async def send_divider_cmd(ctx: commands.Context):
     if not os.path.exists(DIVIDER_IMAGE_PATH):
@@ -2151,6 +2212,10 @@ async def on_message(message: discord.Message):
     if message.guild is not None and is_trap_channel(message.channel):
         if await handle_trap_message(message):
             return
+
+    # روم locket: أي رسالة بدون صورة/مقطع تنحذف (إلا الإدارة العليا)
+    if await handle_locket_filter(message):
+        return
 
     # ".قول <نص>": نحذف رسالة صاحب الأمر فورًا (قبل أي معالجة ثانية) عشان ما أحد يلحق يشوفها.
     # نفس شروط say_cmd: لازم يكون فيه نص، وما نحذف لو النص فيه رابط ممنوع (البوت بيرفض الإرسال).
@@ -2417,15 +2482,48 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     removed = [r for r in before.roles if r not in after.roles]
     if not added and not removed:
         return
+
+    # نجيب من اللي أعطى/سحب الرتبة من الأوديت لوق
+    executor = await get_audit_executor(after.guild, discord.AuditLogAction.member_role_update, after.id)
+
     embed = discord.Embed(title="🎭 تعديل رتب عضو", color=discord.Color.blurple(),
                            timestamp=datetime.now(timezone.utc))
     embed.add_field(name="العضو", value=after.mention, inline=False)
     if added:
         embed.add_field(name="➕ أضيفت", value="، ".join(r.mention for r in added), inline=False)
+        embed.add_field(name="🎁 اللي أعطى الرتبة", value=executor.mention if executor else "غير معروف",
+                        inline=True)
     if removed:
         embed.add_field(name="➖ أزيلت", value="، ".join(r.mention for r in removed), inline=False)
+        embed.add_field(name="📤 اللي سحب الرتبة", value=executor.mention if executor else "غير معروف",
+                        inline=True)
     embed.set_footer(text=f"معرف العضو: {after.id}")
     await send_log(after.guild, "role", embed)
+
+
+@bot.event
+async def on_guild_role_create(role: discord.Role):
+    """يسجل إنشاء رتبة جديدة: وش الرتبة واسمها ومن اللي سواها."""
+    executor = await get_audit_executor(role.guild, discord.AuditLogAction.role_create, role.id)
+    embed = discord.Embed(title="➕ تم إنشاء رتبة", color=discord.Color.green(),
+                           timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="الرتبة", value=role.mention, inline=True)
+    embed.add_field(name="الاسم", value=role.name, inline=True)
+    embed.add_field(name="اللي سواها", value=executor.mention if executor else "غير معروف", inline=True)
+    embed.set_footer(text=f"معرف الرتبة: {role.id}")
+    await send_log(role.guild, "role", embed)
+
+
+@bot.event
+async def on_guild_role_delete(role: discord.Role):
+    """يسجل حذف رتبة: وش الرتبة واسمها ومن اللي حذفها."""
+    executor = await get_audit_executor(role.guild, discord.AuditLogAction.role_delete, role.id)
+    embed = discord.Embed(title="🗑️ تم حذف رتبة", color=discord.Color.red(),
+                           timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="الاسم", value=role.name, inline=True)
+    embed.add_field(name="اللي حذفها", value=executor.mention if executor else "غير معروف", inline=True)
+    embed.set_footer(text=f"معرف الرتبة: {role.id}")
+    await send_log(role.guild, "role", embed)
 
 
 # ---------- لوقات الرومات ----------
