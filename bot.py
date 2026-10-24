@@ -2123,7 +2123,20 @@ async def handle_image_reaction(message: discord.Message) -> None:
             await message.add_reaction(emoji)
         except (discord.Forbidden, discord.HTTPException):
             pass
+    if message.channel.id == LOCKET_CHANNEL_ID and os.path.exists(DIVIDER_IMAGE_PATH):
+        try:
+            await message.channel.send(file=discord.File(DIVIDER_IMAGE_PATH))
+        except (discord.Forbidden, discord.HTTPException):
+            pass
 
+
+@bot.command(name="ارسل")
+async def send_divider_cmd(ctx: commands.Context):
+    if not os.path.exists(DIVIDER_IMAGE_PATH):
+        await ctx.send("⚠️ ملف الفاصل `divider.png` مو موجود.")
+        return
+    await ctx.send(file=discord.File(DIVIDER_IMAGE_PATH))
+  
 
 # ============================================================
 # معالج الرسائل الموحّد
