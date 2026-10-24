@@ -11,7 +11,7 @@ protection.py — نظام حماية للسيرفر (مستقل، ما يلمس
   6) حماية صلاحية Administrator: أي أحد يعطي رتبة صلاحية أدمن (أو يعدّل رتبة لتصير أدمن
      أو ينشئ رتبة أدمن أو يعطي عضو رتبة أدمن) → يتراجع البوت عن التعديل + تايم أوت للفاعل.
 
-المستثنون من كل شي: مالك السيرفر + الرتب بـ EXEMPT_ROLE_NAMES.
+المستثنون من كل شي: مالك السيرفر + الرتب بـ EXEMPT_ROLE_IDS (بالآيدي: founder / Owner / Co-Owner / Vice Owner).
 كل العقوبات تنسجل بروم security-logs (وإذا ما لقاه، mod-logs).
 
 الربط ببوتك (جنب باقي الأنظمة):
@@ -34,7 +34,13 @@ import discord
 from discord.ext import commands
 
 # ================= إعدادات (غيّرها هنا لو تبي) =================
-EXEMPT_ROLE_NAMES = ["Owner", "Co-Owner", "Vice Owner"]
+# الرتب المستثناة بالآيدي (founder / Owner / Co-Owner / Vice Owner)
+EXEMPT_ROLE_IDS = [
+    1557117850508992552,   # founder
+    1524910780875673652,   # Owner
+    1524916030718214325,   # Co-Owner
+    1544178168678580234,   # Vice Owner
+]
 LOG_CHANNEL_HINTS = ["security-logs", "mod-logs"]
 
 # ---- 1) السبام ----
@@ -84,7 +90,7 @@ INVITE_PATTERN = re.compile(r"(?:discord\.gg/|discord(?:app)?\.com/invite/)([a-z
 def _is_exempt(member: discord.Member) -> bool:
     if member.id == member.guild.owner_id:
         return True
-    return any(r.name in EXEMPT_ROLE_NAMES for r in member.roles)
+    return any(r.id in EXEMPT_ROLE_IDS for r in member.roles)
 
 
 def _find_log_channel(guild: discord.Guild) -> discord.TextChannel | None:
