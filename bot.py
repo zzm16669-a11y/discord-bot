@@ -2092,6 +2092,8 @@ REACTION_CHANNEL_IDS = {
     1540256888761876480,   # streaks
 }
 REACTION_EMOJIS = ["💥", "🔥", "⛔", "😼"]
+LOCKET_CHANNEL_ID = 1538293753306161192
+DIVIDER_IMAGE_PATH = "divider.png"
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic")
 
 
