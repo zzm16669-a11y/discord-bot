@@ -41,7 +41,12 @@ EXEMPT_ROLE_IDS = [
     1524916030718214325,   # Co-Owner
     1544178168678580234,   # Vice Owner
 ]
-LOG_CHANNEL_HINTS = ["security-logs", "mod-logs"]
+# رومات اللوق بالآيدي (الأول security-logs وإذا ما انلقى mod-logs)
+LOG_CHANNEL_IDS = [
+    1538327174124408872,   # security-logs
+    1538326815142060072,   # mod-logs
+]
+LOG_CHANNEL_HINTS = ["security-logs", "mod-logs"]   # احتياط بالاسم لو الآيديات ما انلقت
 
 # ---- 1) السبام ----
 SPAM_ENABLED = True
@@ -94,6 +99,10 @@ def _is_exempt(member: discord.Member) -> bool:
 
 
 def _find_log_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    for channel_id in LOG_CHANNEL_IDS:
+        ch = guild.get_channel(channel_id)
+        if ch is not None:
+            return ch
     for hint in LOG_CHANNEL_HINTS:
         for ch in guild.text_channels:
             if hint in ch.name.lower().replace("_", "-"):
