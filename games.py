@@ -2798,7 +2798,7 @@ async def _run_hideseek(ctx: commands.Context):
 # طريقة اللعب: كل جولة لها حرف، والبوت يسأل كل لاعب سؤال (مثال: "يا فلان قلي نبات يبدأ بحرف ب")
 # واللاعب عنده TURN_TIMEOUT ثانية يجاوب. بنهاية كل جولة حرف تنرسل صورة إحصائية (اسم اللاعب + جاوب أو لا).
 REPLICA_ROUNDS = 3                        # عدد جولات الحروف باللعبة الواحدة
-REPLICA_CATEGORIES = ["نبات", "جماد", "حيوان", "بلاد", "فاكهة", "مهنة", "اسم ولد", "اسم بنت"]
+REPLICA_CATEGORIES = ["نبات", "جماد", "حيوان", "بلاد", "فاكهة", "مهنة", "اسم"]
 REPLICA_LETTERS = list("ابتجحخدرزسشصطعفقكلمنهوي")   # حروف سهلة (بدون ث ذ ض ظ غ)
 
 # صورة قالب الإحصائية: حطها داخل مجلد game_images بهذا الاسم (نفس الصورة اللي أرسلتها بنفس مقاساتها)
@@ -2815,7 +2815,7 @@ _REPLICA_TITLE_BOX = (217, 140, 1047, 211)
 _REPLICA_COLS = [(217, 378), (393, 558), (573, 738), (753, 923), (938, 1047)]
 _REPLICA_HEADER_ROW = (244, 295)
 _REPLICA_DATA_ROWS = [(310, 378), (394, 462), (478, 546), (561, 630)]
-_REPLICA_HEADERS = ["الحالة", "الإجابة", "الفئة", "اللاعب", "#"]
+_REPLICA_HEADERS = ["الحالة", "الإجابة", "الفئة", "اللاعب", "الحرف"]
 
 _REPLICA_TEXT = (255, 255, 255, 255)
 _REPLICA_OK = (130, 255, 170, 255)
@@ -3022,7 +3022,7 @@ def _replica_norm(text: str):
 
 
 def _build_replica_bank() -> dict:
-    bank = {cat: set() for cat in REPLICA_CATEGORIES}
+    bank = {cat: set() for cat in _REPLICA_RAW}
     for cat, raw in _REPLICA_RAW.items():
         for w in re.split(r"[،\n]", raw):
             key = _replica_norm(w)
@@ -3037,11 +3037,13 @@ def _build_replica_bank() -> dict:
                     bank["بلاد"].add(key)
     # الفواكه نباتات بعد
     bank["نبات"] |= bank["فاكهة"]
+    # "اسم" = أي اسم ولد أو بنت
+    bank["اسم"] = bank["اسم ولد"] | bank["اسم بنت"]
     return bank
 
 
 _REPLICA_BANK = _build_replica_bank()
-_REPLICA_NAME_CATEGORIES = {"اسم ولد", "اسم بنت"}
+_REPLICA_NAME_CATEGORIES = {"اسم"}
 
 
 def _replica_good_categories(letter: str) -> list:
@@ -3068,6 +3070,14 @@ def _ar_text(text: str) -> str:
     if ARABIC_SHAPING:
         return get_display(arabic_reshaper.reshape(text))
     return text
+
+
+def _raqm_ok() -> bool:
+    try:
+        from PIL import features
+        return bool(features.check("raqm"))
+    except Exception:
+        return False
 
 
 def _find_replica_template():
@@ -3111,6 +3121,9 @@ def _replica_font(size: int):
         if os.path.exists(p):
             try:
                 try:
+                    if not ARABIC_SHAPING and _raqm_ok():
+                        # بدون arabic_reshaper: Raqm يوصّل الحروف ويرتبها لحاله
+                        return ImageFont.truetype(p, size, layout_engine=ImageFont.Layout.RAQM)
                     # BASIC عشان ما يتشكل النص مرتين (نشكّله بنفسنا بـ arabic_reshaper)
                     return ImageFont.truetype(p, size, layout_engine=ImageFont.Layout.BASIC)
                 except AttributeError:
@@ -3160,7 +3173,7 @@ def _replica_fallback_template():
 _replica_template_warned = False
 
 
-def _build_replica_stats_images(title: str, rows: list) -> list:
+def _build_replica_stats_images(title: str, rows: list, letter: str = "") -> list:
     """يرسم إحصائية الجولة فوق قالب الصورة. القالب فيه 4 صفوف لاعبين، فلو اللاعبين أكثر تنقسم على كذا صورة.
     كل صف: {"name", "category", "answer", "ok"}. يرجع قائمة PNG bytes."""
     global _replica_template_warned
@@ -3194,7 +3207,6 @@ def _build_replica_stats_images(title: str, rows: list) -> list:
 
         for ri, row in enumerate(page):
             ry1, ry2 = _REPLICA_DATA_ROWS[ri]
-            number = pi * per_page + ri + 1
             answer = row["answer"] if row["answer"] else "—"
             status = "جاوب" if row["ok"] else "ما جاوب"
             cells = [
@@ -3202,10 +3214,11 @@ def _build_replica_stats_images(title: str, rows: list) -> list:
                 (answer[:16], _REPLICA_TEXT),
                 (row["category"], _REPLICA_TEXT),
                 (row["name"][:14], _REPLICA_TEXT),
-                (str(number), _REPLICA_TEXT),
+                (letter, _REPLICA_TEXT),
             ]
-            for (cx1, cx2), (text, color) in zip(_REPLICA_COLS, cells):
-                _draw_fit_text(draw, scaled((cx1, ry1, cx2, ry2)), text, 28, color, sx)
+            for ci, ((cx1, cx2), (text, color)) in enumerate(zip(_REPLICA_COLS, cells)):
+                # العامود الأخير (الحرف) خطه أكبر
+                _draw_fit_text(draw, scaled((cx1, ry1, cx2, ry2)), text, 44 if ci == 4 else 28, color, sx)
 
         buf = BytesIO()
         img.save(buf, format="PNG")
@@ -3324,7 +3337,7 @@ async def _run_replica(ctx: commands.Context):
         sent = False
         if PIL_AVAILABLE:
             try:
-                pngs = await asyncio.to_thread(_build_replica_stats_images, title, results)
+                pngs = await asyncio.to_thread(_build_replica_stats_images, title, results, letter)
                 files = [discord.File(BytesIO(b), filename=f"replica_stats_{round_num}_{i + 1}.png")
                          for i, b in enumerate(pngs)]
                 await ctx.send(files=files)
@@ -3657,7 +3670,7 @@ GAME_HELP = {
     "نرد": "بعد اللوبي كل لاعب يضغط زر الرمي ويرمي النرد بنفسه (عندكم 10 ثواني)، ومن ما رمى يرمي له البوت تلقائيًا، وصاحب أعلى رقم يفوز بالنقاط.",
     "عجلة": "بعد ما يكتمل اللوبي، العجلة تدور وتختار فايز عشوائي من المنضمين.",
     "غميضة": "لاعب وحد يصير الباحث، والباقين كل واحد يختار مكانه بنفسه من أزرار مرقّمة خلال 10 ثواني (عدد الأماكن حسب عدد اللاعبين: اللاعبين + 2، فمثلًا 3 لاعبين = 5 أماكن، واللي ما اختار ينحط له مكان عشوائي). بعدها الباحث عنده محاولات محدودة تتوزع حسب عدد الأماكن (نصها تقريبًا: 5 أماكن = 3 محاولات، 7 = 4، 9 = 5)، وكل رقم يفتحه = محاولة.",
-    "ريبلكا": "بعد اللوبي يطلع حرف لكل جولة (3 جولات)، والبوت يسأل كل لاعب سؤال، مثال: \"يا فلان قلي نبات يبدأ بحرف ب\"، واللاعب عنده 15 ثانية يكتب إجابة تبدأ بالحرف (الإجابة لازم تكون من الفئة المطلوبة، الصح تاخذ ✅ والغلط ❌ ويقدر يعيد المحاولة، ومحد يكرر إجابة انقالت). الفئات: نبات، جماد، حيوان، بلاد، فاكهة، مهنة، اسم ولد، اسم بنت. بنهاية كل جولة حرف تنرسل صورة إحصائية فيها اسم كل لاعب وهل جاوب أو لا، وبالنهاية الأكثر إجابات صحيحة يفوز.",
+    "ريبلكا": "بعد اللوبي يطلع حرف لكل جولة (3 جولات)، والبوت يسأل كل لاعب سؤال، مثال: \"يا فلان قلي نبات يبدأ بحرف ب\"، واللاعب عنده 15 ثانية يكتب إجابة تبدأ بالحرف (الإجابة لازم تكون من الفئة المطلوبة، الصح تاخذ ✅ والغلط ❌ ويقدر يعيد المحاولة، ومحد يكرر إجابة انقالت). الفئات: نبات، جماد، حيوان، بلاد، فاكهة، مهنة، اسم (ولد أو بنت). بنهاية كل جولة حرف تنرسل صورة إحصائية فيها اسم كل لاعب وهل جاوب أو لا، وبالنهاية الأكثر إجابات صحيحة يفوز.",
     "خمن": "البوت يختار رقم سري بين 1 والرقم اللي تحدده، واكتبوا تخمينكم بالشات وبيعطيكم تلميح فوق/تحت.",
     "كلمة": "يعطيكم البوت كلمة، وأول وحد يكتب كلمة تبدأ بآخر حرف منها يفوز بالنقاط.",
     "زر": "ينضم اللاعبين باللوبي. كل جولة تطلع أزرار أقل من عدد اللاعبين (5 بالجولة الأولى، ثم 4، ثم 3...)، لما تصير خضراء اضغطوا زر بسرعة (زر واحد لكل لاعب)، واللي ما يلحق زر يطيح، لين يبقى ناجي وحد ويفوز. لو اللاعبين أقل من 6 تكون الأزرار أقل من عددهم بواحد.",
