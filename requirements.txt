@@ -7,4 +7,5 @@ arabic-reshaper
 python-bidi
 PyNaCl
 davey
-
+arabic-reshaper
+python-bidi
