@@ -2,9 +2,10 @@
 tickets.py — نظام تكتات كامل.
 
 المطلوب يكون جاهز يدويًا بالسيرفر قبل التشغيل:
-  - رتبة اسمها بالضبط: TICKETS  (فريق الدعم اللي يشوف ويرد على التكتات)
-  - كاتيقوري اسمها بالضبط: Tickets  (اللي بتتفتح فيها رومات التكتات)
-  - روم اسمه فيه "ticket-logs" (نفس روم اللوق اللي تستخدمه حاليًا) — يرسل له
+  - رتبة الدعم (TICKETS) — تتحدد بالآيدي داخل الكود (SUPPORT_ROLE_ID)،
+    فلو غيّرت اسمها ما يتأثر شي. (فريق الدعم اللي يشوف ويرد على التكتات)
+  - كاتيقوري التكتات (اللي بتتفتح فيها رومات التكتات) — بالآيدي (TICKETS_CATEGORY_ID)
+  - روم لوق التكتات (ticket-logs) — بالآيدي (TICKET_LOG_CHANNEL_ID) — يرسل له
     الترانسكريبت وقت الإغلاق.
 
 طريقة الربط ببوتك (بدون أي تعديل على باقي bot.py):
@@ -27,9 +28,10 @@ from discord.ext import commands
 import db as _db
 
 # ================= إعدادات (غيّرها هنا لو تبي) =================
-SUPPORT_ROLE_NAME = "TICKETS"
-TICKETS_CATEGORY_NAME = "Tickets"
-TICKET_LOG_CHANNEL_HINT = "ticket-logs"     # نفس اسم الروم الموجود عندك
+SUPPORT_ROLE_ID = 1552547913643593728       # رتبة TICKETS (بالآيدي)
+TICKETS_CATEGORY_ID = 1548143239914070026   # كاتيقوري التكتات (بالآيدي)
+TICKET_LOG_CHANNEL_ID = 1538554042991775885  # روم لوق التكتات (بالآيدي)
+TICKET_LOG_CHANNEL_HINT = "ticket-logs"     # احتياط بالاسم لو الآيدي ما انلقى
 TICKET_CHANNEL_PREFIX = "ticket"            # الرومات تطلع ticket-0001, ticket-0002...
 
 TICKET_PANEL_IMAGE = "panel.png"
@@ -47,6 +49,9 @@ TICKET_TYPE_LABELS = {key: label for key, _, label in TICKET_TYPES}
 # دوال مساعدة
 # ============================================================
 def _find_log_channel(guild: discord.Guild) -> discord.TextChannel | None:
+    ch = guild.get_channel(TICKET_LOG_CHANNEL_ID)
+    if ch is not None:
+        return ch
     for ch in guild.text_channels:
         normalized = ch.name.lower().replace("_", "-")
         if TICKET_LOG_CHANNEL_HINT in normalized:
@@ -55,11 +60,12 @@ def _find_log_channel(guild: discord.Guild) -> discord.TextChannel | None:
 
 
 def _support_role(guild: discord.Guild) -> discord.Role | None:
-    return discord.utils.get(guild.roles, name=SUPPORT_ROLE_NAME)
+    return guild.get_role(SUPPORT_ROLE_ID)
 
 
 def _tickets_category(guild: discord.Guild) -> discord.CategoryChannel | None:
-    return discord.utils.get(guild.categories, name=TICKETS_CATEGORY_NAME)
+    cat = guild.get_channel(TICKETS_CATEGORY_ID)
+    return cat if isinstance(cat, discord.CategoryChannel) else None
 
 
 def _is_support(member: discord.Member) -> bool:
