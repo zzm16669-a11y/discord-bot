@@ -20,6 +20,7 @@ games.py — مركز الألعاب (وحدة داخل بوت الكنترول 
 import discord
 from discord.ext import commands
 import asyncio
+import functools
 import itertools
 import json
 import math
@@ -34,6 +35,14 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
+
+# تشكيل الحروف العربية وترتيبها داخل الصور (إحصائية ريبلكا): pip install arabic-reshaper python-bidi
+try:
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+    ARABIC_SHAPING = True
+except ImportError:
+    ARABIC_SHAPING = False
 
 ECONOMY_FILE = "economy.json"
 GAME_STATS_FILE = "game_stats.json"
@@ -2785,35 +2794,274 @@ async def _run_hideseek(ctx: commands.Context):
     await ctx.send(f"{seeker.mention} لقى **{len(view.found)}** وبقي **{remaining}** ماله دري عنهم.")
 
 
-# ---------- ريبلكا (احفظ الترتيب) ----------
+# ---------- ريبلكا (البوت يسأل لاعب عن شي يبدأ بحرف معين) ----------
+# طريقة اللعب: كل جولة لها حرف، والبوت يسأل كل لاعب سؤال (مثال: "يا فلان قلي نبات يبدأ بحرف ب")
+# واللاعب عنده TURN_TIMEOUT ثانية يجاوب. بنهاية كل جولة حرف تنرسل صورة إحصائية (اسم اللاعب + جاوب أو لا).
+REPLICA_ROUNDS = 3                        # عدد جولات الحروف باللعبة الواحدة
+REPLICA_CATEGORIES = ["نبات", "جماد", "حيوان", "بلاد", "فاكهة", "مهنة", "اسم ولد", "اسم بنت"]
+REPLICA_LETTERS = list("ابتجحخدرزسشصطعفقكلمنهوي")   # حروف سهلة (بدون ث ذ ض ظ غ)
+
+# صورة قالب الإحصائية: حطها داخل مجلد game_images بهذا الاسم (نفس الصورة اللي أرسلتها بنفس مقاساتها)
+REPLICA_STATS_IMAGE = "replica_stats.png"
+# خط عربي اختياري (ملف .ttf) تحطه داخل game_images بهذا الاسم، لو ما حطيته يجرّب خطوط النظام
+REPLICA_FONT_FILE = "font.ttf"
+
+# مواقع الخانات داخل القالب (بمقاس 1264×848، وتتحول تلقائيًا لو مقاس الصورة اختلف)
+_REPLICA_TITLE_BOX = (217, 140, 1047, 211)
+# الأعمدة من اليسار لليمين: الحالة / الإجابة / الفئة / اللاعب / رقم
+_REPLICA_COLS = [(217, 378), (393, 558), (573, 738), (753, 923), (938, 1047)]
+_REPLICA_HEADER_ROW = (244, 295)
+_REPLICA_DATA_ROWS = [(310, 378), (394, 462), (478, 546), (561, 630)]
+_REPLICA_HEADERS = ["الحالة", "الإجابة", "الفئة", "اللاعب", "#"]
+
+_REPLICA_TEXT = (245, 248, 250, 255)
+_REPLICA_OK = (175, 255, 195, 255)
+_REPLICA_FAIL = (255, 175, 175, 255)
+
+
+def _ar_text(text: str) -> str:
+    """يجهّز النص العربي للرسم داخل الصورة (تشكيل الحروف + اتجاه الكتابة)."""
+    if ARABIC_SHAPING:
+        return get_display(arabic_reshaper.reshape(text))
+    return text
+
+
+@functools.lru_cache(maxsize=64)
+def _replica_font(size: int):
+    paths = [
+        os.path.join(GAME_IMAGES_DIR, REPLICA_FONT_FILE),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "/Library/Fonts/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                try:
+                    # BASIC عشان ما يتشكل النص مرتين (نشكّله بنفسنا بـ arabic_reshaper)
+                    return ImageFont.truetype(p, size, layout_engine=ImageFont.Layout.BASIC)
+                except AttributeError:
+                    return ImageFont.truetype(p, size)
+            except OSError:
+                continue
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _draw_fit_text(draw, box: tuple, text: str, base_size: int, fill, scale: float) -> None:
+    """يكتب النص بنص الخانة، ويصغّر الخط تلقائيًا لو النص أطول من الخانة."""
+    x1, y1, x2, y2 = box
+    max_w = (x2 - x1) - 16 * scale
+    shaped = _ar_text(text)
+    size = max(12, int(base_size * scale))
+    while True:
+        font = _replica_font(size)
+        l, t, r, b = draw.textbbox((0, 0), shaped, font=font)
+        if (r - l) <= max_w or size <= 12:
+            break
+        size -= 1
+    cx = (x1 + x2) / 2 - (l + r) / 2
+    cy = (y1 + y2) / 2 - (t + b) / 2
+    draw.text((cx + 2, cy + 2), shaped, font=font, fill=(0, 0, 0, 130))   # ظل خفيف
+    draw.text((cx, cy), shaped, font=font, fill=fill)
+
+
+def _build_replica_stats_images(title: str, rows: list) -> list:
+    """يرسم إحصائية الجولة فوق قالب الصورة. القالب فيه 4 صفوف لاعبين، فلو اللاعبين أكثر تنقسم على كذا صورة.
+    كل صف: {"name", "category", "answer", "ok"}. يرجع قائمة PNG bytes."""
+    path = os.path.join(GAME_IMAGES_DIR, REPLICA_STATS_IMAGE)
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
+    per_page = len(_REPLICA_DATA_ROWS)
+    pages = [rows[i:i + per_page] for i in range(0, len(rows), per_page)]
+    out = []
+    for pi, page in enumerate(pages):
+        img = Image.open(path).convert("RGBA")
+        sx, sy = img.width / 1264, img.height / 848
+        draw = ImageDraw.Draw(img)
+
+        def scaled(box):
+            return (box[0] * sx, box[1] * sy, box[2] * sx, box[3] * sy)
+
+        page_title = title if len(pages) == 1 else f"{title} ({pi + 1}/{len(pages)})"
+        _draw_fit_text(draw, scaled(_REPLICA_TITLE_BOX), page_title, 34, _REPLICA_TEXT, sx)
+
+        for (cx1, cx2), label in zip(_REPLICA_COLS, _REPLICA_HEADERS):
+            box = scaled((cx1, _REPLICA_HEADER_ROW[0], cx2, _REPLICA_HEADER_ROW[1]))
+            _draw_fit_text(draw, box, label, 24, _REPLICA_TEXT, sx)
+
+        for ri, row in enumerate(page):
+            ry1, ry2 = _REPLICA_DATA_ROWS[ri]
+            number = pi * per_page + ri + 1
+            answer = row["answer"] if row["answer"] else "—"
+            status = "جاوب" if row["ok"] else "ما جاوب"
+            cells = [
+                (status, _REPLICA_OK if row["ok"] else _REPLICA_FAIL),
+                (answer[:16], _REPLICA_TEXT),
+                (row["category"], _REPLICA_TEXT),
+                (row["name"][:14], _REPLICA_TEXT),
+                (str(number), _REPLICA_TEXT),
+            ]
+            for (cx1, cx2), (text, color) in zip(_REPLICA_COLS, cells):
+                _draw_fit_text(draw, scaled((cx1, ry1, cx2, ry2)), text, 28, color, sx)
+
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        out.append(buf.getvalue())
+    return out
+
+
+def _replica_key(text: str, letter: str):
+    """يطبّع إجابة اللاعب ويتأكد إنها تبدأ بالحرف المطلوب (يتجاهل "ال" التعريف والهمزات).
+    يرجع الإجابة المطبّعة، أو None لو ما تصلح."""
+    cleaned = re.sub(r"[^\w\s]", " ", normalize(text))
+    words = cleaned.split()
+    if not words or len(words) > 3:
+        return None
+    if words[0].startswith("ال") and len(words[0]) > 3:
+        words[0] = words[0][2:]
+    key = " ".join(words)
+    if len(key.replace(" ", "")) < 2 or key[0] != normalize(letter):
+        return None
+    return key
+
+
+async def _await_replica_answer(bot_obj, channel, player, letter: str, used: set, cancel_event: asyncio.Event):
+    """ينتظر إجابة صحيحة من اللاعب المسؤول خلال TURN_TIMEOUT ثانية (الإجابة الغلط تاخذ ❌ ويقدر يعيد المحاولة).
+    يرجع نص الإجابة أو None لو ما جاوب (أو انلغت اللعبة)."""
+    loop = asyncio.get_running_loop()
+    end = loop.time() + TURN_TIMEOUT
+
+    def check(m: discord.Message) -> bool:
+        return m.author.id == player.id and m.channel.id == channel.id
+
+    while True:
+        remaining = end - loop.time()
+        if remaining <= 0:
+            return None
+        wait_task = asyncio.create_task(bot_obj.wait_for("message", check=check, timeout=remaining))
+        cancel_task = asyncio.create_task(cancel_event.wait())
+        await asyncio.wait([wait_task, cancel_task], return_when=asyncio.FIRST_COMPLETED)
+        cancel_task.cancel()
+        if cancel_event.is_set():
+            wait_task.cancel()
+            return None
+        try:
+            m = wait_task.result()
+        except asyncio.TimeoutError:
+            return None
+        key = _replica_key(m.content, letter)
+        ok = key is not None and key not in used
+        try:
+            await m.add_reaction("✅" if ok else "❌")
+        except discord.HTTPException:
+            pass
+        if ok:
+            used.add(key)
+            return m.content.strip()
+
+
 @commands.command(name="ريبلكا")
 async def replica_cmd(ctx: commands.Context):
     if is_channel_busy(ctx.channel.id):
         await warn_busy(ctx)
         return
-    mark_busy(ctx.channel.id, "ريبلكا (احفظ الترتيب)")
-    players = await run_lobby(ctx, "ريبلكا (احفظ الترتيب)", min_players=2, max_players=20, countdown=30, game_key="ريبلكا")
-    if not players:
-        unmark_busy(ctx.channel.id)
-        return
-    pool = ["🔥", "💧", "🌪️", "🌙", "⭐", "🍀", "⚡", "🎵", "🎯", "🧩"]
-    sequence = random.sample(pool, k=5)
-    seq_text = " ".join(sequence)
-    msg = await ctx.send(f"احفظوا هذا الترتيب:\n\n# {seq_text}")
-    cancel_event = track_game_message(ctx.channel.id, msg)
-    await asyncio.sleep(5)
-    if cancel_event.is_set():
-        return
+    mark_busy(ctx.channel.id, "ريبلكا")
     try:
-        await msg.edit(content="**ريبلكا**: اكتبوا نفس الترتيب بالضبط (افصلوا بمسافة)!")
-    except discord.NotFound:
-        pass
-    allowed = {p.id for p in players}
-    unmark_busy(ctx.channel.id)  # نسلّم القفل لنظام الجولة اللي بيدير حالته بنفسه لين الحل أو انتهاء الوقت
-    await start_round(ctx.channel, starter=ctx.author, title="ريبلكا", prompt="اكتبوا الترتيب اللي حفظتوه",
-                       checker=lambda c: normalize(c) == normalize(seq_text),
-                       reward=(60, 100), allowed_ids=allowed, timeout=30, reveal=seq_text,
-                       hint=f"أول رمز بالترتيب: {sequence[0]}")
+        await _run_replica(ctx)
+    finally:
+        unmark_busy(ctx.channel.id)
+
+
+async def _run_replica(ctx: commands.Context):
+    players = await run_lobby(ctx, "ريبلكا", min_players=2, max_players=20, countdown=30, game_key="ريبلكا")
+    if not players:
+        return
+    scores = {p.id: 0 for p in players}
+    used: set[str] = set()      # الإجابات اللي انقالت (ما تتكرر بنفس اللعبة)
+    letters = random.sample(REPLICA_LETTERS, min(REPLICA_ROUNDS, len(REPLICA_LETTERS)))
+
+    for round_num, letter in enumerate(letters, 1):
+        order = players.copy()
+        random.shuffle(order)
+        cats = []
+        while len(cats) < len(order):
+            bag = REPLICA_CATEGORIES.copy()
+            random.shuffle(bag)
+            cats.extend(bag)
+        results = []
+
+        intro = await ctx.send(
+            f"**الجولة {round_num}/{len(letters)}** — الحرف: **{letter}**\n"
+            f"بنسأل كل واحد منكم عن شي يبدأ بهذا الحرف، وعندك {TURN_TIMEOUT} ثانية تجاوب!")
+        cancel_event = track_game_message(ctx.channel.id, intro)
+        await asyncio.sleep(2)
+        if cancel_event.is_set():
+            return
+
+        for player, category in zip(order, cats):
+            prompt = await ctx.send(f"يا {player.mention} قلي **{category}** يبدأ بحرف **{letter}**")
+            cancel_event = track_game_message(ctx.channel.id, prompt)
+            answer = await _await_replica_answer(ctx.bot, ctx.channel, player, letter, used, cancel_event)
+            if cancel_event.is_set():
+                return
+            ok = answer is not None
+            if ok:
+                scores[player.id] += 1
+            else:
+                await ctx.send(f"{player.mention} ما جاوب!")
+            results.append({"name": player.display_name, "category": category,
+                            "answer": answer or "", "ok": ok})
+            await asyncio.sleep(1)
+
+        # ---------- بنهاية جولة الحرف: صورة الإحصائية ----------
+        title = f"إحصائية الجولة {round_num} — حرف {letter}"
+        sent = False
+        if PIL_AVAILABLE:
+            try:
+                pngs = await asyncio.to_thread(_build_replica_stats_images, title, results)
+                files = [discord.File(BytesIO(b), filename=f"replica_stats_{round_num}_{i + 1}.png")
+                         for i, b in enumerate(pngs)]
+                await ctx.send(files=files)
+                sent = True
+            except FileNotFoundError:
+                print(f"[ريبلكا] قالب الإحصائية مو موجود: {os.path.join(GAME_IMAGES_DIR, REPLICA_STATS_IMAGE)}")
+            except Exception as e:
+                print(f"[ريبلكا] تعذّر رسم صورة الإحصائية: {e}")
+        if not sent:
+            lines = [f"{'✅' if r['ok'] else '❌'} {r['name']} — {r['category']}"
+                     + (f": {r['answer']}" if r["ok"] else "") for r in results]
+            await ctx.send(f"**{title}**\n" + "\n".join(lines))
+
+        if round_num < len(letters):
+            await asyncio.sleep(3)
+
+    # ---------- النتيجة النهائية: الأكثر إجابات صحيحة يفوز (والتعادل يتشارك الفوز) ----------
+    top = max(scores.values())
+    board = "\n".join(f"{p.mention}: **{scores[p.id]}**"
+                      for p in sorted(players, key=lambda x: -scores[x.id]))
+    if top == 0:
+        await ctx.send(f"**انتهت ريبلكا!** ما جاوب أحد ولا مرة.\n\n{board}")
+        return
+    winners = [p for p in players if scores[p.id] == top]
+    amounts = []
+    for w in winners:
+        amounts.append(add_game_reward(ctx.guild.id, w.id, random.randint(60, 100)))
+        record_game_result(ctx.guild.id, w.id, won=True)
+    for p in players:
+        if p not in winners:
+            record_game_result(ctx.guild.id, p.id, won=False)
+    winners_text = " و ".join(w.mention for w in winners)
+    if len(set(amounts)) == 1:
+        reward_text = f"(+{amounts[0]} نقطة{' لكل واحد' if len(winners) > 1 else ''})"
+    else:
+        reward_text = "(" + "، ".join(f"{w.mention}: +{a}" for w, a in zip(winners, amounts)) + ")"
+    await ctx.send(f"**انتهت ريبلكا!**\n{board}\n\nالفائز: {winners_text} {reward_text}")
 
 
 # ---------- مافيا (نسخة مبسطة: جولة تصويت وحدة) ----------
@@ -3079,7 +3327,7 @@ GAME_LIST = {
         (".نرد", "كل واحد يرمي نرد، الأعلى يفوز."),
         (".عجلة", "عجلة حظ تختار فايز عشوائي."),
         (".غميضة", "وحد يبحث عن الباقين المختبئين بأزرار مرقّمة."),
-        (".ريبلكا", "احفظوا ترتيب الرموز واكتبوه صح."),
+        (".ريبلكا", "البوت يسألكم عن نبات/جماد/حيوان/بلاد... تبدأ بحرف معين، وبنهاية كل جولة تطلع صورة إحصائية."),
         (".خمن [أقصى رقم]", "تخمين رقم سري بالشات."),
         (".كلمة", "قول كلمة تبدأ بآخر حرف من الكلمة المعطاة."),
         (".زر", "أزرار تقل كل جولة (5 ثم 4 ثم 3...) واللي ما يلحق زر يطيح لين يبقى ناجي وحد."),
@@ -3109,7 +3357,7 @@ GAME_HELP = {
     "نرد": "بعد اللوبي كل لاعب يضغط زر الرمي ويرمي النرد بنفسه (عندكم 10 ثواني)، ومن ما رمى يرمي له البوت تلقائيًا، وصاحب أعلى رقم يفوز بالنقاط.",
     "عجلة": "بعد ما يكتمل اللوبي، العجلة تدور وتختار فايز عشوائي من المنضمين.",
     "غميضة": "لاعب وحد يصير الباحث، والباقين كل واحد يختار مكانه بنفسه من أزرار مرقّمة خلال 10 ثواني (عدد الأماكن حسب عدد اللاعبين: اللاعبين + 2، فمثلًا 3 لاعبين = 5 أماكن، واللي ما اختار ينحط له مكان عشوائي). بعدها الباحث عنده محاولات محدودة تتوزع حسب عدد الأماكن (نصها تقريبًا: 5 أماكن = 3 محاولات، 7 = 4، 9 = 5)، وكل رقم يفتحه = محاولة.",
-    "ريبلكا": "تشوفون ترتيب رموز لمدة 5 ثواني، وبعدها لازم تكتبونه بنفس الترتيب بالضبط، أول وحد يجاوب صح يفوز.",
+    "ريبلكا": "بعد اللوبي يطلع حرف لكل جولة (3 جولات)، والبوت يسأل كل لاعب سؤال، مثال: \"يا فلان قلي نبات يبدأ بحرف ب\"، واللاعب عنده 15 ثانية يكتب إجابة تبدأ بالحرف (الإجابة الصح تاخذ ✅ والغلط ❌ ويقدر يعيد المحاولة، ومحد يكرر إجابة انقالت). الفئات: نبات، جماد، حيوان، بلاد، فاكهة، مهنة، اسم ولد، اسم بنت. بنهاية كل جولة حرف تنرسل صورة إحصائية فيها اسم كل لاعب وهل جاوب أو لا، وبالنهاية الأكثر إجابات صحيحة يفوز.",
     "خمن": "البوت يختار رقم سري بين 1 والرقم اللي تحدده، واكتبوا تخمينكم بالشات وبيعطيكم تلميح فوق/تحت.",
     "كلمة": "يعطيكم البوت كلمة، وأول وحد يكتب كلمة تبدأ بآخر حرف منها يفوز بالنقاط.",
     "زر": "ينضم اللاعبين باللوبي. كل جولة تطلع أزرار أقل من عدد اللاعبين (5 بالجولة الأولى، ثم 4، ثم 3...)، لما تصير خضراء اضغطوا زر بسرعة (زر واحد لكل لاعب)، واللي ما يلحق زر يطيح، لين يبقى ناجي وحد ويفوز. لو اللاعبين أقل من 6 تكون الأزرار أقل من عددهم بواحد.",
@@ -3130,7 +3378,7 @@ GAME_HELP = {
         "• **حماية**: لو أحد حاول يطلّعك بالروليت ما تطلع وننتقل للراوند اللي بعده. تنفع بالروليت (ضد الطرد والقنبلة)، لعبة الأزرار، والكراسي.\n"
         "• **عكسية**: بالروليت لو أحد حاول يطلّعك ينعكس عليه ويطلع هو.\n"
         "• **قنبلة**: بالروليت لو العجلة اختارتك اضغط زر القنبلة وتطلّع كم لاعب عشوائي (اللي معه حماية ينجو).\n"
-        "• **تلميح**: زر تحت ألعاب الجولات (اعلام، ايموجي، ادمج، الوان، حرف، رتب، صحح، ترتيب، ريبلكا) ولعبة خمن، والتلميح يبان لك بس.\n"
+        "• **تلميح**: زر تحت ألعاب الجولات (اعلام، ايموجي، ادمج، الوان، حرف، رتب، صحح، ترتيب) ولعبة خمن، والتلميح يبان لك بس.\n"
         "• **كشّاف**: بالمافيا يكشف لك دور لاعب عشوائي مرة وحدة.\n"
         "• **إعادة رمي**: بالنرد بعد ما ترمي تقدر تعيد الرمية مرة وحدة.\n"
         "• **محاولات إضافية**: بالغميضة تزيد محاولات الباحث.\n"
@@ -3218,7 +3466,7 @@ async def games_on_message(message: discord.Message):
         elif guess > game["number"]:
             await message.add_reaction("⬇️")
 
-    # الجولات العامة (فكك / اعلام / صحح / ادمج / اعكس / حرف / ترتيب / الوان / ايموجي / اسرع / كلمة / ريبلكا)
+    # الجولات العامة (فكك / اعلام / صحح / ادمج / اعكس / حرف / ترتيب / الوان / ايموجي / اسرع / كلمة)
     round_info = active_rounds.get(message.channel.id)
     if round_info:
         allowed = round_info["allowed_ids"]
@@ -3266,4 +3514,6 @@ def setup_games(b: commands.Bot) -> None:
     b.add_check(games_role_check)  # يقفل أوامر الألعاب برول Event Team (باقي الأوامر يمرّها)
     b.add_listener(games_on_message, "on_message")
     b.add_listener(on_raw_message_delete, "on_raw_message_delete")
+    if PIL_AVAILABLE and not ARABIC_SHAPING:
+        print("[ريبلكا] ⚠️ مكتبتي arabic-reshaper و python-bidi مو منصّبة — النص العربي بصورة الإحصائية بيطلع مفكك.")
     print(f"[ألعاب] ✅ تم تحميل مركز الألعاب ({added} أمر)")
