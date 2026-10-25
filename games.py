@@ -11,7 +11,7 @@ games.py — مركز الألعاب (وحدة داخل بوت الكنترول 
   - الوحدة ما تسجل on_message / on_ready / on_command_error كـ events رئيسية (عشان ما تلغي اللي بـ bot.py).
     تسجل بدلها listeners: games_on_message (تخمين الرقم + الجولات) و on_raw_message_delete (إيقاف اللعبة لو انحذفت رسالتها).
   - اللي يحتاجه bot.py منها: games.GamesRoleRequired و games.handle_games_role_error(ctx) بمعالج الأخطاء.
-  - رول التشغيل: "Event Team" (GAMES_ROLE_NAME). مجلد الصور game_images بجنب bot.py.
+  - رول التشغيل: "Event Team" — يتحدد بالآيدي (GAMES_ROLE_ID). مجلد الصور game_images بجنب bot.py.
   - النقاط تنحفظ بنفس economy.json و game_stats.json اللي يستخدمها bot.py (صار البوت واحد، فالرصيد موحّد).
   - المتجر: مخزون اللاعبين ينحفظ بملف inventory.json (جنب economy.json)، والشراء يخصم من نفس رصيد النقاط.
   - مستقلة بالكامل: ما تستورد شي من bot.py.
@@ -97,8 +97,8 @@ def attach_game_image(embed: discord.Embed, game_key: str) -> discord.File | Non
     return image
 
 
-# اسم رول الألعاب — لازم يطابق اسم الرول اللي سويته بالسيرفر حرف بحرف
-GAMES_ROLE_NAME = "Event Team"
+# رول الألعاب (Event Team) — بالآيدي، فلو غيّرت اسم الرول بالسيرفر ما يتأثر شي
+GAMES_ROLE_ID = 1538738602534633503
 
 # ---------- فايب البوت (ستايل خاص بالألعاب) ----------
 # لون موحّد لكل لوحات الألعاب (لوبي الانضمام وغيره).
@@ -2552,6 +2552,81 @@ async def wheel_cmd(ctx: commands.Context):
 
 
 # ---------- غميضة ----------
+HIDE_SECONDS = 10      # مهلة اختيار المختبئين لمكانهم
+# محاولات الباحث تتوزع حسب عدد الأماكن: نص عدد الأماكن (مقرّب لفوق) — مثال: 5 أماكن = 3 محاولات، 7 = 4، 9 = 5
+# (كل فتح لمكان = محاولة)
+
+
+class HideSpotButton(discord.ui.Button):
+    """زر مكان اختباء — المختبئ يضغطه عشان يختبئ فيه."""
+
+    def __init__(self, number: int):
+        super().__init__(label=str(number), style=discord.ButtonStyle.secondary, row=(number - 1) // 5)
+        self.number = number
+
+    async def callback(self, interaction: discord.Interaction):
+        view: HideSeekHideView = self.view
+        user = interaction.user
+        if user.id == view.seeker.id:
+            await interaction.response.send_message(
+                "أنت الباحث، انتظر لين المختبئين يختارون أماكنهم.", ephemeral=True)
+            return
+        if user.id not in view.hider_ids:
+            await interaction.response.send_message("أنت مو باللعبة.", ephemeral=True)
+            return
+        owner = view.owner_of(self.number)
+        if owner is not None and owner != user.id:
+            await interaction.response.send_message("هذا المكان محجوز، اختر مكان ثاني.", ephemeral=True)
+            return
+        view.choices[user.id] = self.number
+        await interaction.response.send_message(
+            f"اختبأت بالمكان رقم **{self.number}** (تقدر تغيّره قبل ما ينتهي الوقت).", ephemeral=True)
+        if len(view.choices) >= len(view.hiders):
+            view.all_chosen.set()
+
+
+class HideSeekHideView(discord.ui.View):
+    """مرحلة الاختباء: كل مختبئ يختار مكانه بنفسه خلال HIDE_SECONDS ثواني.
+    عدد الأماكن حسب عدد اللاعبين (عدد اللاعبين + 2، بحد أقصى 20)."""
+
+    def __init__(self, seeker: discord.Member, hiders: list[discord.Member], spot_count: int, seconds: int):
+        super().__init__(timeout=seconds + 30)
+        self.seeker = seeker
+        self.hiders = hiders
+        self.hider_ids = {h.id for h in hiders}
+        self.spot_count = spot_count
+        self.seconds = seconds
+        self.choices: dict[int, int] = {}   # آيدي المختبئ -> رقم المكان
+        self.all_chosen = asyncio.Event()
+        self.ends_at = discord.utils.utcnow() + timedelta(seconds=seconds)
+        for n in range(1, spot_count + 1):
+            self.add_item(HideSpotButton(n))
+
+    def owner_of(self, number: int):
+        for uid, num in self.choices.items():
+            if num == number:
+                return uid
+        return None
+
+    def text(self) -> str:
+        return (f"{self.seeker.mention} هو الباحث! الباقين يختارون مكان يختبئون فيه.\n"
+                f"المختبئين: اضغطوا رقم المكان اللي تبون تختبئون فيه (ينتهي الوقت {discord.utils.format_dt(self.ends_at, 'R')})\n"
+                f"فيه **{self.spot_count}** مكان.")
+
+    def build_spots(self) -> dict:
+        """يرجع {رقم المكان: المختبئ}، واللي ما اختار خلال المهلة ينحط له مكان فاضي عشوائي."""
+        spots: dict[int, discord.Member | None] = {n: None for n in range(1, self.spot_count + 1)}
+        by_id = {h.id: h for h in self.hiders}
+        for uid, num in self.choices.items():
+            spots[num] = by_id[uid]
+        free = [n for n, m in spots.items() if m is None]
+        random.shuffle(free)
+        for h in self.hiders:
+            if h.id not in self.choices:
+                spots[free.pop()] = h
+        return spots
+
+
 class HideSeekButton(discord.ui.Button):
     def __init__(self, number: int):
         super().__init__(label=str(number), style=discord.ButtonStyle.secondary, row=(number - 1) // 5)
@@ -2565,23 +2640,26 @@ class HideSeekButton(discord.ui.Button):
         if self.disabled:
             await interaction.response.send_message("هذا الرقم انفتح مسبقًا.", ephemeral=True)
             return
+        if view.attempts_used >= view.max_attempts:
+            await interaction.response.send_message("خلصت محاولاتك.", ephemeral=True)
+            return
 
         occupant = view.spots.get(self.number)
         self.disabled = True
+        view.attempts_used += 1
+        remaining_attempts = view.max_attempts - view.attempts_used
 
         if occupant is not None:
             self.label = occupant.display_name[:12]
             self.style = discord.ButtonStyle.secondary
             view.found.add(occupant.id)
             add_game_reward(interaction.guild.id, view.seeker.id, 20)
-            await interaction.response.edit_message(view=view)
+            await interaction.response.edit_message(content=view.status_text(remaining_attempts), view=view)
             await interaction.channel.send(f"لقيت {occupant.mention}!")
         else:
             self.label = "فاضي"
             self.style = discord.ButtonStyle.secondary
-            view.attempts_used += 1
-            remaining_attempts = view.max_attempts - view.attempts_used
-            await interaction.response.edit_message(content=view.status_text(remaining_attempts), view=view)
+            await interaction.response.edit_message(content=view.status_text(remaining_attempts, miss=True), view=view)
 
         if len(view.found) >= len(view.hiders):
             view.all_found.set()
@@ -2590,24 +2668,17 @@ class HideSeekButton(discord.ui.Button):
 
 
 class HideSeekView(discord.ui.View):
-    def __init__(self, seeker: discord.Member, hiders: list[discord.Member]):
+    """مرحلة البحث: محاولات الباحث محدودة وتتوزع حسب عدد اللاعبين (كل رقم يفتحه = محاولة)."""
+
+    def __init__(self, seeker: discord.Member, hiders: list[discord.Member], spots: dict, spot_count: int,
+                 max_attempts: int):
         super().__init__(timeout=90)
         self.seeker = seeker
         self.hiders = hiders
-
-        # عدد الأماكن (بعضها فاضي — فخاخ) وعدد المحاولات، الاثنين يكبرون مع عدد اللاعبين.
-        # القاعدة: أماكن = ضعف عدد المختبئين تقريبًا (بحد أقصى 20)، محاولات = 1.5 × عددهم (بحد أدنى 4).
-        hiders_count = len(hiders)
-        self.spot_count = min(20, max(hiders_count + 3, hiders_count * 2))
-        self.max_attempts = max(4, math.ceil(hiders_count * 1.5) + 1)
+        self.spot_count = spot_count
+        self.spots = spots
+        self.max_attempts = max_attempts
         self.attempts_used = 0
-
-        numbers = list(range(1, self.spot_count + 1))
-        random.shuffle(numbers)
-        hider_numbers = numbers[:hiders_count]
-        self.spots: dict[int, discord.Member | None] = {n: None for n in range(1, self.spot_count + 1)}
-        for num, p in zip(hider_numbers, hiders):
-            self.spots[num] = p
 
         self.found: set[int] = set()
         self.all_found = asyncio.Event()
@@ -2622,8 +2693,8 @@ class HideSeekView(discord.ui.View):
         self.add_item(self.extra_btn)
 
     def intro_text(self) -> str:
-        return (f"{self.seeker.mention} هو الباحث! الباقين مختبئين بين **{self.spot_count}** مكان.\n"
-                f"عندك **{self.max_attempts}** محاولة بس — اضغط على رقم عشان تبحث فيه")
+        return (f"{self.seeker.mention} هو الباحث! الباقين اختبأوا بين **{self.spot_count}** مكان.\n"
+                f"عندك **{self.max_attempts}** محاولات بس — اضغط على رقم عشان تبحث فيه")
 
     async def on_extra(self, interaction: discord.Interaction):
         if interaction.user != self.seeker:
@@ -2640,9 +2711,10 @@ class HideSeekView(discord.ui.View):
         await interaction.response.edit_message(
             content=f"{self.intro_text()}\nزادت محاولاتك! باقي لك **{remaining_attempts}** محاولة.", view=self)
 
-    def status_text(self, remaining_attempts: int) -> str:
-        return (f"{self.seeker.mention} هو الباحث! الباقين مختبئين بين **{self.spot_count}** مكان.\n"
-                f"محاولة غلط! باقي لك **{remaining_attempts}** محاولة.")
+    def status_text(self, remaining_attempts: int, miss: bool = False) -> str:
+        head = "محاولة غلط! " if miss else ""
+        return (f"{self.seeker.mention} هو الباحث! الباقين اختبأوا بين **{self.spot_count}** مكان.\n"
+                f"{head}باقي لك **{remaining_attempts}** محاولة.")
 
 
 @commands.command(name="غميضة")
@@ -2663,12 +2735,29 @@ async def _run_hideseek(ctx: commands.Context):
         return
     seeker = random.choice(players)
     hiders = [p for p in players if p != seeker]
-    view = HideSeekView(seeker, hiders)
-    msg = await ctx.send(
-        f"{seeker.mention} هو الباحث! الباقين مختبئين بين **{view.spot_count}** مكان.\n"
-        f"عندك **{view.max_attempts}** محاولة بس — اضغط على رقم عشان تبحث فيه", view=view
-    )
+    spot_count = min(20, len(players) + 2)   # مثال: 3 لاعبين = 5 أماكن
+
+    # ---------- مرحلة الاختباء: كل مختبئ يختار مكانه (10 ثواني) ----------
+    hide_view = HideSeekHideView(seeker, hiders, spot_count, HIDE_SECONDS)
+    msg = await ctx.send(hide_view.text(), view=hide_view)
     cancel_event = track_game_message(ctx.channel.id, msg)
+    done, pending = await asyncio.wait(
+        [asyncio.create_task(hide_view.all_chosen.wait()), asyncio.create_task(cancel_event.wait())],
+        timeout=HIDE_SECONDS, return_when=asyncio.FIRST_COMPLETED)
+    for t in pending:
+        t.cancel()
+    if cancel_event.is_set():
+        return
+    hide_view.stop()
+    spots = hide_view.build_spots()
+
+    # ---------- مرحلة البحث: محاولات الباحث حسب عدد الأماكن/اللاعبين ----------
+    attempts = math.ceil(spot_count / 2)
+    view = HideSeekView(seeker, hiders, spots, spot_count, attempts)
+    try:
+        await msg.edit(content=view.intro_text(), view=view)
+    except discord.NotFound:
+        return
     done, pending = await asyncio.wait(
         [asyncio.create_task(view.all_found.wait()),
          asyncio.create_task(view.attempts_exhausted.wait()),
@@ -3019,7 +3108,7 @@ GAME_HELP = {
     "حجرة": "حجرة ورقة مقص بينك وبين خصم، كل واحد يختار بالخفاء (عندكم 15 ثانية، واللي ما اختار يخسر) والنتيجة تبان بعد اختيار الاثنين.",
     "نرد": "بعد اللوبي كل لاعب يضغط زر الرمي ويرمي النرد بنفسه (عندكم 10 ثواني)، ومن ما رمى يرمي له البوت تلقائيًا، وصاحب أعلى رقم يفوز بالنقاط.",
     "عجلة": "بعد ما يكتمل اللوبي، العجلة تدور وتختار فايز عشوائي من المنضمين.",
-    "غميضة": "لاعب وحد يصير الباحث، والباقين يختبئون بين مجموعة أماكن (بعضها فاضي كفخ)، والباحث عنده عدد محاولات محدود يحاول يلقاهم فيه.",
+    "غميضة": "لاعب وحد يصير الباحث، والباقين كل واحد يختار مكانه بنفسه من أزرار مرقّمة خلال 10 ثواني (عدد الأماكن حسب عدد اللاعبين: اللاعبين + 2، فمثلًا 3 لاعبين = 5 أماكن، واللي ما اختار ينحط له مكان عشوائي). بعدها الباحث عنده محاولات محدودة تتوزع حسب عدد الأماكن (نصها تقريبًا: 5 أماكن = 3 محاولات، 7 = 4، 9 = 5)، وكل رقم يفتحه = محاولة.",
     "ريبلكا": "تشوفون ترتيب رموز لمدة 5 ثواني، وبعدها لازم تكتبونه بنفس الترتيب بالضبط، أول وحد يجاوب صح يفوز.",
     "خمن": "البوت يختار رقم سري بين 1 والرقم اللي تحدده، واكتبوا تخمينكم بالشات وبيعطيكم تلميح فوق/تحت.",
     "كلمة": "يعطيكم البوت كلمة، وأول وحد يكتب كلمة تبدأ بآخر حرف منها يفوز بالنقاط.",
@@ -3096,10 +3185,10 @@ class GamesRoleRequired(commands.CheckFailure):
 
 
 async def games_role_check(ctx: commands.Context) -> bool:
-    """يمنع أي أمر لعبة (و .العاب) إلا لو صاحبه معه رول الألعاب. باقي الأوامر (شرح...) مفتوحة للكل."""
+    """يمنع أي أمر لعبة (و .العاب) إلا لو صاحبه معه رول الألعاب (بالآيدي). باقي الأوامر (شرح...) مفتوحة للكل."""
     if ctx.command is None or ctx.command.name not in GAME_COMMAND_NAMES:
         return True
-    if isinstance(ctx.author, discord.Member) and any(r.name == GAMES_ROLE_NAME for r in ctx.author.roles):
+    if isinstance(ctx.author, discord.Member) and any(r.id == GAMES_ROLE_ID for r in ctx.author.roles):
         return True
     raise GamesRoleRequired()
 
@@ -3157,8 +3246,8 @@ async def games_on_message(message: discord.Message):
 # ============================================================
 async def handle_games_role_error(ctx: commands.Context) -> None:
     """رسالة "ما عندك الصلاحية" لما أحد بدون رول الألعاب يجرب أمر لعبة."""
-    if ctx.guild and discord.utils.get(ctx.guild.roles, name=GAMES_ROLE_NAME) is None:
-        print(f"[تنبيه] رول الألعاب '{GAMES_ROLE_NAME}' مو موجود بالسيرفر — تأكد إن الاسم يطابق.")
+    if ctx.guild and ctx.guild.get_role(GAMES_ROLE_ID) is None:
+        print(f"[تنبيه] رول الألعاب (الآيدي {GAMES_ROLE_ID}) مو موجود بالسيرفر — تأكد إن الآيدي صح.")
     await ctx.send(f"{ctx.author.mention} ما عندك الصلاحية.")
 
 
