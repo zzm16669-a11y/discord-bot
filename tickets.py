@@ -30,7 +30,7 @@ import db as _db
 # ================= إعدادات (غيّرها هنا لو تبي) =================
 SUPPORT_ROLE_ID = 1552547913643593728       # رتبة TICKETS (بالآيدي)
 TICKETS_CATEGORY_ID = 1548143239914070026   # كاتيقوري التكتات (بالآيدي)
-TICKET_LOG_CHANNEL_ID = 1538554042991775885  # روم لوق التكتات (بالآيدي)
+TICKET_LOG_CHANNEL_ID = 1538327225907281990  # روم لوق التكتات (بالآيدي)
 TICKET_LOG_CHANNEL_HINT = "ticket-logs"     # احتياط بالاسم لو الآيدي ما انلقى
 TICKET_CHANNEL_PREFIX = "ticket"            # الرومات تطلع ticket-0001, ticket-0002...
 
