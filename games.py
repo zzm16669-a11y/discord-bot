@@ -3109,6 +3109,10 @@ def _replica_font(size: int):
     paths = [
         os.path.join(GAME_IMAGES_DIR, REPLICA_FONT_FILE),
         os.path.join(_BASE_DIR, GAME_IMAGES_DIR, REPLICA_FONT_FILE),
+        os.path.join(_BASE_DIR, REPLICA_FONT_FILE),
+        REPLICA_FONT_FILE,
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
         "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf",
@@ -3130,6 +3134,7 @@ def _replica_font(size: int):
                     return ImageFont.truetype(p, size)
             except OSError:
                 continue
+    print(f"[ريبلكا] ⚠️ ما لقيت خط عربي! حط ملف {REPLICA_FONT_FILE} داخل: {os.path.abspath(GAME_IMAGES_DIR)}")
     try:
         return ImageFont.load_default(size=size)
     except TypeError:
