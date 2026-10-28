@@ -1877,35 +1877,42 @@ async def spin_wheel_on(msg: discord.Message, players: list, prefix: str = ""):
     return players[winner_idx]
 
 
-# ---------- عجلة دائرية حقيقية (سهم ثابت + عجلة صور بروفايل اللاعبين تدور) — خاصة بالروليت بس ----------
-# ألوان هادية مرتبة حسب درجة اللون — كل لاعب ياخذ لون عشوائي، ولا يتكرر لون بين لاعبين
-WHEEL_COLORS = [
-    '#A04B4B', '#B07E6D', '#8A6138', '#A08A4B', '#B0B06D', '#758A38', '#75A04B', '#7EB06D',
-    '#388A38', '#4BA060', '#6DB08F', '#388A75', '#4BA0A0', '#6DA0B0', '#38618A', '#4B60A0',
-    '#6D6DB0', '#4D388A', '#754BA0', '#A06DB0', '#8A388A', '#A04B8A', '#B06D8F', '#8A384D',
-]
-WHEEL_BG = (49, 51, 56)   # خلفية الـGIF (نفس لون خلفية ديسكورد الداكن)
+# ---------- عجلة دائرية حقيقية (أسماء اللاعبين على أطراف الأقسام + صورة اللاعب بالنص + سهم ثابت) — خاصة بالروليت بس ----------
+# تنرسم بعدد اللاعبين اللي دخلوا (من 2 لين 1000). لو اللاعبين أكثر من WHEEL_LABELS_MAX الأسماء ما تكفي على الأقسام،
+# فيطلع اسم اللاعب اللي عليه السهم بشريط تحت العجلة، وصورته بالنص.
+# ألوان الأقسام: درجات رمادي مزرق (فايب سيرفر Y3) — الأقسام المتجاورة ألوانها مختلفة. غيّرها بأي ألوان تبيها
+WHEEL_COLORS = ['#39424B', '#566471', '#7D8D9C', '#A9B7C4', '#2E353C', '#6C7C8B', '#C3CED8', '#46525E']
+WHEEL_BG = (49, 51, 56)        # خلفية الـGIF (نفس لون خلفية ديسكورد الداكن)
+WHEEL_RIM = "#1B1F23"          # الإطار الخارجي وخطوط الفصل وإطار صورة النص
+WHEEL_ACCENT = "#9FC4E0"       # لمسة أزرق جليدي رفيعة (حلقة صورة النص + إطار الشريط)
+WHEEL_POINTER = "#DDEBF5"      # لون السهم
+WHEEL_TEXT_LIGHT = (255, 255, 255, 255)   # نص الأسماء على الأقسام الغامقة
+WHEEL_TEXT_DARK = (27, 31, 35, 255)       # نص الأسماء على الأقسام الفاتحة
+WHEEL_LABELS_MAX = 40          # أكثر عدد لاعبين تنكتب أسماءهم على الأقسام (فوقه يطلع الاسم بشريط تحت)
+WHEEL_AVATARS_ALL = 60         # لو اللاعبين أكثر من كذا نحمّل بس الصور اللي بتبان بالدوران (يسرّع العجلة)
+_WHEEL_SIZE = 400
+_WHEEL_CAPTION_H = 52
 _AVATAR_CACHE: dict = {}  # يحفظ صور اللاعبين عشان ما نحمّلها من جديد كل لفّة (يسرّع العجلة)
 
 
 def _pick_sector_colors(n: int, rng) -> list:
-    """يوزّع الألوان الهادية على الأقسام عشوائيًا، بدون تكرار، وبحيث الأقسام المتجاورة ألوانها مختلفة بوضوح."""
-    total = len(WHEEL_COLORS)
-    if n > total:
-        return [rng.choice(WHEEL_COLORS) for _ in range(n)]
-    offset = rng.randrange(total)
-    steps = [5, 7, 11, 13]
-    rng.shuffle(steps)
+    """يوزّع ألوان الأقسام عشوائيًا بحيث الأقسام المتجاورة (وآخر قسم مع أول قسم) ألوانها مختلفة."""
+    palette = WHEEL_COLORS[:]
+    rng.shuffle(palette)
+    colors = []
+    for i in range(n):
+        c = palette[i % len(palette)]
+        if i == n - 1 and n > 1 and c == colors[0]:
+            c = next(x for x in palette if x != colors[0] and x != colors[-1])
+        colors.append(c)
+    return colors
 
-    def hue_gap(a, b):
-        d = abs(a - b) % total
-        return min(d, total - d)
 
-    for k in steps:
-        idxs = [(offset + i * k) % total for i in range(n)]
-        if n < 2 or hue_gap(idxs[0], idxs[-1]) >= 3:
-            return [WHEEL_COLORS[i] for i in idxs]
-    return [WHEEL_COLORS[(offset + i * steps[0]) % total] for i in range(n)]
+def _text_color_for(hex_color: str):
+    """لون النص المناسب فوق لون القسم (غامق على الفاتح، وأبيض على الغامق)."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return WHEEL_TEXT_DARK if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else WHEEL_TEXT_LIGHT
 
 
 async def _get_avatar_circle(member: discord.Member, size: int = 160):
@@ -1930,83 +1937,160 @@ async def _get_avatar_circle(member: discord.Member, size: int = 160):
         return None
 
 
-def _wheel_layout(n: int, radius: float):
-    """حجم الأفتار ومكانها حسب عدد اللاعبين: قليلين = أفتار كبيرة، كثيرين = يتوزعون على حلقتين عشان ما يتداخلون.
-    يرجع (قطر_الأفتار, [نسب_بعدها_عن_المركز])."""
-    if n <= 5:
-        return int(radius * 0.56), [0.66]
-    if n <= 8:
-        return int(radius * 0.46), [0.68]
-    if n <= 12:
-        return int(radius * 0.36), [0.77, 0.52]
-    return int(radius * 0.28), [0.80, 0.50]
-
-
-def _prepare_wheel_assets(avatars: list, names: list, size: int = 360) -> list:
-    """يجهّز صورة كل لاعب (الأفتار بإطار أبيض، أو حروف الاسم لو ما قدرنا نحمّل الصورة) مرة وحدة،
-    عشان رسم الفريمات يكون سريع وسلس."""
+def _wheel_geom(size: int = _WHEEL_SIZE):
+    """أبعاد العجلة: (هامش_السهم, مركز_x, مركز_y, نصف_القطر, نصف_قطر_الأقسام_داخل_الإطار, نصف_قطر_صورة_النص)."""
+    top = 28
+    cx = size // 2
+    cy = top + size // 2
     radius = size // 2 - 8
-    avatar_size, _ = _wheel_layout(len(avatars), radius)
-    ring_size = avatar_size + 6
-    try:
-        font = ImageFont.load_default(size=max(16, int(avatar_size * 0.4)))
-    except TypeError:
-        font = ImageFont.load_default()
-    rings = []
-    for i in range(len(avatars)):
-        avatar_img = avatars[i]
-        if avatar_img is not None:
-            av = avatar_img.resize((avatar_size, avatar_size))
-            ring = Image.new("RGBA", (ring_size, ring_size), (0, 0, 0, 0))
-            ImageDraw.Draw(ring).ellipse((0, 0, ring_size, ring_size), fill=(255, 255, 255, 255))
-            ring.paste(av, (3, 3), av)
+    inner = radius - 12
+    hub_r = int(radius * 0.27)
+    return top, cx, cy, radius, inner, hub_r
+
+
+def _fit_wheel_text(probe, text: str, max_len: float, start_fs: int, min_fs: int = 12):
+    """يختار حجم خط يناسب الطول المتاح، ولو الاسم طويل جدًا يقصّه وينهيه بنقاط. يرجع (النص_المشكّل, الخط, حدود_النص)."""
+    fs = start_fs
+    while True:
+        shaped = _ar_text(text)
+        font = _replica_font(fs)
+        bbox = probe.textbbox((0, 0), shaped, font=font)
+        if (bbox[2] - bbox[0]) <= max_len:
+            return shaped, font, bbox
+        if fs > min_fs:
+            fs -= 1
+        elif len(text) > 3:
+            text = text[:-2].rstrip() + "…"
         else:
-            ring = Image.new("RGBA", (avatar_size, avatar_size), (0, 0, 0, 0))
-            d = ImageDraw.Draw(ring)
-            d.ellipse((0, 0, avatar_size, avatar_size), fill="#7289DA")
-            text = names[i][:2] if names[i] else "?"
-            tb = d.textbbox((0, 0), text, font=font)
-            w, h = tb[2] - tb[0], tb[3] - tb[1]
-            d.text(((avatar_size - w) / 2 - tb[0], (avatar_size - h) / 2 - tb[1]), text, fill="#FFFFFF", font=font)
-        rings.append(ring)
-    return rings
+            return shaped, font, bbox
 
 
-def _draw_wheel_frame(rings: list, colors: list, rotation_deg: float, size: int = 360, bg=None):
-    """يرسم عجلة دائرية مقسّمة بعدد اللاعبين، كل قسم بلون هادي مختلف وبه صورة بروفايل العضو،
-    وسهم ثابت فوق العجلة يشاور تحت."""
-    top_margin = 40
-    center = size // 2
-    cy = top_margin + center
-    radius = size // 2 - 8
-    n = len(rings)
+def _prepare_wheel_assets(avatars: list, names: list, colors: list, size: int = _WHEEL_SIZE):
+    """يجهّز مرة وحدة عشان رسم الفريمات يكون سريع:
+    - labels: صورة اسم كل لاعب على قسمه (بس لو اللاعبين <= WHEEL_LABELS_MAX، وإلا None)
+    - get_center(i): صورة اللاعب الدائرية اللي تنحط بالنص (أو حروف اسمه لو ما نزلت صورته)
+    - get_caption(i): شريط اسم اللاعب تحت العجلة (للعجلات الكبيرة)
+    الاثنين الأخيرين يتجهزون عند الطلب عشان 1000 لاعب ما يبطّون العجلة."""
+    top, cx, cy, radius, inner, hub_r = _wheel_geom(size)
+    n = len(avatars)
+    probe = ImageDraw.Draw(Image.new("RGBA", (4, 4)))
+    names = [((nm or "?").strip() or "?") for nm in names]
+
+    labels = None
+    if n <= WHEEL_LABELS_MAX:
+        text_in, text_out = hub_r + 10, inner - 10          # المدى اللي ينكتب فيه الاسم (من صورة النص لين الطرف)
+        max_len = text_out - text_in
+        arc = 2 * math.pi * ((text_in + text_out) / 2) / n   # عرض القسم عند منتصف الاسم
+        base_fs = int(max(13, min(30, arc * 0.55)))
+        labels = []
+        for i in range(n):
+            shaped, font, (l, t, r, b) = _fit_wheel_text(probe, names[i], max_len, base_fs)
+            color = _text_color_for(colors[i % len(colors)])
+            label = Image.new("RGBA", (r - l + 12, b - t + 12), (0, 0, 0, 0))
+            d = ImageDraw.Draw(label)
+            if color == WHEEL_TEXT_LIGHT:
+                d.text((6 - l + 1, 6 - t + 1), shaped, font=font, fill=(0, 0, 0, 110))   # ظل خفيف
+            d.text((6 - l, 6 - t), shaped, font=font, fill=color)
+            labels.append(label)
+
+    center_cache: dict = {}
+
+    def get_center(i: int):
+        if i in center_cache:
+            return center_cache[i]
+        d2 = hub_r * 2
+        if avatars[i] is not None:
+            img = avatars[i].resize((d2, d2), Image.LANCZOS)
+        else:
+            img = Image.new("RGBA", (d2, d2), (0, 0, 0, 0))
+            dc = ImageDraw.Draw(img)
+            dc.ellipse((0, 0, d2 - 1, d2 - 1), fill="#566471")
+            initials = _ar_text(names[i][:2])
+            ifont = _replica_font(int(d2 * 0.4))
+            tl, tt, tr, tb = dc.textbbox((0, 0), initials, font=ifont)
+            dc.text(((d2 - (tr - tl)) / 2 - tl, (d2 - (tb - tt)) / 2 - tt), initials, fill="#FFFFFF", font=ifont)
+        center_cache[i] = img
+        return img
+
+    caption_cache: dict = {}
+
+    def get_caption(i: int):
+        if i in caption_cache:
+            return caption_cache[i]
+        shaped, font, (l, t, r, b) = _fit_wheel_text(probe, names[i], size - 90, 26, min_fs=14)
+        w, h = (r - l) + 40, (b - t) + 22
+        pill = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(pill)
+        d.rounded_rectangle((0, 0, w - 1, h - 1), radius=h // 2, fill=WHEEL_RIM, outline=WHEEL_ACCENT, width=2)
+        d.text((20 - l, 11 - t), shaped, font=font, fill=WHEEL_TEXT_LIGHT)
+        caption_cache[i] = pill
+        return pill
+
+    return labels, get_center, get_caption
+
+
+def _draw_wheel_frame(assets, colors: list, rotation_deg: float, size: int = _WHEEL_SIZE, bg=None):
+    """يرسم عجلة دائرية مقسّمة بعدد اللاعبين: كل قسم بلون، واسم اللاعب عند طرف قسمه (أو بشريط تحت لو اللاعبين كثير)،
+    وبالنص صورة اللاعب اللي عليه السهم حاليًا، وسهم ثابت فوق العجلة يشاور تحت."""
+    labels, get_center, get_caption = assets
+    top, cx, cy, radius, inner, hub_r = _wheel_geom(size)
+    n = len(colors) if labels is None else len(labels)
     sector = 360 / n
-    _, factors = _wheel_layout(n, radius)
     rotation_deg = rotation_deg % 360
-    img = Image.new("RGBA", (size, size + 40), bg if bg is not None else (0, 0, 0, 0))
+    extra = _WHEEL_CAPTION_H if labels is None else 0
+    img = Image.new("RGBA", (size, size + top + extra), bg if bg is not None else (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    bbox_box = [center - radius, cy - radius, center + radius, cy + radius]
 
-    for i in range(n):
-        start_angle = rotation_deg + i * sector
-        draw.pieslice(bbox_box, start_angle, start_angle + sector,
-                      fill=colors[i % len(colors)], outline="#2C2F33", width=2)
+    # الإطار الخارجي الداكن ثم الأقسام
+    draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=WHEEL_RIM)
+    box = [cx - inner, cy - inner, cx + inner, cy + inner]
+    overlap = 0.5 if n > 24 else 0     # للأقسام الرفيعة: تداخل بسيط عشان ما تطلع فراغات بين الأقسام
+    if n > WHEEL_LABELS_MAX:
+        # عجلة كبيرة: نرسم الأقسام بحجم أكبر ثم نصغّرها عشان تطلع ناعمة بدون تموّج
+        ss, d = (2 if n > 200 else 3), inner * 2
+        layer = Image.new("RGBA", (d * ss, d * ss), (0, 0, 0, 0))
+        ldraw = ImageDraw.Draw(layer)
+        for i in range(n):
+            s = rotation_deg + i * sector
+            ldraw.pieslice([0, 0, d * ss - 1, d * ss - 1], s, s + sector + overlap, fill=colors[i % len(colors)])
+        layer = layer.resize((d, d), Image.LANCZOS)
+        img.paste(layer, (cx - inner, cy - inner), layer)
+    else:
+        for i in range(n):
+            s = rotation_deg + i * sector
+            draw.pieslice(box, s, s + sector + overlap, fill=colors[i % len(colors)])
+    # خطوط الفصل بين الأقسام (تنحذف لو الأقسام رفيعة جدًا)
+    line_w = 5 if n <= 24 else 3 if n <= WHEEL_LABELS_MAX else 1 if n <= 120 else 0
+    if line_w:
+        for i in range(n):
+            a = math.radians(rotation_deg + i * sector)
+            draw.line([(cx, cy), (cx + inner * math.cos(a), cy + inner * math.sin(a))], fill=WHEEL_RIM, width=line_w)
 
-    for i in range(n):
-        mid_angle = math.radians(rotation_deg + i * sector + sector / 2)
-        text_radius = radius * factors[i % len(factors)]
-        tx = center + text_radius * math.cos(mid_angle)
-        ty = cy + text_radius * math.sin(mid_angle)
-        ring = rings[i]
-        img.paste(ring, (int(tx - ring.width / 2), int(ty - ring.height / 2)), ring)
+    # أسماء اللاعبين على أطراف الأقسام (النص يمتد من المركز للطرف)
+    if labels is not None:
+        r_mid = ((hub_r + 10) + (inner - 10)) / 2
+        for i in range(n):
+            ang = rotation_deg + i * sector + sector / 2
+            rad = math.radians(ang)
+            rotated = labels[i].rotate(-ang, expand=True, resample=Image.BICUBIC)
+            tx = cx + r_mid * math.cos(rad)
+            ty = cy + r_mid * math.sin(rad)
+            img.paste(rotated, (int(tx - rotated.width / 2), int(ty - rotated.height / 2)), rotated)
 
-    # إطار خارجي للعجلة
-    draw.ellipse(bbox_box, outline="#23272A", width=4)
-    # مركز العجلة
-    draw.ellipse([center - 10, cy - 10, center + 10, cy + 10], fill="#23272A")
+    # صورة اللاعب اللي عليه السهم بالنص (إطار داكن + حلقة أزرق جليدي رفيعة)
+    cur = int(((270 - rotation_deg) % 360) // sector) % n
+    draw.ellipse([cx - hub_r - 7, cy - hub_r - 7, cx + hub_r + 7, cy + hub_r + 7],
+                 fill=WHEEL_RIM, outline=WHEEL_ACCENT, width=2)
+    hub = get_center(cur)
+    img.paste(hub, (cx - hub.width // 2, cy - hub.height // 2), hub)
+
+    # شريط اسم اللاعب تحت العجلة (للعجلات الكبيرة)
+    if labels is None:
+        pill = get_caption(cur)
+        img.paste(pill, (cx - pill.width // 2, top + size - 4 + (_WHEEL_CAPTION_H - pill.height) // 2), pill)
+
     # السهم الثابت فوق العجلة يشاور تحت
-    arrow = [(center - 14, 6), (center + 14, 6), (center, 34)]
-    draw.polygon(arrow, fill="#B9BBBE")
+    draw.polygon([(cx - 16, 8), (cx + 16, 8), (cx, 54)], fill=WHEEL_POINTER, outline=WHEEL_RIM)
     return img
 
 
@@ -2026,42 +2110,59 @@ def _spin_schedule(total_spin: float, duration: float = 3.0, power: float = 2.2)
     return frames
 
 
-def _build_wheel_gif(avatars: list, names: list, winner_index: int, colors: list):
+def _plan_wheel_spin(n: int, winner_index: int) -> dict:
+    """يحدد اللفّة كاملة: زاوية البداية، ومجموع الدوران (بحيث يوقف السهم بالضبط عند الفايز)، وجدول الفريمات."""
+    sector = 360 / n
+    # السهم فوق العجلة = زاوية 270 بنظام الرسم (pieslice تبدأ من 3 الساعة وتزيد باتجاه عقارب الساعة)
+    target_offset = (270 - (winner_index * sector + sector / 2)) % 360
+    start = random.uniform(0, 360)   # كل لفّة تبدأ من زاوية عشوائية
+    total = ((target_offset - start) % 360) + 360 * random.randint(2, 3)
+    return {"start": start, "total": total, "schedule": _spin_schedule(total)}
+
+
+def _plan_visible_indices(plan: dict, n: int, winner_index: int) -> set:
+    """اللاعبين اللي بتبان صورهم بالنص أثناء الدوران (عشان نحمّل بس صورهم لو العجلة كبيرة)."""
+    sector = 360 / n
+    seen = {winner_index}
+    for angle, _ in plan["schedule"]:
+        rot = (plan["start"] + angle) % 360
+        seen.add(int(((270 - rot) % 360) // sector) % n)
+    return seen
+
+
+def _build_wheel_gif(avatars: list, names: list, winner_index: int, colors: list, plan: dict | None = None):
     """يبني GIF واحد سلس للعبة العجلة وهي تدور وتبطّئ لين توقف بالضبط عند الفايز، مع صورة ثابتة للنتيجة.
     يرجع (gif_bytes, png_bytes, مدة_اللفّة_بالثواني)."""
     n = len(avatars)
-    sector = 360 / n
-    rings = _prepare_wheel_assets(avatars, names)
-
-    # السهم فوق العجلة = زاوية 270 بنظام الرسم (pieslice تبدأ من 3 الساعة وتزيد باتجاه عقارب الساعة)
-    target_offset = (270 - (winner_index * sector + sector / 2)) % 360
-    start_rotation = random.uniform(0, 360)   # كل لفّة تبدأ من زاوية عشوائية
-    total_spin = ((target_offset - start_rotation) % 360) + 360 * random.randint(2, 3)
+    assets = _prepare_wheel_assets(avatars, names, colors)
+    if plan is None:
+        plan = _plan_wheel_spin(n, winner_index)
+    start_rotation, total_spin = plan["start"], plan["total"]
 
     frames, durations = [], []
-    for angle, dur in _spin_schedule(total_spin):
-        frames.append(_draw_wheel_frame(rings, colors, start_rotation + angle, bg=WHEEL_BG).convert("RGB"))
+    for angle, dur in plan["schedule"]:
+        frames.append(_draw_wheel_frame(assets, colors, start_rotation + angle, bg=WHEEL_BG).convert("RGB"))
         durations.append(dur)
     spin_secs = sum(durations) / 1000
     durations[-1] += 600   # وقفة قصيرة على النتيجة
 
-    frames_p = [f.quantize(colors=128, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+    frames_p = [f.quantize(colors=192, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
                 for f in frames]
     gif_buf = BytesIO()
     frames_p[0].save(gif_buf, format="GIF", save_all=True, append_images=frames_p[1:],
                      duration=durations, loop=0)
 
-    final_img = _draw_wheel_frame(rings, colors, start_rotation + total_spin)
+    final_img = _draw_wheel_frame(assets, colors, start_rotation + total_spin)
     png_buf = BytesIO()
     final_img.save(png_buf, format="PNG")
     return gif_buf.getvalue(), png_buf.getvalue(), spin_secs
 
 
 async def _spin_wheel_image(msg: discord.Message, avatars: list, names: list, winner_index: int,
-                             colors: list, header: str = "العجلة تدور...") -> None:
+                             colors: list, header: str = "العجلة تدور...", plan: dict | None = None) -> None:
     """يدوّر عجلة دائرية فيها سهم ثابت (GIF واحد سلس بدون تقطيع)، لين توقف بالضبط عند اللاعب الفايز."""
     gif_bytes, png_bytes, spin_secs = await asyncio.to_thread(
-        _build_wheel_gif, avatars, names, winner_index, colors)
+        _build_wheel_gif, avatars, names, winner_index, colors, plan)
     try:
         await msg.edit(content=header, attachments=[discord.File(BytesIO(gif_bytes), filename="wheel.gif")])
         await asyncio.sleep(spin_secs + 0.8)
@@ -2073,9 +2174,10 @@ async def _spin_wheel_image(msg: discord.Message, avatars: list, names: list, wi
 
 async def spin_and_choose(msg: discord.Message, players: list[discord.Member],
                            header: str = "العجلة تدور تختار...") -> discord.Member:
-    """يدوّر عجلة دائرية فيها صور بروفايل اللاعبين وسهم ثابت، ويرجع اللاعب اللي وقف عليه السهم.
-    الاختيار عشوائي 100%: ترتيب الأقسام على العجلة يتخربط كل مرة، والفايز يتحدد بعشوائية النظام،
-    ومافيه أي أفضلية للمضيف أو لرقم المقعد. لو Pillow مو متوفرة، يرجع لأسلوب العجلة النصية القديم."""
+    """يدوّر عجلة دائرية فيها أسماء اللاعبين وصورهم وسهم ثابت، ويرجع اللاعب اللي وقف عليه السهم.
+    العجلة تنرسم بعدد اللاعبين (من 2 لين 1000). الاختيار عشوائي 100%: ترتيب الأقسام على العجلة يتخربط كل مرة،
+    والفايز يتحدد بعشوائية النظام، ومافيه أي أفضلية للمضيف أو لرقم المقعد.
+    لو Pillow مو متوفرة، يرجع لأسلوب العجلة النصية القديم."""
     if not players:
         return None
     rng = random.SystemRandom()
@@ -2085,10 +2187,22 @@ async def spin_and_choose(msg: discord.Message, players: list[discord.Member],
     winner_idx = rng.randrange(n)            # الفايز عشوائي
     if PIL_AVAILABLE:
         try:
-            avatars = await asyncio.gather(*(_get_avatar_circle(p) for p in order))
             names = [p.display_name for p in order]
             colors = _pick_sector_colors(n, rng)
-            await _spin_wheel_image(msg, list(avatars), names, winner_idx, colors, header=header)
+            plan = _plan_wheel_spin(n, winner_idx)
+            if n <= WHEEL_AVATARS_ALL:
+                avatars = list(await asyncio.gather(*(_get_avatar_circle(p) for p in order)))
+            else:
+                # عجلة كبيرة: نحمّل بس صور اللاعبين اللي بتمر بالنص أثناء الدوران (مو كل الألف)
+                avatars = [None] * n
+                sem = asyncio.Semaphore(8)
+
+                async def load(i: int):
+                    async with sem:
+                        avatars[i] = await _get_avatar_circle(order[i])
+
+                await asyncio.gather(*(load(i) for i in _plan_visible_indices(plan, n, winner_idx)))
+            await _spin_wheel_image(msg, avatars, names, winner_idx, colors, header=header, plan=plan)
             return order[winner_idx]
         except Exception as e:
             print(f"[روليت] تعذّر رسم العجلة الدائرية، رجعنا لأسلوب النص: {e}")
@@ -2798,17 +2912,13 @@ async def _run_hideseek(ctx: commands.Context):
 # طريقة اللعب: كل جولة لها حرف، والبوت يسأل كل لاعب سؤال (مثال: "يا فلان قلي نبات يبدأ بحرف ب")
 # واللاعب عنده TURN_TIMEOUT ثانية يجاوب. بنهاية كل جولة حرف تنرسل صورة إحصائية (اسم اللاعب + جاوب أو لا).
 REPLICA_ROUNDS = 3                        # عدد جولات الحروف باللعبة الواحدة
-REPLICA_CATEGORIES = ["نبات", "جماد", "حيوان", "بلاد", "فاكهة", "مهنة", "اسم"]
-# كل حروف اللغة العربية (28 حرف) — كل جولة تختار حرف عشوائي منها بدون تكرار لين تنعرض كلها
-REPLICA_LETTERS = list("ابتثجحخدذرزسشصضطظعغفقكلمنهوي")
+REPLICA_CATEGORIES = ["نبات", "جماد", "حيوان", "بلاد", "فاكهة", "مهنة", "اسم ولد", "اسم بنت"]
+REPLICA_LETTERS = list("ابتجحخدرزسشصطعفقكلمنهوي")   # حروف سهلة (بدون ث ذ ض ظ غ)
 
 # صورة قالب الإحصائية: حطها داخل مجلد game_images بهذا الاسم (نفس الصورة اللي أرسلتها بنفس مقاساتها)
 REPLICA_STATS_IMAGE = "replica_stats.png"
 # خط عربي اختياري (ملف .ttf) تحطه داخل game_images بهذا الاسم، لو ما حطيته يجرّب خطوط النظام
 REPLICA_FONT_FILE = "font.ttf"
-
-# مجلد ملف الألعاب نفسه (نستخدمه كمسار احتياطي للبحث عن صورة القالب والخط لو البوت مشغّل من مجلد ثاني)
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # مواقع الخانات داخل القالب (بمقاس 1264×848، وتتحول تلقائيًا لو مقاس الصورة اختلف)
 _REPLICA_TITLE_BOX = (217, 140, 1047, 211)
@@ -2816,273 +2926,11 @@ _REPLICA_TITLE_BOX = (217, 140, 1047, 211)
 _REPLICA_COLS = [(217, 378), (393, 558), (573, 738), (753, 923), (938, 1047)]
 _REPLICA_HEADER_ROW = (244, 295)
 _REPLICA_DATA_ROWS = [(310, 378), (394, 462), (478, 546), (561, 630)]
-_REPLICA_HEADERS = ["الحالة", "الإجابة", "الفئة", "اللاعب", "الحرف"]
+_REPLICA_HEADERS = ["الحالة", "الإجابة", "الفئة", "اللاعب", "#"]
 
-_REPLICA_TEXT = (255, 255, 255, 255)
-_REPLICA_OK = (130, 255, 170, 255)
-_REPLICA_FAIL = (255, 130, 130, 255)
-
-
-# ---------- بنك كلمات ريبلكا (للتحقق إن الإجابة من الفئة المطلوبة) ----------
-# كل فئة فيها كلمات مفصولة بفاصلة "،" أو سطر جديد. تقدر تزيد أي كلمة تبيها هنا (الهمزات والتاء المربوطة و"ال" ما تفرق).
-_REPLICA_RAW = {
-    "نبات": """
-أرز، أراك، أقحوان، أكاسيا، أوركيد، أوكالبتوس، أسبراغس، إكليل الجبل، أذخر، آس، أرجوان، أمارانث، إيرس
-بصل، بطاطس، بامية، بازلاء، باذنجان، بقدونس، بقلة، بنفسج، بابونج، بردي، بلوط، بان، بامبو، برسيم، بروكلي، بندق، بن، بيلسان، بخور مريم، بنجر
-تمر، تين، توت، تبغ، تيوليب، ترمس، تمر هندي، تين شوكي، توليب، تنوب
-ثوم، ثيل، ثمام
-جزر، جرجير، جوز، جوري، جميز، جاسمين، جلنار، جنكة، جوز الهند
-حبق، حمص، حلبة، حنظل، حناء، حور، حشيش، حنطة، حبة البركة، حميض، حلفا، حندقوق، حمضيات
-خس، خيار، خروب، خردل، خزامى، خيزران، خرشوف، خبيزة، خشخاش، خبازى، خنشار، خلاف
-دخن، دوم، دفلى، دفلة، دحنون، دالية، دردار، دلب، دوار الشمس، دباء
-ذرة، ذيل الثعلب
-رمان، ريحان، رز، رجله، رند، روزماري، راوند، رمث، رشاد، رغل
-زيتون، زعتر، زهرة، زنبق، زعفران، زنجبيل، زان، زيزفون، زهر، زعرور، زقوم
-سمسم، سدر، سنط، سرو، سبانخ، سلق، سنديان، سوسن، سمر، سنا، سفرجل، سماق، سيسبان، سرخس، ساج
-شعير، شمر، شاي، شمام، شوفان، شجرة، شيح، شوك، شبت، شمندر، شيكوريا، شقائق النعمان، شوندر
-صنوبر، صبار، صفصاف، صبر، صعتر، صمغ، صندل
-طماطم، طرفاء، طرخون، طلح، طحلب، طيون، طماطة
-عنب، عدس، عرعر، عوسج، عرفج، عشب، عليق، عباد الشمس، عصفر، عشبة، عود، عرقسوس، عيش الغراب
-غاف، غار، غضا، غرب، غاردينيا، غاسول، غرقد
-فول، فجل، فلفل، فاصوليا، فستق، فل، فطر، فراولة، فاوانيا، فربيون، فلين
-قمح، قرع، قرنبيط، قصب، قطن، قرفة، قرنفل، قثاء، قراص، قيقب، قنب، قات، قاقلي، قصعين، قرط
-كرفس، كرنب، كزبرة، كمون، كراث، كرز، كستناء، كافور، كركم، كوسا، كاكاو، كاكتس، كمأ، كتان، كرمة
-ليمون، لوبيا، لفت، لوز، لافندر، لبلاب، لوتس، لبان، لسان الثور، لوف
-ملوخية، موز، مانجو، مشمش، مريمية، ميرمية، ملفوف، ماش، مر، مشروم، منثور، مستكة، مورينجا، ميموزا
-نعناع، نخل، نرجس، نيلوفر، نبق، نارنج، نيم، نخيل، نفل، نيلة، نجيل
-هليون، هندباء، هيل، هندبا، هبسكس، هيبسكس
-ورد، وردة، وسمة، ويستيريا، وزال، ورد جوري
-ياسمين، يقطين، يانسون، ينسون، يوسفي
-""",
-    "جماد": """
-انبوب، اناء، اريكة، ابريق، اسفنجة، اطار، اسطوانة، ازميل، ايباد، ايفون، ابرة، اسوارة، اسلاك، ابواب، ارض
-باب، بيت، بطانية، بالون، بنطلون، بوصلة، بيانو، بلاط، بساط، براد، برج، بوابة، بندقية، بطارية، برواز، بحيرة، بحر، بركان، بئر
-تلفاز، تلفون، تلفزيون، تاج، تابوت، تحفة، ترمس، تمثال، تلسكوب، تكييف، تذكرة، تراب، تل، تنور، ترس، تاكسي، تيشيرت، تخت، ترابيزة، تنكة
-ثلاجة، ثوب، ثريا، ثلج، ثقاب
-جدار، جوال، جزمة، جسر، جبل، جريدة، جهاز، جاكيت، جرس، جرة، جيتار، جورب، جزيرة، جدول، جامع، جوهرة
-حائط، حاسوب، حذاء، حقيبة، حجر، حبل، حديد، حوض، حصيرة، حلق، حزام، حاوية، حديقة، حمام، حبر
-خزانة، خاتم، خيمة، خشب، خنجر، خريطة، خلاط، خرز، خوذة، خلخال، خيط، خزف، خرطوم، خزان، خارطة، خشبة، خمار
-دفتر، دولاب، دراجة، دلو، درج، دبوس، دش، دمية، دار، دفاية، دينار، درهم، دولار، دبابة، دف، دباب
-ذهب، ذخيرة، ذاكرة
-راديو، رف، رمح، ريشة، ريموت، رصاصة، رخام، رمل، رداء، رسالة، رادار، رباط، روب، روبوت، رافعة
-زجاج، زر، زجاجة، زورق، زيت، زنبرك، زخرفة، زهرية، زنزانة، زناد، زمام، زلاجة، زمرد، زبرجد، زئبق، زنك، زمزمية، زبدية
-سيارة، سرير، ساعة، سكين، سجادة، سلة، سماعة، سقف، سور، سلم، سيف، سلسلة، سبورة، ستارة، سيراميك، سطل، سفينة، سدادة، سبحة، سطح، سكة، سرج، سلاح، سنارة
-شباك، شاشة، شمعة، شنطة، شمس، شارع، شوكة، شماغ، شال، شريط، شاحن، شبكة، شمسية، شفرة، شراع، شاحنة، شقة، شماعة، شامبو، شيشة، شرفة، شمع، شهاب
-صحن، صندوق، صابون، صخرة، صاروخ، صورة، صنبور، صدفة، صوف، صفيح، صلصال، صينية، صحراء، صاج، صمام، صافرة، صالون، صوفا
-ضوء، ضباب، ضريح، ضمادة، ضفيرة
-طاولة، طاقية، طابعة، طيارة، طبل، طوق، طوب، طين، طبق، طريق، طائرة، طباشير، طنجرة، طفاية، طقم، طرحة، طربوش، طابق، طاحونة، طوربيد، طارة، طلاء، طبلة
-ظرف، ظلة
-عصا، عجلة، عطر، عمود، علم، عربة، عدسة، عقد، عباءة، عمارة، علبة، عود، عملة، عدة، عتبة، عرش، عقال، عمامة، عداد، عربية، عباية
-غسالة، غطاء، غرفة، غيمة، غواصة، غلاية، غراء، غبار، غابة، غلاف، غمد، غربال، غاز
-فرشاة، فنجان، فستان، فرن، فأس، فانوس، فرشة، فلاش، فراش، فوطة، فلين، فخار، فضة، فيلا، فخ، فرامل، فتاحة، فاكس
-قلم، قارب، قميص، قبعة، قفل، قدر، قنينة، قمر، قلادة، قاعدة، قفاز، قوس، قصر، قلعة، قطار، قنبلة، قماش، قدح، قناع، قاموس، قصبة، قرص، قفص، قبر، قنديل، قرطاس
-كرسي، كتاب، كمبيوتر، كاميرا، كوب، كأس، كيس، كنبة، كهف، كرة، كاسة، كيبورد، كمامة، كوخ، كشاف، كابل، كرتون، كوكب، كراسة، كرافة، كمان، كلاب، كبريت، كلبشات، كنزة، كعب
-لوح، لمبة، لوحة، لحاف، لابتوب، لعبة، لؤلؤ، ليف، لجام، لافتة، لاصق، لاقط، لباس، ليزر، لغم، لفافة
-مفتاح، مقص، مكنسة، مرآة، مظلة، مسمار، مطرقة، مروحة، مكيف، مصباح، منشار، مقعد، موبايل، مسطرة، منزل، مدفأة، مخدة، مطبخ، مسجد، مدرسة، ملعقة، مغناطيس، ميكروفون، ماسورة، ماوس، مصعد، مبرد، مقلاة، مزهرية، مصحف، محفظة، مدفع، مرساة، مكتب، مسبحة، مئذنة، معطف، منديل، ميزان، مجرفة
-نافذة، نظارة، نهر، نار، نقود، نعل، نظارات، نافورة، نجفة، ناي، نول، نسيج، ناقوس، نشارة، نحاس، نايلون، نصب، نقاب، نبراس، ناقلة، نبع
-هاتف، هرم، هاون، هلال، هيكل، هودج، هدية، هوائي، هيلكوبتر، هاردسك
-وسادة، وعاء، ورقة، وشاح، وتد، ورق، وقود، وابور، وتر، وسام
-يخت، يافطة، يشم، ياقوت، ياقة
-""",
-    "حيوان": """
-أسد، أرنب، أفعى، أخطبوط، أيل، إوزة، أوز، أبو بريص، ألباكا، أسد البحر، أتان، أنقليس، أيائل
-بقرة، بطة، ببغاء، بومة، بجعة، بعوضة، بغل، بط، بطريق، بلبل، بيسون، بجع، بقر، بزاق، برغوث، بق، بلشون، بوم، ببر، بابون، بلطي، بعير، بعوض
-تمساح، تيس، تونة، توكان، تارانتولا
-ثعلب، ثعبان، ثور، ثيتل
-جمل، جاموس، جرذ، جراد، جربوع، جدي، جرادة، جعل، جندب، جحش، جاغوار، جمبري
-حصان، حمار، حمامة، حوت، حية، حمار وحشي، حلزون، حرباء، حبارى، حدأة، حمل، حجل، حنش، حبار، حمام، حرذون
-خروف، خنزير، خفاش، خنفساء، خيل، خرتيت، خاروف، خلد، خرنق
-دب، دجاجة، دلفين، ديك، دودة، دبور، دب قطبي، دجاج، ديناصور، دعسوقة، دوري، دراج
-ذئب، ذباب، ذبابة، ذئبة
-رخمة، رخم، رنجة، ريندير، ربيان، رتيلاء، رتيلا، رخ
-زرافة، زنبور، زرزور، زباد، زاغ، زقزاق
-سمكة، سلحفاة، سنجاب، سبع، سلمون، سرطان، سحلية، سعدان، سرعوف، سمندر، سنونو، سلطعون، سمان، سعلاة، سبيط
-شمبانزي، شاهين، شبل، شاة، شيهم، شحرور، شفنين، شبوط، شرغوف، شيتا
-صقر، صرصور، صرد، صل، صوص، صرصار
-ضفدع، ضب، ضبع، ضأن، ضبي
-طاووس، طاوس، طنان، طائر، طير، طيطوي
-ظبي، ظبية، ظربان
-عصفور، عقرب، عنكبوت، عجل، عقاب، عنز، عندليب، عظاية، عث
-غزال، غراب، غوريلا، غنم، غرنوق، غزلان
-فيل، فأر، فهد، فراشة، فرس، فقمة، فرخ، فراخ، فنك، فار، فرس النهر
-قرد، قط، قطة، قنفذ، قرش، قنديل البحر، قملة، قطا، قمل، قندس، قاروص، قرموط
-كلب، كنغر، كركدن، كوالا، كناري، كوبرا، كلب البحر، كركي، كبش، كروان، كتكوت، كركند، كاسوار
-ليث، لبؤة، ليمور، لقلق، لاما
-ماعز، ماموث، مها، ميمون، ماكاو، مهر، معزة، محار
-نمر، نسر، نحلة، نمل، نعامة، نمس، نورس، نعجة، ناقة، نيص، نقار الخشب
-هدهد، هر، هرة، هامستر، هزار، هيبوبوتاموس
-وحيد القرن، ورل، وعل، وشق، وزة، وطواط، وبر، وزغ
-يمامة، يعسوب، يعقوب، يحمور، يسروع
-""",
-    "بلاد": """
-اسكتلندا، تايوان، ويلز، كوسوفو، شيلي، كوريا، هونغ كونغ
-""",
-    "فاكهة": """
-أناناس، أفوكادو، إجاص، أجاص، أكيدنيا
-برتقال، بطيخ، بلح، برقوق، بابايا، بلوبيري، باشن فروت، بوملي
-تفاح، تمر، تين، توت، تمر هندي، تين شوكي، توت أرضي، توت عليق، تانجرين
-جوافة، جريب فروت، جوز هند، جاك فروت
-حصرم، حبحب، حمضيات، حامض
-خوخ، خرنوب
-دراق، دوم، دراقن، دوريان
-رمان، رطب، رامبوتان
-زبيب، زيتون، زعرور
-سفرجل، سدر، ستروبيري
-شمام، شليك
-صبير، صبار، صنوبر
-طماطم، طرنج
-عنب، عليق، عناب، عنبة
-فراولة، فريز، فرولة، فاكهة التنين
-قشطة، قراصيا، قمر الدين
-كمثرى، كيوي، كرز، كاكا، كمكوات، كاجو
-ليمون، لوز، لونجان، ليتشي، لوكاط
-موز، مانجو، مشمش، منجا، ماندرين، مانجوستين
-نبق، نارنج، نكتارين، نارجيل
-يوسفي، يوسف افندي
-""",
-    "مهنة": """
-أستاذ، إمام، أمين مكتبة، أمين صندوق، إطفائي، أخصائي، إعلامي، إداري، أرشيفي، اختصاصي، أمين
-بائع، بناء، بقال، بحار، باحث، بستاني، بيطري، بنكي، بواب، بلاط، بريدي، بروفيسور
-تاجر، ترزي، تقني، تربوي، ترجمان، تشكيلي
-جندي، جزار، جراح، جرسون، جيولوجي، جواهرجي، جنايني، جنرال
-حداد، حلاق، حارس، حكم، حاكم، حرفي، حمال، حلواني، حجام، حطاب، حفار، حكيم
-خباز، خياط، خبير، خادم، خطاط، خراط، خزاف، خفير، خطيب
-دكتور، دهان، دبلوماسي، دليل، داعية، دباغ، دلال، دركي، دي جي
-رسام، رجل أعمال، رائد فضاء، راعي، رياضي، ربان، رقيب، رئيس، رحالة، راقص، راوي، رجل إطفاء، رجل أمن
-زارع، زجاج، زراعي، زواق، زبال، زهري
-سائق، سباك، سفير، سمكري، ساعاتي، سياسي، سجان، سمان، سكرتير، ساحر، سياف، سينمائي، سمسار، ساقي، سباح، سفرجي
-شرطي، شاعر، شيف، شيخ، شواء، شيال، شواي
-صياد، صحفي، صيدلي، صانع، صراف، صباغ، صائغ، صناعي، صيدلاني، صحافي
-ضابط
-طبيب، طيار، طباخ، طالب، طبال، طبيب أسنان، طباع
-عامل، عالم، عسكري، عميد، عطار، عازف، عراف، عريف، عمدة، عتال، عامل بناء
-غواص، غسال، غنام، غطاس
-فلاح، فنان، فيزيائي، فني، فران، فلكي، فارس، فراش، فيلسوف
-قاضي، قبطان، قائد، قصاب، قاص، قارئ، قنصل، قهوجي
-كاتب، كهربائي، كيميائي، كوافير، كاشير، كمسري، كاتب عدل، كابتن، كوميدي، كاهن، كواء، كناس
-لاعب، لحام، لواء، لغوي
-معلم، مهندس، ممرض، محامي، محاسب، مدرس، مزارع، مصور، مبرمج، مذيع، مدير، مصمم، ممثل، مغني، موظف، مخرج، مترجم، مراسل، مفتش، مصلح، مساح، ميكانيكي، مؤذن، مطرب، مضيف، موسيقي، منجم، مدرب، مرشد، مقاول، محقق، مؤلف، محرر، مسعف، مفكر، مزين، مؤرخ
-نجار، نحات، نادل، ناشر، ناقد، نقاش، نائب، نحال، ناظر، نساج، نقيب
-هجان، هاوي
-وزير، وكيل، واعظ، وسيط، وراق
-""",
-    "اسم ولد": """
-أحمد، أيمن، أسامة، إبراهيم، إسماعيل، أنس، أمين، أيوب، أكرم، أسعد، أمجد، أشرف، أدهم، إياد، أنور، أنيس، أمير، آدم، أركان، إدريس، إلياس، أديب، أوس، أيهم
-بدر، باسم، بسام، بلال، بندر، بشار، بهاء، بكر، برهان، بشير، بدران، براء، باسل
-تركي، تميم، تامر، توفيق، تيسير، تقي، تمام، تاج، تيم، تيمور، تالد
-ثامر، ثابت، ثروت، ثائر، ثنيان
-جاسر، جابر، جمال، جلال، جراح، جهاد، جاسم، جعفر، جبر، جواد، جميل، جوهر
-حمد، حسن، حسين، حمزة، حامد، حاتم، حازم، حبيب، حيدر، حمدان، حسام، حذيفة، حكيم، حليم، حارث، حافظ، حمود، حميد، حاكم
-خالد، خليل، خليفة، خلف، خميس، خضر، خلدون، خطاب، خزعل، خلفان
-داود، دانيال، دخيل، درويش، دحام، دياب، دعيج، دوخي
-ذياب، ذكي، ذيب، ذاكر
-راشد، رائد، رامي، رياض، رضا، رشيد، رمزي، رعد، رافع، ربيع، رأفت، رزق، ريان، راكان، رحيم، رمضان، رجب
-زياد، زيد، زكريا، زاهر، زين، زهير، زامل، زيدان، زكي، زبير، زايد، زاهد، زهران
-سعود، سلمان، سعد، سالم، سامي، سلطان، سيف، سامر، سعيد، سمير، سليمان، سراج، ساري، سهيل، سلام، سنان، سفيان، سند، سعدون
-شاكر، شادي، شريف، شهاب، شعيب، شبيب، شامل، شافي، شجاع، شداد، شاهر، شبل، شعلان، شرف
-صالح، صقر، صلاح، صفوان، صابر، صادق، صبحي، صخر، صهيب، صدام، صافي، صبري
-ضاري، ضياء، ضرار، ضيف
-طلال، طارق، طه، طلحة، طاهر، طراد، طالب، طامي، طفيل، طلعت
-ظافر، ظاهر، ظريف، ظبيان
-عمر، علي، عبدالله، عثمان، عادل، عماد، عصام، عمار، عامر، عبدالرحمن، عبدالعزيز، عيسى، عباس، عزيز، عبدالملك، عدنان، عبيد، عوض، عيد، عقيل، عطية، عزام، علاء، عفيف، عاصم، عنتر، عرفات
-غازي، غسان، غالب، غانم، غيث، غنام، غزوان، غيلان، غريب
-فهد، فيصل، فارس، فواز، فراس، فادي، فريد، فؤاد، فاروق، فهمي، فتحي، فاضل، فرحان، فلاح، فايز، فرج، فضل، فراج، فيحان، فهيد، فوزي، فتح
-قيس، قاسم، قصي، قتيبة، قحطان، قبلان، قطب، قيصر، قادر، قابوس
-كريم، كمال، كامل، كنان، كايد، كاظم، كنعان، كيان، كرار، كاسر
-لؤي، لطفي، لبيب، ليث، لافي، لطيف، لقمان، لهيب
-محمد، مشعل، مبارك، ماجد، مازن، محمود، مصطفى، مالك، منصور، مروان، مهند، ماهر، منذر، معاذ، مشاري، مساعد، ممدوح، مهدي، موسى، مراد، مجدي، مرزوق، مطلق، منير، مختار، مرشد، معن، مصعب، مقبل، متعب، مزيد، مسفر، مسلم، مهنا
-ناصر، نايف، نواف، نبيل، نادر، نزار، نعمان، نوح، نمر، نظام، نذير، نصر، نبيه، نعيم، نوفل، نجيب، نبهان، ناجي، نهار، ناجح، نضال، نصير
-هاني، هشام، هادي، هلال، هيثم، هاشم، هود، هزاع، هارون، همام، هاشل، هديب، هتان
-وليد، وائل، وسيم، وضاح، وجدي، وسام، وهاب، وافي، وهيب، وديع، وجيه، وصفي، وحيد
-ياسر، يوسف، يزيد، يحيى، يعقوب، يونس، يامن، يعرب، ياسين، يزن، يوشع
-""",
-    "اسم بنت": """
-أمل، أسماء، آمنة، أروى، أريج، ابتسام، أمينة، أميرة، إيمان، أنوار، آلاء، أفنان، أحلام، أسيل، أزهار، أنفال، أنغام، أماني، أسرار، أفراح، ايناس، ألين
-بشرى، بسمة، بدور، بلقيس، بثينة، بتول، بيان، بهية، بيسان، باسمة، بشائر، بارعة، بدرية، بنان، بلسم
-تغريد، تهاني، تسنيم، تالا، تقى، تمارا، تماضر، تحية، ترف، تميمة، تولين، تسبيح، تبارك، تالين
-ثريا، ثناء، ثمينة، ثروة
-جميلة، جوري، جنى، جواهر، جنان، جمانة، جود، جيهان، جيداء، جلنار، جمان، جازية، جوهرة، جنة، جودي
-حنان، حليمة، حصة، حياة، حنين، حلا، حور، حوراء، حبيبة، حسناء، حميدة، حفصة، حذام، حمدة، حسنة
-خديجة، خولة، خلود، خزامى، خيرية، خنساء، خضرة، خاتون
-دانة، دلال، دعاء، دينا، ديمة، دانيا، دارين، دنيا، دعد، درة، دليلة، ديما، دانا
-ذكرى، ذكاء، ذهبية
-ريم، رنا، رزان، رهف، رغد، رانيا، رحمة، رند، ريما، رباب، رقية، رشا، رولا، ريان، رؤى، روان، روز، رفيف، ريناد، ربى، رتاج، ريتاج، روضة، رحاب، رهام، ريهام
-زينب، زهرة، زين، زاهية، زكية، زليخة، زمزم، زهور، زبيدة، زينة، زهراء، زلفى
-سارة، سلمى، سهى، سميرة، سعاد، سوسن، ساجدة، سحر، سمر، سناء، سندس، سهام، سلوى، سيرين، سجى، سلاف، سبأ، سمية، سلطانة، سهير، سماح، سهر
-شهد، شيماء، شمس، شادية، شذى، شوق، شهرزاد، شهيرة، شروق، شيخة، شريفة، شعاع، شهلاء، شفاء، شادن، شجن، شمسة
-صفاء، صفية، صباح، صالحة، صبا، صفا، صابرين، صوفيا، صدف، صهباء
-ضحى، ضياء
-طيبة، طاهرة، طيف، طروب، طرفة
-ظبية، ظمياء
-عائشة، عبير، عهد، علا، عفاف، عالية، عزة، عفراء، عذراء، عنود، عبلة، عليا، عزيزة، عواطف، عطاف، عروب، عنان
-غادة، غلا، غدير، غيداء، غزل، غالية، غفران، غيد
-فاطمة، فرح، فجر، فاتن، فدوى، فريدة، فتحية، فوزية، فايزة، فلة، فيروز، فاتنة، فهدة، فيحاء، فداء، فتون، فيان، فرحة
-قمر، قمرية، قدسية، قطر الندى، قوت القلوب، قسمة
-كوثر، كريمة، كاميليا، كلثوم، كوكب، كاتيا، كنزي، كندة، كيان، كاملة
-ليلى، لمى، لينا، لجين، لطيفة، لولوة، لميس، لبنى، لانا، لؤلؤة، ليان، لمار، لارا، لورا، لبيبة، لمياء
-مريم، منى، منال، مها، ميساء، ميار، مرام، مروة، منيرة، ملاك، مشاعل، موضي، مزنة، ميسون، مي، ماريا، ميرنا، ميادة، ماجدة، مديحة، مهرة، مضاوي، مهيرة، معالي، ميمونة
-نورة، نوف، نجلاء، نهى، نادية، ندى، نسرين، نوال، نجود، نغم، نور، نوره، نجمة، نبيلة، نهلة، نعيمة، نداء، نيرمين، ناهد، نشوى، نسيم، نجوى، نجاة، نهاد، نوران
-هند، هدى، هناء، هيفاء، هبة، هالة، هيا، هديل، هنادي، هاجر، هدير، هيام، هتون، هلا، هويدا، هادية، هيفا، هنوف
-وفاء، وعد، وردة، وسن، وجدان، وداد، وضحى، ولاء، وصال، وسام، وحيدة، وجد، وئام، ورود، وسماء، وديعة
-ياسمين، يارا، يسرى، يمنى، يقين، يسر، يمامة
-""",
-}
-
-
-def _replica_norm(text: str):
-    """يطبّع النص للمقارنة: التشكيل والهمزات والتاء المربوطة و"ال" التعريف بأول كلمة. يرجع None لو فاضي."""
-    t = normalize(text).replace("ؤ", "و").replace("ئ", "ي").replace("ء", "")
-    cleaned = re.sub(r"[^\w\s]", " ", t)
-    words = cleaned.split()
-    if not words:
-        return None
-    if words[0].startswith("ال") and len(words[0]) > 3:
-        words[0] = words[0][2:]
-    return " ".join(words)
-
-
-def _build_replica_bank() -> dict:
-    bank = {cat: set() for cat in _REPLICA_RAW}
-    for cat, raw in _REPLICA_RAW.items():
-        for w in re.split(r"[،\n]", raw):
-            key = _replica_norm(w)
-            if key:
-                bank[cat].add(key)
-    # البلاد: كل أسماء الدول اللي بلعبة الأعلام (بمستوياتها الأربعة)
-    for tier in FLAG_TIERS.values():
-        for _flag, names in tier["flags"]:
-            for n in names:
-                key = _replica_norm(n)
-                if key:
-                    bank["بلاد"].add(key)
-    # الفواكه نباتات بعد
-    bank["نبات"] |= bank["فاكهة"]
-    # "اسم" = أي اسم ولد أو بنت
-    bank["اسم"] = bank["اسم ولد"] | bank["اسم بنت"]
-    return bank
-
-
-_REPLICA_BANK = _build_replica_bank()
-_REPLICA_NAME_CATEGORIES = {"اسم"}
-
-
-def _replica_good_categories(letter: str) -> list:
-    """الفئات اللي فيها 3 كلمات على الأقل تبدأ بهذا الحرف (عشان ما نسأل سؤال شبه مستحيل)."""
-    l = normalize(letter)
-    return [c for c in REPLICA_CATEGORIES if sum(1 for k in _REPLICA_BANK[c] if k[0] == l) >= 3]
-
-
-def _replica_valid_categories(letter: str) -> list:
-    good = _replica_good_categories(letter)
-    if good:
-        return good
-    l = normalize(letter)
-    some = [c for c in REPLICA_CATEGORIES if any(k[0] == l for k in _REPLICA_BANK[c])]
-    return some or list(REPLICA_CATEGORIES)
-
-
-# كل حروف العربية اللي لها فئة وحدة على الأقل فيها كلمات كفاية (بعد إضافة ث ذ ض ظ للبنك صارت الـ28 كلها)
-REPLICA_PLAYABLE_LETTERS = [l for l in REPLICA_LETTERS if _replica_good_categories(l)] or REPLICA_LETTERS
+_REPLICA_TEXT = (245, 248, 250, 255)
+_REPLICA_OK = (175, 255, 195, 255)
+_REPLICA_FAIL = (255, 175, 175, 255)
 
 
 def _ar_text(text: str) -> str:
@@ -3092,50 +2940,12 @@ def _ar_text(text: str) -> str:
     return text
 
 
-def _raqm_ok() -> bool:
-    try:
-        from PIL import features
-        return bool(features.check("raqm"))
-    except Exception:
-        return False
-
-
-def _find_replica_template():
-    """يدور على صورة القالب replica_stats.png بعدة أماكن (مجلد game_images بجنب البوت، أو بجنب ملف الألعاب،
-    أو المجلد الحالي). يقبل كمان لو الاسم طلع replica_stats.png.png أو بصيغة ثانية. يرجع المسار أو None."""
-    dirs = [GAME_IMAGES_DIR, os.path.join(_BASE_DIR, GAME_IMAGES_DIR), _BASE_DIR, os.getcwd()]
-    seen = set()
-    for d in dirs:
-        d = os.path.abspath(d)
-        if d in seen or not os.path.isdir(d):
-            continue
-        seen.add(d)
-        exact = os.path.join(d, REPLICA_STATS_IMAGE)
-        if os.path.isfile(exact):
-            return exact
-        try:
-            names = os.listdir(d)
-        except OSError:
-            continue
-        for f in names:
-            low = f.lower()
-            if low.startswith("replica_stats") and low.endswith((".png", ".jpg", ".jpeg", ".webp")):
-                return os.path.join(d, f)
-    return None
-
-
 @functools.lru_cache(maxsize=64)
 def _replica_font(size: int):
     paths = [
         os.path.join(GAME_IMAGES_DIR, REPLICA_FONT_FILE),
-        os.path.join(_BASE_DIR, GAME_IMAGES_DIR, REPLICA_FONT_FILE),
-        os.path.join(_BASE_DIR, REPLICA_FONT_FILE),
-        REPLICA_FONT_FILE,
-        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Bold.ttf",
         "C:/Windows/Fonts/arialbd.ttf",
         "C:/Windows/Fonts/arial.ttf",
         "/Library/Fonts/Arial Unicode.ttf",
@@ -3145,16 +2955,12 @@ def _replica_font(size: int):
         if os.path.exists(p):
             try:
                 try:
-                    if not ARABIC_SHAPING and _raqm_ok():
-                        # بدون arabic_reshaper: Raqm يوصّل الحروف ويرتبها لحاله
-                        return ImageFont.truetype(p, size, layout_engine=ImageFont.Layout.RAQM)
                     # BASIC عشان ما يتشكل النص مرتين (نشكّله بنفسنا بـ arabic_reshaper)
                     return ImageFont.truetype(p, size, layout_engine=ImageFont.Layout.BASIC)
                 except AttributeError:
                     return ImageFont.truetype(p, size)
             except OSError:
                 continue
-    print(f"[ريبلكا] ⚠️ ما لقيت خط عربي! حط ملف {REPLICA_FONT_FILE} داخل: {os.path.abspath(GAME_IMAGES_DIR)}")
     try:
         return ImageFont.load_default(size=size)
     except TypeError:
@@ -3175,50 +2981,23 @@ def _draw_fit_text(draw, box: tuple, text: str, base_size: int, fill, scale: flo
         size -= 1
     cx = (x1 + x2) / 2 - (l + r) / 2
     cy = (y1 + y2) / 2 - (t + b) / 2
-    draw.text((cx + 2, cy + 2), shaped, font=font, fill=(10, 18, 28, 190))   # ظل خفيف عشان النص يبان على الزجاج
+    draw.text((cx + 2, cy + 2), shaped, font=font, fill=(0, 0, 0, 130))   # ظل خفيف
     draw.text((cx, cy), shaped, font=font, fill=fill)
 
 
-def _replica_fallback_template():
-    """قالب بديل بسيط (نفس مقاسات وأماكن قالب Y3) يُستخدم بس لو صورة القالب ما انلقت."""
-    img = Image.new("RGB", (1264, 848), (38, 46, 56))
-    d = ImageDraw.Draw(img, "RGBA")
-    d.rounded_rectangle((177, 100, 1087, 748), radius=36, fill=(120, 135, 150, 90),
-                        outline=(190, 205, 220, 200), width=2)
-    x1, y1, x2, y2 = _REPLICA_TITLE_BOX
-    d.rounded_rectangle((x1, y1, x2, y2), radius=34, fill=(150, 170, 190, 200), outline=(200, 215, 230, 230), width=2)
-    rows = [_REPLICA_HEADER_ROW] + _REPLICA_DATA_ROWS
-    for ry1, ry2 in rows:
-        for cx1, cx2 in _REPLICA_COLS:
-            d.rounded_rectangle((cx1, ry1, cx2, ry2), radius=18, fill=(150, 165, 178, 150),
-                                outline=(200, 215, 230, 220), width=2)
-    return img
-
-
-_replica_template_warned = False
-
-
-def _build_replica_stats_images(title: str, rows: list, letter: str = "") -> list:
+def _build_replica_stats_images(title: str, rows: list) -> list:
     """يرسم إحصائية الجولة فوق قالب الصورة. القالب فيه 4 صفوف لاعبين، فلو اللاعبين أكثر تنقسم على كذا صورة.
     كل صف: {"name", "category", "answer", "ok"}. يرجع قائمة PNG bytes."""
-    global _replica_template_warned
-    path = _find_replica_template()
-    if path is not None:
-        base = Image.open(path).convert("RGB")
-    else:
-        if not _replica_template_warned:
-            _replica_template_warned = True
-            print(f"[ريبلكا] ⚠️ ما لقيت صورة القالب {REPLICA_STATS_IMAGE} — حطها داخل: "
-                  f"{os.path.abspath(GAME_IMAGES_DIR)} أو {os.path.join(_BASE_DIR, GAME_IMAGES_DIR)} "
-                  f"(استخدمت قالب بديل مؤقتًا)")
-        base = _replica_fallback_template()
+    path = os.path.join(GAME_IMAGES_DIR, REPLICA_STATS_IMAGE)
+    if not os.path.exists(path):
+        raise FileNotFoundError(path)
     per_page = len(_REPLICA_DATA_ROWS)
     pages = [rows[i:i + per_page] for i in range(0, len(rows), per_page)]
     out = []
     for pi, page in enumerate(pages):
-        img = base.copy()
+        img = Image.open(path).convert("RGBA")
         sx, sy = img.width / 1264, img.height / 848
-        draw = ImageDraw.Draw(img, "RGBA")
+        draw = ImageDraw.Draw(img)
 
         def scaled(box):
             return (box[0] * sx, box[1] * sy, box[2] * sx, box[3] * sy)
@@ -3232,6 +3011,7 @@ def _build_replica_stats_images(title: str, rows: list, letter: str = "") -> lis
 
         for ri, row in enumerate(page):
             ry1, ry2 = _REPLICA_DATA_ROWS[ri]
+            number = pi * per_page + ri + 1
             answer = row["answer"] if row["answer"] else "—"
             status = "جاوب" if row["ok"] else "ما جاوب"
             cells = [
@@ -3239,11 +3019,10 @@ def _build_replica_stats_images(title: str, rows: list, letter: str = "") -> lis
                 (answer[:16], _REPLICA_TEXT),
                 (row["category"], _REPLICA_TEXT),
                 (row["name"][:14], _REPLICA_TEXT),
-                (letter, _REPLICA_TEXT),
+                (str(number), _REPLICA_TEXT),
             ]
-            for ci, ((cx1, cx2), (text, color)) in enumerate(zip(_REPLICA_COLS, cells)):
-                # العامود الأخير (الحرف) خطه أكبر
-                _draw_fit_text(draw, scaled((cx1, ry1, cx2, ry2)), text, 44 if ci == 4 else 28, color, sx)
+            for (cx1, cx2), (text, color) in zip(_REPLICA_COLS, cells):
+                _draw_fit_text(draw, scaled((cx1, ry1, cx2, ry2)), text, 28, color, sx)
 
         buf = BytesIO()
         img.save(buf, format="PNG")
@@ -3251,27 +3030,24 @@ def _build_replica_stats_images(title: str, rows: list, letter: str = "") -> lis
     return out
 
 
-def _replica_key(text: str, letter: str, category: str | None = None):
-    """يطبّع إجابة اللاعب ويتأكد إنها تبدأ بالحرف المطلوب، ولو انعطت الفئة يتأكد كمان إنها من الفئة
-    (يتجاهل "ال" التعريف والهمزات والتاء المربوطة). يرجع الإجابة المطبّعة، أو None لو ما تصلح."""
-    key = _replica_norm(text)
-    if key is None or len(key.split()) > 3 or len(key.replace(" ", "")) < 2 or key[0] != normalize(letter):
+def _replica_key(text: str, letter: str):
+    """يطبّع إجابة اللاعب ويتأكد إنها تبدأ بالحرف المطلوب (يتجاهل "ال" التعريف والهمزات).
+    يرجع الإجابة المطبّعة، أو None لو ما تصلح."""
+    cleaned = re.sub(r"[^\w\s]", " ", normalize(text))
+    words = cleaned.split()
+    if not words or len(words) > 3:
         return None
-    if category is not None:
-        bank = _REPLICA_BANK.get(category, set())
-        if key not in bank:
-            # الأسماء: نقبل الاسم الأول لو كتب معه اسم ثاني (مثال: "محمد علي")
-            first = key.split()[0]
-            if category in _REPLICA_NAME_CATEGORIES and len(key.split()) > 1 and first in bank:
-                return first
-            return None
+    if words[0].startswith("ال") and len(words[0]) > 3:
+        words[0] = words[0][2:]
+    key = " ".join(words)
+    if len(key.replace(" ", "")) < 2 or key[0] != normalize(letter):
+        return None
     return key
 
 
-async def _await_replica_answer(bot_obj, channel, player, letter: str, used: set, cancel_event: asyncio.Event,
-                                category: str | None = None):
+async def _await_replica_answer(bot_obj, channel, player, letter: str, used: set, cancel_event: asyncio.Event):
     """ينتظر إجابة صحيحة من اللاعب المسؤول خلال TURN_TIMEOUT ثانية (الإجابة الغلط تاخذ ❌ ويقدر يعيد المحاولة).
-    الإجابة لازم تبدأ بالحرف وتكون من الفئة المطلوبة. يرجع نص الإجابة أو None لو ما جاوب (أو انلغت اللعبة)."""
+    يرجع نص الإجابة أو None لو ما جاوب (أو انلغت اللعبة)."""
     loop = asyncio.get_running_loop()
     end = loop.time() + TURN_TIMEOUT
 
@@ -3293,7 +3069,7 @@ async def _await_replica_answer(bot_obj, channel, player, letter: str, used: set
             m = wait_task.result()
         except asyncio.TimeoutError:
             return None
-        key = _replica_key(m.content, letter, category)
+        key = _replica_key(m.content, letter)
         ok = key is not None and key not in used
         try:
             await m.add_reaction("✅" if ok else "❌")
@@ -3322,20 +3098,14 @@ async def _run_replica(ctx: commands.Context):
         return
     scores = {p.id: 0 for p in players}
     used: set[str] = set()      # الإجابات اللي انقالت (ما تتكرر بنفس اللعبة)
-    # حروف الجولات: عشوائية من كل حروف العربية، وما يتكرر حرف لين تنعرض الحروف كلها (حتى بين اللعبات)
-    rounds_count = min(REPLICA_ROUNDS, len(REPLICA_PLAYABLE_LETTERS))
-    letters: list[str] = []
-    while len(letters) < rounds_count:
-        picked = draw_no_repeat("replica_letters", REPLICA_PLAYABLE_LETTERS)
-        if picked not in letters:
-            letters.append(picked)
+    letters = random.sample(REPLICA_LETTERS, min(REPLICA_ROUNDS, len(REPLICA_LETTERS)))
 
     for round_num, letter in enumerate(letters, 1):
         order = players.copy()
         random.shuffle(order)
         cats = []
         while len(cats) < len(order):
-            bag = _replica_valid_categories(letter)
+            bag = REPLICA_CATEGORIES.copy()
             random.shuffle(bag)
             cats.extend(bag)
         results = []
@@ -3351,7 +3121,7 @@ async def _run_replica(ctx: commands.Context):
         for player, category in zip(order, cats):
             prompt = await ctx.send(f"يا {player.mention} قلي **{category}** يبدأ بحرف **{letter}**")
             cancel_event = track_game_message(ctx.channel.id, prompt)
-            answer = await _await_replica_answer(ctx.bot, ctx.channel, player, letter, used, cancel_event, category)
+            answer = await _await_replica_answer(ctx.bot, ctx.channel, player, letter, used, cancel_event)
             if cancel_event.is_set():
                 return
             ok = answer is not None
@@ -3368,7 +3138,7 @@ async def _run_replica(ctx: commands.Context):
         sent = False
         if PIL_AVAILABLE:
             try:
-                pngs = await asyncio.to_thread(_build_replica_stats_images, title, results, letter)
+                pngs = await asyncio.to_thread(_build_replica_stats_images, title, results)
                 files = [discord.File(BytesIO(b), filename=f"replica_stats_{round_num}_{i + 1}.png")
                          for i, b in enumerate(pngs)]
                 await ctx.send(files=files)
@@ -3701,7 +3471,7 @@ GAME_HELP = {
     "نرد": "بعد اللوبي كل لاعب يضغط زر الرمي ويرمي النرد بنفسه (عندكم 10 ثواني)، ومن ما رمى يرمي له البوت تلقائيًا، وصاحب أعلى رقم يفوز بالنقاط.",
     "عجلة": "بعد ما يكتمل اللوبي، العجلة تدور وتختار فايز عشوائي من المنضمين.",
     "غميضة": "لاعب وحد يصير الباحث، والباقين كل واحد يختار مكانه بنفسه من أزرار مرقّمة خلال 10 ثواني (عدد الأماكن حسب عدد اللاعبين: اللاعبين + 2، فمثلًا 3 لاعبين = 5 أماكن، واللي ما اختار ينحط له مكان عشوائي). بعدها الباحث عنده محاولات محدودة تتوزع حسب عدد الأماكن (نصها تقريبًا: 5 أماكن = 3 محاولات، 7 = 4، 9 = 5)، وكل رقم يفتحه = محاولة.",
-    "ريبلكا": "بعد اللوبي يطلع حرف لكل جولة (3 جولات)، والبوت يسأل كل لاعب سؤال، مثال: \"يا فلان قلي نبات يبدأ بحرف ب\"، واللاعب عنده 15 ثانية يكتب إجابة تبدأ بالحرف (الإجابة لازم تكون من الفئة المطلوبة، الصح تاخذ ✅ والغلط ❌ ويقدر يعيد المحاولة، ومحد يكرر إجابة انقالت). الفئات: نبات، جماد، حيوان، بلاد، فاكهة، مهنة، اسم (ولد أو بنت). بنهاية كل جولة حرف تنرسل صورة إحصائية فيها اسم كل لاعب وهل جاوب أو لا، وبالنهاية الأكثر إجابات صحيحة يفوز.",
+    "ريبلكا": "بعد اللوبي يطلع حرف لكل جولة (3 جولات)، والبوت يسأل كل لاعب سؤال، مثال: \"يا فلان قلي نبات يبدأ بحرف ب\"، واللاعب عنده 15 ثانية يكتب إجابة تبدأ بالحرف (الإجابة الصح تاخذ ✅ والغلط ❌ ويقدر يعيد المحاولة، ومحد يكرر إجابة انقالت). الفئات: نبات، جماد، حيوان، بلاد، فاكهة، مهنة، اسم ولد، اسم بنت. بنهاية كل جولة حرف تنرسل صورة إحصائية فيها اسم كل لاعب وهل جاوب أو لا، وبالنهاية الأكثر إجابات صحيحة يفوز.",
     "خمن": "البوت يختار رقم سري بين 1 والرقم اللي تحدده، واكتبوا تخمينكم بالشات وبيعطيكم تلميح فوق/تحت.",
     "كلمة": "يعطيكم البوت كلمة، وأول وحد يكتب كلمة تبدأ بآخر حرف منها يفوز بالنقاط.",
     "زر": "ينضم اللاعبين باللوبي. كل جولة تطلع أزرار أقل من عدد اللاعبين (5 بالجولة الأولى، ثم 4، ثم 3...)، لما تصير خضراء اضغطوا زر بسرعة (زر واحد لكل لاعب)، واللي ما يلحق زر يطيح، لين يبقى ناجي وحد ويفوز. لو اللاعبين أقل من 6 تكون الأزرار أقل من عددهم بواحد.",
