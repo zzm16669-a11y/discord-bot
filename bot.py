@@ -16,11 +16,11 @@
   - أوامر الإدارة تبقى بدون بريفكس زي ما كانت (تحذير ، برا ، سجن ... إلخ).
   - الرتب صارت تتحدد بالآيدي (مو بالاسم) — لو غيّرت أسماء الرتب ما يتأثر شي.
     الآيديات بقسم "11) نظام الإدارة الكامل" تحت.
-  - لازم تسوي رتبتين يدويًا بالسيرفر عشان "سجن" و"اخرس" يشتغلوا صح:
-        * رتبة اسمها بالضبط: Jailed  (احجب عنها كل الرومات إلا روم السجن)
-        * رتبة اسمها بالضبط: Muted   (احجب عنها إرسال الرسائل بكل الرومات)
-    لو ما كانت موجودة، البوت بينشئها تلقائيًا لكن بدون صلاحيات محجوبة —
-    لازم تظبط صلاحياتها يدويًا من إعدادات السيرفر أول مرة.
+  - رتبتا "سجن" و"اخرس" (Jailed / Muted) تتحددان بالآيدي (JAIL_ROLE_ID / MUTE_ROLE_ID)
+    ولازم تكونان موجودتين بالسيرفر ومظبوطة صلاحياتهم يدويًا:
+        * Jailed  (احجب عنها كل الرومات إلا روم السجن)
+        * Muted   (احجب عنها إرسال الرسائل بكل الرومات)
+    البوت ما ينشئهم تلقائيًا؛ لو الآيدي غلط يرد برسالة تنبيه.
 
   - بعض الألعاب (مثل "ادمج" و"ريبلكا") فيها تفسير مبسّط مني لأسمائها —
     لو تقصد شكل مختلف قولي وأعدلها.
@@ -67,8 +67,8 @@ GAME_STATS_FILE = "game_stats.json"
 SHOP_ACTIVE_FILE = "shop_active.json"
 AFK_FILE = "afk.json"
 
-JAIL_ROLE_NAME = "Jailed"
-MUTE_ROLE_NAME = "Muted"
+JAIL_ROLE_ID = 1552237859740844095   # رتبة السجن (Jailed)
+MUTE_ROLE_ID = 1538669784395415552   # رتبة الإسكات (Muted)
 WARN_LOG_CHANNEL_NAMES = ["warn-log", "توثيق-التنبيهات", "سجل-التنبيهات", "تنبيهات-اللوق", "log-تنبيهات"]
 WARN_LOG_CHANNEL_ID = 1547197859169042442
 
@@ -980,7 +980,10 @@ async def cmd_textmute(message: discord.Message, args: str):
     reason = await get_reason(message, args, target, "إسكات بالشات", "🔇")
     if reason is None:
         return
-    role = await ensure_role(message.guild, MUTE_ROLE_NAME)
+    role = message.guild.get_role(MUTE_ROLE_ID)
+    if role is None:
+        await reply(message, "❌ رتبة الإسكات (Muted) مو موجودة بالسيرفر — تأكد من الآيدي بالكود.")
+        return
     await target.add_roles(role, reason=f"بواسطة {message.author} — {reason}")
     await reply(message, f"🔇 تم إسكات {target.mention} بالشات — السبب: {reason}")
     await log_mod_action(message.guild, "🔇 إسكات بالشات", message.author, target, reason)
@@ -991,7 +994,7 @@ async def cmd_textunmute(message: discord.Message, args: str):
         await reply(message, "⚠️ الصيغة: `تكلم @العضو`")
         return
     target = message.mentions[0]
-    role = discord.utils.get(message.guild.roles, name=MUTE_ROLE_NAME)
+    role = message.guild.get_role(MUTE_ROLE_ID)
     if role and role in target.roles:
         await target.remove_roles(role, reason=f"بواسطة {message.author}")
     await reply(message, f"🔊 تم فك الإسكات عن {target.mention}")
@@ -1006,7 +1009,10 @@ async def cmd_jail(message: discord.Message, args: str):
     reason = await get_reason(message, args, target, "سجن", "🔒")
     if reason is None:
         return
-    jail_role = await ensure_role(message.guild, JAIL_ROLE_NAME)
+    jail_role = message.guild.get_role(JAIL_ROLE_ID)
+    if jail_role is None:
+        await reply(message, "❌ رتبة السجن (Jailed) مو موجودة بالسيرفر — تأكد من الآيدي بالكود.")
+        return
 
     keep_roles = [r for r in target.roles if r.name != "@everyone"]
     data = load_json(JAIL_FILE)
@@ -1034,7 +1040,7 @@ async def cmd_unjail(message: discord.Message, args: str):
     saved_ids = data.get(gid, {}).get(mid, [])
     roles = [message.guild.get_role(rid) for rid in saved_ids if message.guild.get_role(rid)]
 
-    jail_role = discord.utils.get(message.guild.roles, name=JAIL_ROLE_NAME)
+    jail_role = message.guild.get_role(JAIL_ROLE_ID)
     if jail_role and jail_role in target.roles:
         await target.remove_roles(jail_role, reason="فك السجن")
     if roles:
@@ -2310,101 +2316,6 @@ async def on_command_completion(ctx: commands.Context):
     embed.add_field(name="بواسطة", value=ctx.author.mention, inline=True)
     embed.add_field(name="الروم", value=ctx.channel.mention, inline=True)
     await send_log(ctx.guild, "bot", embed)
-
-
-# ============================================================
-# ترحيب الأعضاء الجدد — صورة الترحيب (افتار العضو داخل الدائرة) + المنشن + الرسالة + عدد الأعضاء
-# ============================================================
-# يرسل بروم الترحيب بالآيدي (وإذا ما لقاه يدور بالاسم، وبعدها روم رسائل النظام بالسيرفر لو موجود).
-# ملف الصورة welcome.png لازم يكون بجنب ملف البوت (نفس مكان مجلد game_images).
-WELCOME_CHANNEL_ID = 1538292045649543168
-WELCOME_CHANNEL_NAMES = ["welcome", "ترحيب"]
-WELCOME_IMAGE_PATH = "welcome.png"
-# مكان الدائرة الفاضية بالصورة — بنسبة من حجم الصورة (مو بكسلات ثابتة)، عشان يركب على أي حجم صورة.
-#   X: 0.0 = أقصى اليسار ... 1.0 = أقصى اليمين
-#   Y: 0.0 = أعلى الصورة ... 1.0 = أسفل الصورة
-#   RADIUS: نصف قطر الافتار كنسبة من ارتفاع الصورة (أصغر شوي من إطار الدائرة عشان الإطار يبقى ظاهر)
-# لو الافتار ما ركب مضبوط على دائرتك عدّل هذي الأرقام الثلاثة بس.
-WELCOME_CIRCLE_X = 0.8386
-WELCOME_CIRCLE_Y = 0.5065
-WELCOME_CIRCLE_RADIUS = 0.177
-WELCOME_RULES_CHANNEL_ID = 1538291493779935333   # القوانين
-WELCOME_NEWS_CHANNEL_ID = 1550669151339683862    # الأخبار
-
-
-def find_welcome_channel(guild: discord.Guild) -> discord.TextChannel | None:
-    ch = guild.get_channel(WELCOME_CHANNEL_ID)
-    if ch is not None:
-        return ch
-    for ch in guild.text_channels:
-        name = ch.name.lower().replace("_", "-")
-        if any(target in name for target in WELCOME_CHANNEL_NAMES):
-            return ch
-    return guild.system_channel
-
-
-def build_welcome_image(avatar_bytes: bytes) -> BytesIO:
-    """يلصق افتار العضو (دائري) داخل الدائرة الفاضية بصورة الترحيب ويرجع الصورة النهائية PNG."""
-    resample = getattr(Image, "Resampling", Image).LANCZOS
-    base = Image.open(WELCOME_IMAGE_PATH).convert("RGBA")
-    width, height = base.size
-    # المكان والحجم يتحسبون من حجم الصورة الفعلي (نسب)، فيركب مضبوط حتى لو غيّرت الصورة
-    cx = int(width * WELCOME_CIRCLE_X)
-    cy = int(height * WELCOME_CIRCLE_Y)
-    radius = int(height * WELCOME_CIRCLE_RADIUS)
-    size = radius * 2
-    avatar = Image.open(BytesIO(avatar_bytes)).convert("RGBA").resize((size, size), resample)
-    # نحط الافتار فوق خلفية غامقة عشان لو فيه شفافية ما تبان غلط
-    backdrop = Image.new("RGBA", (size, size), (28, 30, 40, 255))
-    backdrop.alpha_composite(avatar)
-    avatar = backdrop
-    # قناع دائري بحواف ناعمة (نرسمه أكبر ونصغره)
-    scale = 4
-    mask = Image.new("L", (size * scale, size * scale), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, size * scale - 1, size * scale - 1), fill=255)
-    mask = mask.resize((size, size), resample)
-    base.paste(avatar, (cx - radius, cy - radius), mask)
-    out = BytesIO()
-    base.convert("RGB").save(out, "PNG")
-    out.seek(0)
-    return out
-
-
-@bot.listen("on_member_join")
-async def welcome_new_member(member: discord.Member):
-    if member.bot:
-        return
-    channel = find_welcome_channel(member.guild)
-    if channel is None:
-        return
-
-    lines = [
-        "• نورت السيرفر !",
-        f"• لتجنب العقوبات، توجه إلى روم: ⟸ <#{WELCOME_RULES_CHANNEL_ID}>",
-        f"• للاطلاع على آخر الأخبار، توجه إلى روم: ⟸ <#{WELCOME_NEWS_CHANNEL_ID}>",
-        "",
-        f"👥 عدد الأشخاص بالسيرفر: **{member.guild.member_count}**",
-    ]
-    embed = discord.Embed(description="\n".join(lines), color=discord.Color.from_rgb(139, 125, 190))
-
-    file = None
-    if PIL_AVAILABLE and os.path.exists(WELCOME_IMAGE_PATH):
-        try:
-            avatar_bytes = await member.display_avatar.replace(size=512, format="png").read()
-            buf = await asyncio.to_thread(build_welcome_image, avatar_bytes)
-            file = discord.File(buf, filename="welcome.png")
-            embed.set_image(url="attachment://welcome.png")
-        except Exception as e:
-            print(f"[Welcome] ما قدرت أسوي صورة الترحيب: {e}")
-            file = None
-    if file is None:
-        embed.set_thumbnail(url=member.display_avatar.url)  # بديل لو الصورة ما اشتغلت
-
-    try:
-        await channel.send(content=member.mention, embed=embed, file=file,
-                           allowed_mentions=discord.AllowedMentions(users=[member]))
-    except (discord.Forbidden, discord.HTTPException) as e:
-        print(f"[Welcome] ما قدرت أرسل الترحيب بروم {channel.name}: {e}")
 
 
 # ---------- لوقات الأعضاء (دخول/خروج) ----------
