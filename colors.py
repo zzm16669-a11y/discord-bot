@@ -50,7 +50,7 @@ class ColorSelect(discord.ui.Select):
         ]
         super().__init__(
             custom_id="color_roles_select",  # ثابت عشان تشتغل بعد إعادة تشغيل البوت
-            placeholder="حدد لونك 🎭",
+            placeholder="اختر",
             min_values=1,
             max_values=1,
             options=options,
@@ -108,13 +108,9 @@ def setup_colors(bot: commands.Bot):
             await ctx.send(f"{author.mention} ❌ ما عندك الصلاحية.")
             return
 
-        embed = discord.Embed(
-            description="**اضغط على القائمة أدناه واختر الرقم المناسب للونك المفضّل لتطبيق الرتبة تلقائياً ✨**",
-            color=0x2B2D31,
-        )
-        file = None
+        # الصورة لحالها (بدون إطار/قالب وبدون كلام) + القائمة المنسدلة تحتها
         if os.path.exists(IMAGE_PATH):
-            file = discord.File(IMAGE_PATH, filename="colors_panel.png")
-            embed.set_image(url="attachment://colors_panel.png")
-
-        await ctx.send(embed=embed, file=file, view=ColorView())
+            await ctx.send(file=discord.File(IMAGE_PATH, filename="colors_panel.png"), view=ColorView())
+        else:
+            # لو الصورة مو موجودة نرسل القائمة بس (ديسكورد ما يقبل رسالة فاضية تمامًا)
+            await ctx.send("\u200b", view=ColorView())
