@@ -2915,6 +2915,245 @@ REPLICA_ROUNDS = 3                        # عدد جولات الحروف با�
 REPLICA_CATEGORIES = ["نبات", "جماد", "حيوان", "بلاد", "فاكهة", "مهنة", "اسم ولد", "اسم بنت"]
 REPLICA_LETTERS = list("ابتجحخدرزسشصطعفقكلمنهوي")   # حروف سهلة (بدون ث ذ ض ظ غ)
 
+
+# ---------- بنك إجابات ريبلكا ----------
+# الإجابة لازم تكون من الفئة المطلوبة فعلًا (مو أي كلمة تبدأ بالحرف): لو السؤال "حيوان" ما تنقبل "باب".
+# تقدر تزيد أي كلمة تبيها داخل الفئة المناسبة (الإجابات تنفصل بفاصلة أو سطر جديد، والإجابة من أكثر من كلمة تنكتب عادي مثل: دب قطبي).
+def _replica_norm_key(text: str):
+    """يطبّع النص لمفتاح مقارنة (يتجاهل "ال" التعريف والهمزات والتشكيل). يرجع None لو ما يصلح."""
+    cleaned = re.sub(r"[^\w\s]", " ", normalize(text))
+    words = cleaned.split()
+    if not words or len(words) > 3:
+        return None
+    if words[0].startswith("ال") and len(words[0]) > 3:
+        words[0] = words[0][2:]
+    key = " ".join(words)
+    return key if key.replace(" ", "") else None
+
+
+def _bank(text: str) -> list:
+    return [w.strip() for w in re.split(r"[,،\n]", text) if w.strip()]
+
+
+REPLICA_BANK = {
+    "حيوان": _bank("""
+        أسد, أرنب, أفعى, أخطبوط, أيل, ابن آوى, أبو منجل
+        بقرة, بقر, بطة, بط, ببغاء, ببغا, بجعة, بومة, بعوضة, بغل, بلبل, بطريق, برغوث, بجع, بازي
+        تمساح, تيس, تدرج, ترسة, تونة
+        جمل, جاموس, جرذ, جدي, جراد, جندب, جرو, جمبري, جرادة, جعل, جحش
+        حصان, حمار, حمامة, حمام, حوت, حلزون, حرباء, حية, حمل, حبار, حدأة, حجل
+        خروف, خنزير, خفاش, خيل, خرتيت, خنفساء, خلد
+        دب, دجاجة, دجاج, دلفين, ديك, دودة, دبور, دعسوقة, دب قطبي, ديك رومي
+        رخمة, ربيان, رنجة, رنة, ريم
+        زرافة, زرزور, زنبور, زبابة
+        سمكة, سمك, سلحفاة, سلحفاه, سنجاب, سحلية, سلطعون, سمندل, سرطان, سنور, سقنقور, سمان
+        شمبانزي, شاة, شاهين, شيهم, شحرور, شبل, شرغوف, شبوط
+        صقر, صرصور, صرد, صل
+        طاووس, طير, طائر, طيهوج
+        عصفور, عقرب, عنكبوت, عجل, عقاب, عنز, عندليب, عضاية, عثة
+        فيل, فأر, فار, فهد, فرس, فراشة, فقمة, فرخ, فراش, فرس النهر
+        قطة, قط, قرد, قنفذ, قرش, قندس, قنديل البحر, قملة, قمل, قطا, قبرة
+        كلب, كنغر, كركدن, كوالا, كناري, كبش, كروان, كركي
+        لبؤة, لبوة, ليث, لقلق, ليمور
+        ماعز, مها, مهر, مهرة, ماموث, منك
+        نمر, نمل, نملة, نحلة, نسر, نعامة, ناقة, نمس, نورس, نعجة
+        هدهد, هرة, هر, هامستر, هزار
+        وحيد القرن, وعل, وزة, وشق, ورل, وبر, وطواط
+        يمامة, يمام, يعسوب, يربوع
+    """),
+    "نبات": _bank("""
+        أرز, أقحوان, أكاسيا, أوركيد, أس, اذخر
+        بردي, بصل, بلوط, بامبو, بنفسج, بقدونس, باذنجان, بطاطس, بازلاء, برسيم, بابونج
+        تبغ, توليب, ترمس, تين, تمر, توت
+        جزر, جرجير, جوري, جاردينيا, جوز
+        حنطة, حمص, حبق, حنظل, حلبة, حنة, حور
+        خس, خيار, خروب, خزامى, خوخ, خشخاش, خيزران
+        دفلى, دخن, دردار
+        ريحان, رمان, رز, رند, راوند, رجلة
+        زيتون, زعتر, زنبق, زهرة, زنجبيل, زعفران, زيزفون
+        سدر, سرو, سنديان, سمسم, سبانخ, سلق, سوسن, سنط
+        شجرة, شعير, شمندر, شوفان, شيح, شمر, شاي
+        صبار, صنوبر, صفصاف, صبير
+        طماطم, طرفاء, طحلب
+        عنب, عشب, عرعر, عدس, عوسج, عليق
+        فول, فلفل, فجل, فراولة, فاصوليا, فطر
+        قمح, قطن, قرنفل, قرع, قصب, قرنبيط, قنب
+        كرنب, كرفس, كمثرى, كزبرة, كمون, كستناء, كرز, كاكتوس, كافور
+        لوز, لوبيا, لفت, لافندر, ليمون, لوتس
+        ملفوف, ملوخية, مريمية, ميرمية, موز, مشمش
+        نعناع, نخل, نخيل, نرجس, نبق, نيلوفر, نيم
+        هندباء, هليون, هيل
+        ورد, وردة, وسمة
+        ياسمين, يقطين, يانسون, يوسفي
+    """),
+    "جماد": _bank("""
+        أريكة, أبريق, إناء, آلة, إبرة, إزميل, إطار, أنبوب
+        باب, بطانية, بيت, بساط, بوصلة, بالون, بطارية, برج, بنطلون, بيانو, بلاطة
+        تلفاز, تلفون, تلفزيون, تاج, تخت, تنور, تمثال, تذكرة, تابوت, ترس
+        جدار, جرس, جزمة, جوال, جاكيت, جسر, جهاز, جرة, جورب
+        حقيبة, حذاء, حاسوب, حائط, حبل, حجر, حديد, حوض, حصير, حزام, حلقة, حاسب
+        خزانة, خاتم, خيمة, خنجر, خشب, خريطة, خرز, خلاط, خوذة
+        دفتر, دراجة, دولاب, دلو, درج, دبوس, دف, دمية, دش
+        رف, ريشة, رادار, رمح, رخام, راديو, ريموت, رصاصة
+        زجاجة, زجاج, زر, زورق, زهرية
+        سيارة, سرير, ساعة, سكين, سلم, سجادة, سبورة, سيف, سلة, سقف, ستارة, سماعة, سور, سلسلة, سرج
+        شباك, شمعة, شاشة, شنطة, شوكة, شماعة, شمسية, شاحن, شبشب, شراع, شاحنة
+        صحن, صندوق, صابون, صورة, صنبور, صاروخ, صندل, صفارة, صينية, صخرة
+        طاولة, طبق, طابعة, طائرة, طوب, طبل, طربوش, طنجرة, طوق, طاحونة
+        عصا, علبة, عجلة, عربة, عمود, عقد, عدسة, عطر, عود, عباءة, عمامة
+        فنجان, فرشاة, فستان, فرن, فانوس, فأس, فراش, فخ, فلتر
+        قلم, قفل, قميص, قارورة, قدر, قبعة, قارب, قلادة, قوس, قلعة, قنديل
+        كرسي, كتاب, كوب, كاميرا, كيس, كمبيوتر, كأس, كنبة, كرة, كشاف, كاسيت, كرتون
+        لوح, لمبة, لحاف, لوحة, لابتوب, لعبة, لجام, ليف
+        مفتاح, مكنسة, مقص, مرآة, مروحة, مسطرة, مطرقة, مصباح, مسمار, منشفة, مظلة, مكيف, مقعد, مسجل, مزهرية, ممحاة, مدفأة, مشط
+        نافذة, نظارة, نجفة, نعل, نقود, نقش, ناي, نسيج
+        هاتف, هرم, هاون, هودج, هيكل, هدية
+        وسادة, وعاء, ورقة, وتد, وشاح
+        يخت, ياقة, يافطة
+    """),
+    "بلاد": _bank("""
+        الأردن, إيران, إيطاليا, إسبانيا, أستراليا, أمريكا, إندونيسيا, أرمينيا, أذربيجان, أوكرانيا, أفغانستان, الأرجنتين, إثيوبيا
+        الإمارات, إنجلترا, أوغندا, أيرلندا, اسكتلندا, ألبانيا, أنغولا, إستونيا, إريتريا, الإكوادور, أوروغواي, أوزبكستان
+        بريطانيا, بلجيكا, بولندا, بلغاريا, البرازيل, بنغلاديش, باكستان, البحرين, بيرو, بوليفيا, بنما, بوتان, بروناي, بنين
+        بوركينا فاسو, بورما, بيلاروسيا, بوروندي, بوتسوانا, باراغواي
+        تركيا, تونس, تايلاند, تشاد, تنزانيا, تشيلي, تايوان, توغو, تركمانستان
+        الجزائر, الجبل الأسود, جورجيا, جامايكا, جيبوتي, جنوب أفريقيا, جزر القمر, جزر المالديف
+        حائل, حلب, حمص, حيفا, حضرموت, الحبشة
+        الخرطوم, الخبر, خميس مشيط
+        الدنمارك, دومينيكا, الدمام, دبي, دمشق, الدوحة, دبلن, دلهي
+        روسيا, رومانيا, رواندا, الرياض, الرباط, روما
+        زامبيا, زيمبابوي, زنجبار
+        السعودية, السودان, سوريا, السويد, سويسرا, السنغال, سلوفاكيا, سلوفينيا, سريلانكا, سنغافورة, سيراليون, سورينام, سيشل
+        الشام, الشارقة, شنغهاي
+        الصين, الصومال, صربيا, صنعاء
+        طاجيكستان, الطائف, طرابلس, طنجة
+        العراق, عمان, عجمان, عدن, عنيزة
+        فرنسا, فلسطين, فنلندا, فيتنام, الفلبين, فنزويلا, فيجي, فاس
+        قطر, قبرص, كازاخستان, قرغيزستان, القاهرة, القدس, القصيم, القطيف
+        الكويت, كندا, كولومبيا, كوبا, كوريا, كرواتيا, كينيا, كمبوديا, الكاميرون, كوستاريكا, كوسوفو, كابول
+        لبنان, ليبيا, لاوس, لوكسمبورغ, ليتوانيا, لاتفيا, ليبيريا, ليختنشتاين, لندن, ليسوتو
+        مصر, المغرب, موريتانيا, مالي, ماليزيا, المكسيك, مالطا, منغوليا, موزمبيق, مدغشقر, مولدوفا, موناكو, مقدونيا, ميانمار
+        مكة, المدينة, مالاوي, المالديف, مسقط, مراكش
+        نيجيريا, النرويج, النمسا, نيبال, نيوزيلندا, النيجر, ناميبيا, نيكاراغوا, ناورو, نجران, نيويورك
+        الهند, هولندا, هندوراس, هنغاريا, هايتي, هونغ كونغ
+        الولايات المتحدة
+        اليمن, اليابان, اليونان
+    """),
+    "فاكهة": _bank("""
+        أناناس, إجاص, أفوكادو
+        برتقال, بطيخ, بلح, برقوق, بابايا, بوملي, بشملة
+        تفاح, تين, توت, تمر, ترنج
+        جوافة, جريب فروت, جوز هند
+        حصرم
+        خوخ
+        دراق, دوم
+        رمان, رطب
+        زبيب, زيتون, زعرور
+        سفرجل
+        شمام
+        عنب, عليق
+        فراولة
+        كمثرى, كرز, كيوي, كاكا, كنتالوب, كمكوات
+        ليمون, لارنج, لونجان, ليتشي
+        موز, مشمش, مانجو, مانجا, ماندرين
+        نبق, نارنج, نارجيل
+        يوسفي
+        قشطة, قراصيا
+        طماطم
+        صبير
+    """),
+    "مهنة": _bank("""
+        أستاذ, إعلامي, إمام, أديب, إطفائي, أخصائي, أمين, أكاديمي
+        بائع, بقال, بناء, بحار, بيطري, بروفيسور, بواب, بستاني, بيطار
+        تاجر, تقني, ترزي, تربوي
+        جندي, جزار, جراح, جيولوجي, جنرال, جواهرجي, جلاد
+        حداد, حلاق, حارس, حكم, حائك, حمال, حلواني, حكيم
+        خباز, خياط, خادم, خبير, خطاط, خراط
+        دكتور, دهان, داعية, دباغ, دليل
+        رسام, راعي, رائد فضاء, ربان, رياضي, رئيس
+        زارع, زراعي
+        سائق, سباك, سفير, سمكري, ساعاتي, سكرتير, سياسي, سجان, سمان
+        شرطي, شاعر, شيف, شيخ
+        صياد, صحفي, صيدلي, صانع, صراف, صباغ, صائغ
+        طبيب, طيار, طباخ, طالب, طبال
+        عامل, عالم, عسكري, عطار, عمدة, عميد, عراف
+        فلاح, فنان, فيزيائي, فران, فني, فراش, فيلسوف
+        قاضي, قبطان, قاص, قصاب, قائد, قارئ
+        كاتب, كهربائي, كيميائي, كوافير, كاشير, كابتن, كوميدي
+        لاعب, لحام, لواء
+        معلم, مهندس, محامي, ممرض, مزارع, مدرس, مدير, محاسب, مصور, مبرمج, مذيع, مترجم, موظف, ميكانيكي, مغني, ممثل
+        نجار, نادل, ناشر, نحات, ناقد
+        وزير, واعظ, وكيل, وسيط
+    """),
+    "اسم ولد": _bank("""
+        أحمد, إبراهيم, أسامة, آدم, إياد, أنس, أيمن, أكرم, أمير, إسماعيل, إيهاب, أيوب, أسعد, أشرف
+        بدر, باسل, بسام, بندر, بلال, بشار, براء, باسم, برهان
+        تركي, تميم, توفيق, تامر
+        جاسم, جمال, جابر, جميل, جواد, جلال, جاسر
+        حسن, حسين, حمد, حمزة, حازم, حاتم, حميد, حسام, حبيب, حيدر
+        خالد, خليل, خليفة, خلف, خضر
+        داود, داوود, دانيال, دياب
+        راشد, رائد, رامي, رياض, رضا, رشيد, رمضان, ربيع
+        زياد, زيد, زكريا, زهير, زاهر
+        سعد, سلمان, سعود, سامي, سلطان, سالم, سليمان, سيف, سعيد, سمير
+        شاكر, شادي, شريف, شهاب, شعيب
+        صالح, صلاح, صقر, صباح, صادق, صهيب
+        طارق, طلال, طه, طلحة, طاهر
+        عمر, علي, عبدالله, عثمان, عادل, عماد, عصام, عبدالرحمن, عبدالعزيز, عزيز, عيسى, عمار, عدنان
+        فهد, فيصل, فارس, فواز, فراس, فادي, فريد, فؤاد, فاضل
+        قاسم, قصي, قيس
+        كريم, كمال, كامل
+        لؤي, لطفي, لبيب
+        محمد, محمود, مصطفى, ماجد, مازن, مشعل, منصور, مبارك, مروان, معاذ, مالك, موسى, مهند, ماهر, مراد, مهدي
+        ناصر, نايف, نواف, نبيل, نادر, نزار, نوح
+        هاني, هشام, هادي, هيثم, هلال, هود, هزاع
+        وليد, وائل, وسيم, وضاح, وجدي
+        يوسف, يزيد, ياسر, يحيى, يعقوب, يونس, ياسين, يامن
+    """),
+    "اسم بنت": _bank("""
+        أمل, أسماء, إيمان, ابتسام, إسراء, أروى, أميرة, أمينة, أماني
+        بشرى, بتول, بسمة, بثينة, بلقيس, بيان, بدور
+        تغريد, تالا, تسنيم, تهاني, تماضر
+        جميلة, جنى, جود, جوري, جواهر, جنة, جيهان
+        حنان, حياة, حليمة, حصة, حلا, حسناء, حنين
+        خديجة, خلود, خولة
+        دانة, دلال, دعاء, دينا, دانية
+        رنا, ريم, رزان, رهف, رغد, رنيم, رحاب, رقية, ريما, روان
+        زينب, زهرة, زينة, زهراء
+        سارة, سلمى, سعاد, سمر, سمية, سهى, سناء, سلوى
+        شهد, شيماء, شيخة, شذى, شهرزاد, شروق
+        صفية, صفاء, صبا
+        طيبة, طيف
+        عائشة, عبير, عهد, عفاف, علياء, عزة, عالية, عبلة
+        فاطمة, فرح, فجر, فوزية, فداء, فاتن, فدوى
+        قمر
+        كوثر, كاميليا, كريمة
+        لجين, لمى, لينا, ليلى, لولوة, لطيفة, لبنى, لمياء, ليان
+        مريم, منى, مها, ميساء, منيرة, مرام, ملاك, مي, مروة, ميار
+        نورة, نوف, نجلاء, نادية, نهى, نور, نسرين, ندى, نجوى, نوال
+        هند, هدى, هنوف, هيفاء, هبة, هاجر, هالة, هيا, هناء
+        وفاء, ولاء, وعد, وجدان, وسام, وداد
+        ياسمين, يارا, يمنى
+    """),
+}
+
+# فهرس سريع: الفئة -> {الحرف الأول: {الإجابات المطبّعة}}
+REPLICA_INDEX: dict = {}
+for _cat, _words in REPLICA_BANK.items():
+    _idx: dict = {}
+    for _w in _words:
+        _k = _replica_norm_key(_w)
+        if _k:
+            _idx.setdefault(_k[0], set()).add(_k)
+    REPLICA_INDEX[_cat] = _idx
+
+
+def _replica_categories_for(letter: str) -> list:
+    """الفئات اللي فيها إجابات تبدأ بهذا الحرف (عشان ما ينسأل أحد سؤال مالو جواب)."""
+    k = normalize(letter)
+    cats = [c for c in REPLICA_CATEGORIES if REPLICA_INDEX.get(c, {}).get(k)]
+    return cats or REPLICA_CATEGORIES.copy()
+
 # صورة قالب الإحصائية: حطها داخل مجلد game_images بهذا الاسم (نفس الصورة اللي أرسلتها بنفس مقاساتها)
 REPLICA_STATS_IMAGE = "replica_stats.png"
 # خط عربي اختياري (ملف .ttf) تحطه داخل game_images بهذا الاسم، لو ما حطيته يجرّب خطوط النظام
@@ -3030,22 +3269,19 @@ def _build_replica_stats_images(title: str, rows: list) -> list:
     return out
 
 
-def _replica_key(text: str, letter: str):
-    """يطبّع إجابة اللاعب ويتأكد إنها تبدأ بالحرف المطلوب (يتجاهل "ال" التعريف والهمزات).
+def _replica_key(text: str, letter: str, category: str):
+    """يطبّع إجابة اللاعب ويتأكد إنها تبدأ بالحرف المطلوب (يتجاهل "ال" التعريف والهمزات)
+    وإنها من الفئة المطلوبة فعلًا (مثلًا لو الفئة حيوان ما تنقبل "باب").
     يرجع الإجابة المطبّعة، أو None لو ما تصلح."""
-    cleaned = re.sub(r"[^\w\s]", " ", normalize(text))
-    words = cleaned.split()
-    if not words or len(words) > 3:
+    key = _replica_norm_key(text)
+    if key is None or len(key.replace(" ", "")) < 2 or key[0] != normalize(letter):
         return None
-    if words[0].startswith("ال") and len(words[0]) > 3:
-        words[0] = words[0][2:]
-    key = " ".join(words)
-    if len(key.replace(" ", "")) < 2 or key[0] != normalize(letter):
+    if key not in REPLICA_INDEX.get(category, {}).get(key[0], ()):
         return None
     return key
 
 
-async def _await_replica_answer(bot_obj, channel, player, letter: str, used: set, cancel_event: asyncio.Event):
+async def _await_replica_answer(bot_obj, channel, player, letter: str, category: str, used: set, cancel_event: asyncio.Event):
     """ينتظر إجابة صحيحة من اللاعب المسؤول خلال TURN_TIMEOUT ثانية (الإجابة الغلط تاخذ ❌ ويقدر يعيد المحاولة).
     يرجع نص الإجابة أو None لو ما جاوب (أو انلغت اللعبة)."""
     loop = asyncio.get_running_loop()
@@ -3069,7 +3305,7 @@ async def _await_replica_answer(bot_obj, channel, player, letter: str, used: set
             m = wait_task.result()
         except asyncio.TimeoutError:
             return None
-        key = _replica_key(m.content, letter)
+        key = _replica_key(m.content, letter, category)
         ok = key is not None and key not in used
         try:
             await m.add_reaction("✅" if ok else "❌")
@@ -3105,7 +3341,7 @@ async def _run_replica(ctx: commands.Context):
         random.shuffle(order)
         cats = []
         while len(cats) < len(order):
-            bag = REPLICA_CATEGORIES.copy()
+            bag = _replica_categories_for(letter)
             random.shuffle(bag)
             cats.extend(bag)
         results = []
@@ -3121,7 +3357,7 @@ async def _run_replica(ctx: commands.Context):
         for player, category in zip(order, cats):
             prompt = await ctx.send(f"يا {player.mention} قلي **{category}** يبدأ بحرف **{letter}**")
             cancel_event = track_game_message(ctx.channel.id, prompt)
-            answer = await _await_replica_answer(ctx.bot, ctx.channel, player, letter, used, cancel_event)
+            answer = await _await_replica_answer(ctx.bot, ctx.channel, player, letter, category, used, cancel_event)
             if cancel_event.is_set():
                 return
             ok = answer is not None
@@ -3178,7 +3414,13 @@ async def _run_replica(ctx: commands.Context):
     await ctx.send(f"**انتهت ريبلكا!**\n{board}\n\nالفائز: {winners_text} {reward_text}")
 
 
-# ---------- مافيا (نسخة مبسطة: جولة تصويت وحدة) ----------
+# ---------- مافيا (ليل ونهار: المافيا تغتال، الطبيب يحمي، والكل يصوّت على طرد المشتبه فيه) ----------
+MAFIA_NIGHT_TIMEOUT = 20      # مهلة اختيار المافيا / الطبيب بالليل (ثواني)
+MAFIA_DISCUSS_SECONDS = 15    # مهلة التحقق بين اللاعبين قبل التصويت
+MAFIA_VOTE_SECONDS = 20       # مهلة التصويت على طرد المشتبه فيه
+MAFIA_ROLE_NAMES = {"mafia": "مافيا", "doctor": "طبيب", "citizen": "مواطن"}
+
+
 @commands.command(name="مافيا")
 async def mafia_cmd(ctx: commands.Context):
     if is_channel_busy(ctx.channel.id):
@@ -3195,13 +3437,13 @@ class MafiaRoleView(discord.ui.View):
     """زر "اكشف دورك" — كل لاعب يضغطه ويشوف دوره برسالة خفية بنفس الروم (محد يشوفها غيره).
     زر "كشّاف" (ميزة من المتجر): يكشف لك دور لاعب عشوائي، مرة وحدة بهذي اللعبة."""
 
-    def __init__(self, players: list[discord.Member], mafia: set):
+    def __init__(self, players: list[discord.Member], roles: dict):
         super().__init__(timeout=90)
         self.players = players
         self.guild_id = players[0].guild.id
         self.players_ids = {p.id for p in players}
-        self.mafia_ids = {p.id for p in mafia}
-        self.mafia_members = list(mafia)
+        self.roles = roles   # آيدي اللاعب -> "mafia" / "doctor" / "citizen"
+        self.mafia_members = [p for p in players if roles[p.id] == "mafia"]
         self.scouted: set[int] = set()
 
     @discord.ui.button(label="اكشف دورك", style=discord.ButtonStyle.secondary)
@@ -3209,15 +3451,19 @@ class MafiaRoleView(discord.ui.View):
         if interaction.user.id not in self.players_ids:
             await interaction.response.send_message("أنت مو باللعبة.", ephemeral=True)
             return
-        if interaction.user.id in self.mafia_ids:
-            text = "أنت **مافيا**! هدفك تضلل الكل وتفلت."
+        role = self.roles[interaction.user.id]
+        if role == "mafia":
+            text = "أنت **مافيا**! هدفك تضلل الكل وتفلت، وكل ليلة تختارون ضحية تغتالونها."
             allies = [m for m in self.mafia_members if m.id != interaction.user.id]
             if allies:
                 text += "\nخوياك المافيا: " + "، ".join(m.mention for m in allies)
             else:
                 text += "\nأنت المافيا الوحيد بهذي اللعبة."
+        elif role == "doctor":
+            text = ("أنت **طبيب**! كل ليلة تختار شخص تحميه من اغتيال المافيا (تقدر تحمي نفسك). "
+                    "هدفك تساعد المواطنين يكتشفون المافيا.")
         else:
-            text = "أنت **مواطن**! هدفك تكتشف المافيا."
+            text = "أنت **مواطن**! هدفك تكتشف المافيا وتصوّت على طردهم."
         await interaction.response.send_message(text, ephemeral=True)
 
     @discord.ui.button(label=f"{UI_ICONS['scout']} كشّاف", style=discord.ButtonStyle.secondary)
@@ -3237,9 +3483,70 @@ class MafiaRoleView(discord.ui.View):
             return
         self.scouted.add(interaction.user.id)
         target = random.choice(others)
-        role = "مافيا" if target.id in self.mafia_ids else "مواطن"
+        role = MAFIA_ROLE_NAMES[self.roles[target.id]]
         await interaction.response.send_message(
             f"{UI_ICONS['scout']} الكشّاف كشف لك: {target.mention} **{role}**", ephemeral=True)
+
+
+class MafiaNightSelect(discord.ui.Select):
+    """قائمة اختيار تظهر برسالة خفية للمافيا (اختيار الضحية) أو للطبيب (اختيار اللي يحميه)."""
+
+    def __init__(self, night: "MafiaNightView"):
+        options = [discord.SelectOption(label=t.display_name[:100], value=str(t.id)) for t in night.targets]
+        super().__init__(placeholder=night.placeholder, min_values=1, max_values=1, options=options)
+        self.night = night
+
+    async def callback(self, interaction: discord.Interaction):
+        night = self.night
+        if night.closed:
+            await interaction.response.edit_message(content="انتهى الوقت.", view=None)
+            return
+        target_id = int(self.values[0])
+        night.choices[interaction.user.id] = target_id
+        target = next((t for t in night.targets if t.id == target_id), None)
+        name = target.display_name if target is not None else "—"
+        await interaction.response.edit_message(content=f"اخترت: **{name}**", view=None)
+        if len(night.choices) >= len(night.allowed_ids):
+            night.done.set()
+
+
+class MafiaNightView(discord.ui.View):
+    """زر الليل: يضغطه بس اللي دوره (المافيا أو الطبيب) وتطلع له قائمة اختيار خفية.
+    لو allowed_ids فاضية (الطبيب مات) يبقى الزر شكلي عشان ما ينكشف إن الطبيب مات."""
+
+    def __init__(self, allowed_ids: set, targets: list[discord.Member], button_label: str,
+                 placeholder: str, timeout: float):
+        super().__init__(timeout=timeout + 30)
+        self.allowed_ids = allowed_ids
+        self.targets = targets
+        self.placeholder = placeholder
+        self.choices: dict[int, int] = {}   # آيدي اللاعب -> آيدي اللي اختاره
+        self.done = asyncio.Event()
+        self.closed = False
+        btn = discord.ui.Button(label=button_label, style=discord.ButtonStyle.secondary)
+        btn.callback = self.on_pick
+        self.add_item(btn)
+
+    async def on_pick(self, interaction: discord.Interaction):
+        if interaction.user.id not in self.allowed_ids:
+            await interaction.response.send_message("هذا الزر مو لك.", ephemeral=True)
+            return
+        if self.closed:
+            await interaction.response.send_message("انتهى الوقت.", ephemeral=True)
+            return
+        pick_view = discord.ui.View(timeout=60)
+        pick_view.add_item(MafiaNightSelect(self))
+        await interaction.response.send_message("اختر من القائمة:", view=pick_view, ephemeral=True)
+
+    def top_choice(self):
+        """أكثر شخص انختار (لو تعادلوا يختار عشوائي بينهم). None لو ما اختار أحد."""
+        if not self.choices:
+            return None
+        counts: dict[int, int] = {}
+        for target_id in self.choices.values():
+            counts[target_id] = counts.get(target_id, 0) + 1
+        best = max(counts.values())
+        return random.choice([t for t, c in counts.items() if c == best])
 
 
 class MafiaVoteView(discord.ui.View):
@@ -3273,58 +3580,171 @@ class MafiaVoteView(discord.ui.View):
         return counts
 
 
+async def _mafia_wait(wait_event, cancel_event: asyncio.Event, timeout: float) -> bool:
+    """ينتظر حدث (أو ينتهي الوقت). يرجع True لو انلغت اللعبة (انحذفت رسالتها)."""
+    tasks = [asyncio.create_task(cancel_event.wait())]
+    if wait_event is not None:
+        tasks.append(asyncio.create_task(wait_event.wait()))
+    await asyncio.wait(tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+    for t in tasks:
+        t.cancel()
+    return cancel_event.is_set()
+
+
+def _mafia_winner(alive: list, roles: dict):
+    """يرجع "citizens" لو ما بقي مافيا، "mafia" لو عدد المافيا صار مثل أو أكثر من الباقين، وإلا None."""
+    mafia_alive = [p for p in alive if roles[p.id] == "mafia"]
+    others_alive = [p for p in alive if roles[p.id] != "mafia"]
+    if not mafia_alive:
+        return "citizens"
+    if len(mafia_alive) >= len(others_alive):
+        return "mafia"
+    return None
+
+
 async def _run_mafia(ctx: commands.Context):
-    players = await run_lobby(ctx, "مافيا", min_players=2, max_players=20, countdown=30, game_key="مافيا")
+    players = await run_lobby(ctx, "مافيا", min_players=4, max_players=20, countdown=30, game_key="مافيا")
     if not players:
         return
-    mafia_count = max(1, len(players) // 4)
-    mafia = set(random.sample(players, mafia_count))
 
-    role_view = MafiaRoleView(players, mafia)
+    # ---------- توزيع الأدوار: مافيا + طبيب واحد + الباقي مواطنين ----------
+    n = len(players)
+    mafia_count = max(1, n // 4)
+    shuffled = random.sample(players, n)
+    roles: dict[int, str] = {}
+    for p in shuffled[:mafia_count]:
+        roles[p.id] = "mafia"
+    roles[shuffled[mafia_count].id] = "doctor"
+    for p in shuffled[mafia_count + 1:]:
+        roles[p.id] = "citizen"
+
+    role_view = MafiaRoleView(players, roles)
     announce_msg = await ctx.send(
-        f"بدأت اللعبة! فيه **{mafia_count}** من المافيا بينكم.\n"
+        f"بدأت اللعبة! فيه **{mafia_count}** من المافيا و **طبيب** واحد بينكم.\n"
         f"اضغط الزر تحت عشان تشوف دورك (يبان لك بس):",
         view=role_view,
     )
     cancel_event = track_game_message(ctx.channel.id, announce_msg)
-    await asyncio.sleep(20)  # وقت مناقشة قصير قبل التصويت
-    if cancel_event.is_set():
+    if await _mafia_wait(None, cancel_event, 20):   # وقت قصير يشوفون فيه أدوارهم قبل أول ليلة
         return
 
-    vote_view = MafiaVoteView(players, duration=60)
-    vote_msg = await ctx.send("صوّتوا بالضغط على اسم اللي تشكون فيه (عندكم 60 ثانية):", view=vote_view)
-    cancel_event = track_game_message(ctx.channel.id, vote_msg)
-    done, pending = await asyncio.wait(
-        [asyncio.create_task(vote_view.done.wait()), asyncio.create_task(cancel_event.wait())],
-        timeout=60, return_when=asyncio.FIRST_COMPLETED)
-    for t in pending:
-        t.cancel()
-    if cancel_event.is_set():
-        return
-    for c in vote_view.children:
-        c.disabled = True
-    try:
-        await vote_msg.edit(view=vote_view)
-    except discord.NotFound:
-        pass
+    alive = players.copy()
+    round_num = 1
+    winner_side = None
 
-    tally = vote_view.tally()
-    if not tally:
-        await ctx.send("ما صوّت أحد! انتهت اللعبة بدون نتيجة.")
-        return
+    while winner_side is None:
+        mafia_alive = [p for p in alive if roles[p.id] == "mafia"]
+        doctor = next((p for p in alive if roles[p.id] == "doctor"), None)
 
-    max_votes = max(tally.values())
-    top_ids = [uid for uid, v in tally.items() if v == max_votes]
-    eliminated_id = random.choice(top_ids)
-    eliminated = discord.utils.get(players, id=eliminated_id)
-    was_mafia = eliminated in mafia
+        # ================= الليل =================
+        # 1) المافيا تختار الضحية
+        kill_targets = [p for p in alive if roles[p.id] != "mafia"]
+        kill_view = MafiaNightView({m.id for m in mafia_alive}, kill_targets,
+                                   f"{UI_ICONS['bomb']} اختر الضحية", "اختر الشخص اللي تبون تغتالونه",
+                                   MAFIA_NIGHT_TIMEOUT)
+        lines = [f"**الليلة {round_num}**",
+                 "🔪 | جاري انتظار المافيا لاختيار الشخص الذي سيتم اغتياله..."]
+        night_msg = await ctx.send("\n".join(lines), view=kill_view)
+        cancel_event = track_game_message(ctx.channel.id, night_msg)
+        if await _mafia_wait(kill_view.done, cancel_event, MAFIA_NIGHT_TIMEOUT):
+            return
+        kill_view.closed = True
+        kill_view.stop()
+        victim_id = kill_view.top_choice()
+        victim = next((p for p in kill_targets if p.id == victim_id), None)
+        if victim is None:
+            victim = random.choice(kill_targets)   # المافيا ما اختارت: ضحية عشوائية
 
-    if was_mafia:
-        winners = [p for p in players if p not in mafia]
-        result = f"{eliminated.mention} كان من المافيا! فاز المواطنون"
+        # 2) الطبيب يختار اللي يحميه
+        protect_view = MafiaNightView({doctor.id} if doctor else set(), alive.copy(),
+                                      f"{UI_ICONS['peek']} اختر من تحميه", "اختر الشخص اللي تبي تحميه",
+                                      MAFIA_NIGHT_TIMEOUT)
+        lines[1] = "🔪 | اختارت المافيا الشخص الذي سيتم اغتياله"
+        lines.append("💊 | جاري انتظار الطبيب لاختيار شخص لحمايته...")
+        try:
+            await night_msg.edit(content="\n".join(lines), view=protect_view)
+        except discord.NotFound:
+            return
+        # لو الطبيب ميت ننتظر وقت عشوائي بدون ما ننكشف
+        doctor_wait = MAFIA_NIGHT_TIMEOUT if doctor else random.uniform(5, 12)
+        if await _mafia_wait(protect_view.done, cancel_event, doctor_wait):
+            return
+        protect_view.closed = True
+        protect_view.stop()
+        protect_id = protect_view.top_choice()
+        if doctor is not None and protect_id is None:
+            lines[2] = "💊 | انتهى الوقت وما اختار الطبيب أحد"
+        else:
+            lines[2] = "💊 | اختار الطبيب الشخص الذي سيحميه من اغتيال المافيا"
+        try:
+            await night_msg.edit(content="\n".join(lines), view=None)
+        except discord.NotFound:
+            return
+
+        # ================= الصباح: نتيجة الليل =================
+        await asyncio.sleep(2)
+        if protect_id is not None and protect_id == victim.id:
+            result_msg = await ctx.send("🩺 | حاولت المافيا اغتيال شخص لكن الطبيب أنقذه! ما مات أحد هذي الليلة")
+        else:
+            alive.remove(victim)
+            result_msg = await ctx.send(
+                f"⚰️ | نجحت عملية المافيا وتم قتل {victim.mention} "
+                f"وهذا الشخص كان **{MAFIA_ROLE_NAMES[roles[victim.id]]}**")
+        cancel_event = track_game_message(ctx.channel.id, result_msg)
+
+        winner_side = _mafia_winner(alive, roles)
+        if winner_side is not None:
+            break
+
+        # ================= النهار: تحقق ثم تصويت =================
+        end_time = discord.utils.utcnow() + timedelta(seconds=MAFIA_DISCUSS_SECONDS)
+        alive_names = "، ".join(p.mention for p in alive)
+        discuss_msg = await ctx.send(
+            f"🔍 | لديكم **{MAFIA_DISCUSS_SECONDS} ثانية** للتحقق بين اللاعبين ومعرفة المافيا "
+            f"للتصويت على طرده من اللعبة {discord.utils.format_dt(end_time, 'R')}\n"
+            f"الباقين ({len(alive)}): {alive_names}")
+        cancel_event = track_game_message(ctx.channel.id, discuss_msg)
+        if await _mafia_wait(None, cancel_event, MAFIA_DISCUSS_SECONDS):
+            return
+
+        vote_view = MafiaVoteView(alive.copy(), duration=MAFIA_VOTE_SECONDS)
+        vote_msg = await ctx.send(
+            f"🗳️ | صوّتوا بالضغط على اسم اللي تشكون فيه (عندكم {MAFIA_VOTE_SECONDS} ثانية):", view=vote_view)
+        cancel_event = track_game_message(ctx.channel.id, vote_msg)
+        if await _mafia_wait(vote_view.done, cancel_event, MAFIA_VOTE_SECONDS):
+            return
+        for c in vote_view.children:
+            c.disabled = True
+        vote_view.stop()
+        try:
+            await vote_msg.edit(view=vote_view)
+        except discord.NotFound:
+            return
+
+        tally = vote_view.tally()
+        if not tally:
+            await ctx.send("ما صوّت أحد! ما انطرد أحد هذي الجولة.")
+        else:
+            max_votes = max(tally.values())
+            top_ids = [uid for uid, v in tally.items() if v == max_votes]
+            if len(top_ids) > 1:
+                await ctx.send("تعادلت الأصوات! ما انطرد أحد هذي الجولة.")
+            else:
+                expelled = next(p for p in alive if p.id == top_ids[0])
+                alive.remove(expelled)
+                await ctx.send(
+                    f"🚪 | تم طرد {expelled.mention} من اللعبة وكان **{MAFIA_ROLE_NAMES[roles[expelled.id]]}**")
+                winner_side = _mafia_winner(alive, roles)
+        round_num += 1
+
+    # ---------- النتيجة النهائية ----------
+    mafia_team = [p for p in players if roles[p.id] == "mafia"]
+    if winner_side == "citizens":
+        winners = [p for p in players if roles[p.id] != "mafia"]
+        result = "انكشفت المافيا كلها! فاز المواطنون"
     else:
-        winners = list(mafia)
-        result = f"{eliminated.mention} كان بريء! فازت المافيا"
+        winners = mafia_team
+        result = "سيطرت المافيا على المدينة! فازت المافيا"
 
     for w in winners:
         add_game_reward(ctx.guild.id, w.id, 50)
@@ -3332,8 +3752,9 @@ async def _run_mafia(ctx: commands.Context):
     for p in players:
         if p not in winners:
             record_game_result(ctx.guild.id, p.id, won=False)
-    mafia_names = "، ".join(m.mention for m in mafia)
-    await ctx.send(f"{result}\n\nالمافيا كانوا: {mafia_names}")
+    mafia_names = "، ".join(m.mention for m in mafia_team)
+    doctor_member = next(p for p in players if roles[p.id] == "doctor")
+    await ctx.send(f"{result}\n\nالمافيا كانوا: {mafia_names}\nالطبيب كان: {doctor_member.mention}")
 
 
 # ---------- كراسي موسيقية ----------
@@ -3435,7 +3856,7 @@ GAME_LIST = {
     "جماعية": [
         (".روليت", "روليت روسي: يقصّون بعض لين يبقى ناجي وحد (فيه زر انسحاب)."),
         (".xo @خصمك", "اكس أو بينك وبين خصم تحدده."),
-        (".مافيا", "مافيا مبسّطة: تصويت جولة وحدة تحدد الفايز."),
+        (".مافيا", "مافيا ليل ونهار: المافيا تغتال، والطبيب يحمي، والكل يصوّت على طرد المشتبه فيه."),
         (".كراسي", "الكراسي الموسيقية بالأزرار."),
         (".حجرة @خصمك", "حجرة ورقة مقص بينك وبين خصم."),
         (".نرد", "كل واحد يرمي نرد، الأعلى يفوز."),
@@ -3465,7 +3886,7 @@ GAME_LIST = {
 GAME_HELP = {
     "روليت": "الكل ينضم باللوبي (زر دخول)، وبعدها اللاعب المختار يطلع وحد من اللعبة كل دور (عنده 15 ثانية، ولو ما اختار أحد يطلع هو من اللعبة)، لين يبقى ناجي وحد وياخذ النقاط. فيه زر طرد عشوائي، وزر انسحاب يقدر أي لاعب باقي يطلع فيه نفسه من اللعبة.",
     "xo": "اكس أو كلاسيكية بينك وبين عضو تحدده بالمنشن، أول وحد يكمل خط يفوز. اللي دوره وما لعب خلال 15 ثانية يخسر.",
-    "مافيا": "ينضم اللاعبين، يتوزعون أدوار مافيا/مواطنين بزر خفي يبان لهم بس (والمافيا يعرفون بعض)، تناقشون شوي وتصوتون بالأزرار على اللي تشكون فيه، ومين يطلع أكثر أصوات يتم كشفه.",
+    "مافيا": "تحتاج 4 لاعبين على الأقل. بعد اللوبي تتوزع الأدوار: مافيا (لاعب لكل 4 لاعبين تقريبًا) + طبيب واحد + الباقين مواطنين، وكل لاعب يشوف دوره بزر خفي (والمافيا يعرفون بعض). كل ليلة: المافيا تختار الضحية بزر خفي، والطبيب يختار شخص يحميه (ويقدر يحمي نفسه)، فلو الضحية هي نفس اللي حماه الطبيب ما يموت أحد، وإلا تموت ويتكشف دورها. بعدها عندكم 15 ثانية تتناقشون وتحققون بين بعض، ثم تصوتون بالأزرار على اللي تشكون فيه ويتطرد (لو تعادلت الأصوات ما يتطرد أحد) ويتكشف دوره. تتكرر الليالي لين تنكشف المافيا كلها (فوز المواطنين) أو يصير عدد المافيا مثل أو أكثر من الباقين (فوز المافيا).",
     "كراسي": "كل جولة عدد الكراسي أقل من عدد اللاعبين بواحد، اضغطوا الأزرار بسرعة، اللي ما يحصل كرسي يطيح.",
     "حجرة": "حجرة ورقة مقص بينك وبين خصم، كل واحد يختار بالخفاء (عندكم 15 ثانية، واللي ما اختار يخسر) والنتيجة تبان بعد اختيار الاثنين.",
     "نرد": "بعد اللوبي كل لاعب يضغط زر الرمي ويرمي النرد بنفسه (عندكم 10 ثواني)، ومن ما رمى يرمي له البوت تلقائيًا، وصاحب أعلى رقم يفوز بالنقاط.",
