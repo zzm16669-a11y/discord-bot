@@ -14,7 +14,7 @@ tickets.py — نظام تكتات كامل.
       import tickets
       tickets.setup_tickets(bot)
 
-  وخلاص. الأمر `.تكت` يرسل بانل فتح التكتات (قائمة اختيار)، والباقي (الاستلام/
+  وخلاص. الأمر `.تكت` يرسل بانل فتح التكتات (صورة + قائمة اختيار)، والباقي (الاستلام/
   الإغلاق/الخيارات) يشتغل تلقائي عبر أزرار دائمة (persistent views) تفضل تشتغل
   حتى بعد إعادة تشغيل البوت.
 """
@@ -71,6 +71,26 @@ def _tickets_category(guild: discord.Guild) -> discord.CategoryChannel | None:
 def _is_support(member: discord.Member) -> bool:
     role = _support_role(member.guild)
     return role is not None and role in member.roles
+
+
+async def _lock_to_claimer(channel: discord.TextChannel, claimer: discord.Member,
+                           previous_id: int | None = None) -> None:
+    """يقفل الكتابة على رتبة الدعم ويخلي المستلم وحده (مع صاحب التكت) يكتب.
+    لو فيه مستلم قديم (تحويل) ينسحب منه الاستثناء فيرجع تابع للرتبة (قراءة بس)."""
+    guild = channel.guild
+    role = _support_role(guild)
+    try:
+        if role is not None:
+            await channel.set_permissions(
+                role, view_channel=True, send_messages=False, read_message_history=True)
+        if previous_id is not None and previous_id != claimer.id:
+            previous = guild.get_member(previous_id)
+            if previous is not None:
+                await channel.set_permissions(previous, overwrite=None)
+        await channel.set_permissions(
+            claimer, view_channel=True, send_messages=True, read_message_history=True)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
 
 
 # ============================================================
@@ -173,6 +193,8 @@ class TicketControlView(discord.ui.View):
         button.label = f"✅ مستلم: {interaction.user.display_name}"[:80]
         button.disabled = True
         await interaction.response.edit_message(view=self)
+        # قفل الكتابة على باقي الدعم — المستلم وحده يكتب
+        await _lock_to_claimer(interaction.channel, interaction.user)
         await interaction.channel.send(f"📥 {interaction.user.mention} استلم التكت.")
 
     @discord.ui.button(label="🔒 إغلاق", style=discord.ButtonStyle.danger, custom_id="ticket_close")
@@ -405,9 +427,12 @@ class TransferSelectView(discord.ui.View):
             await interaction.response.edit_message(content="⚠️ هذا العضو مو من فريق الدعم.", view=None)
             return
         channel = interaction.channel
+        ticket = _db.get_ticket(channel.id)
+        previous_id = int(ticket["claimed_by"]) if ticket and ticket.get("claimed_by") else None
         _db.set_ticket_claimed(channel.id, member.id)
-        await channel.set_permissions(member, view_channel=True, send_messages=True, read_message_history=True)
         await interaction.response.edit_message(content=f"✅ تم تحويل التكت لـ {member.mention}.", view=None)
+        # الكتابة تنتقل للموظف الجديد وتنسحب من القديم
+        await _lock_to_claimer(channel, member, previous_id)
         await channel.send(f"🔁 {interaction.user.mention} حول التكت لـ {member.mention}.")
 
 
@@ -433,26 +458,23 @@ def setup_tickets(bot: commands.Bot) -> None:
         if not (_is_support(ctx.author) or ctx.author.guild_permissions.manage_channels):
             await ctx.send(f"{ctx.author.mention} ❌ ما عندك صلاحية ترسل بانل التكتات.", delete_after=8)
             return
-        embed = discord.Embed(
-            title="🎫 مركز الدعم",
-            description="اختر نوع طلبك من القائمة تحت وبيتفتح لك روم خاص مع فريق الدعم.",
-            color=discord.Color.blurple(),
-        )
+
         file = None
         if TICKET_PANEL_IMAGE:
             try:
                 file = discord.File(TICKET_PANEL_IMAGE, filename="panel.png")
-                embed.set_image(url="attachment://panel.png")
             except FileNotFoundError:
                 file = None
         try:
             await ctx.message.delete()
         except (discord.Forbidden, discord.NotFound):
             pass
+
+        # صورة + منيو بدون إمبيد (بدون قالب)
         if file:
-            await ctx.send(embed=embed, view=TicketPanelView(), file=file)
+            await ctx.send(file=file, view=TicketPanelView())
         else:
-            await ctx.send(embed=embed, view=TicketPanelView())
+            await ctx.send("🎫 اختر نوع التكت من القائمة:", view=TicketPanelView())
 
     async def _on_ready_tickets():
         bot.add_view(TicketPanelView())
