@@ -486,8 +486,11 @@ async def _remove_round_button(msg) -> None:
 
 async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 40),
                        allowed_ids: set | None = None, timeout: int = 45, reveal: str = "",
-                       game_key: str = "", starter=None, hint: str = ""):
-    """يبدأ جولة سؤال/جواب بالروم. أول رسالة تطابق checker تفوز."""
+                       game_key: str = "", starter=None, hint: str = "",
+                       react: bool = False, file: discord.File | None = None,
+                       image_url: str | None = None):
+    """يبدأ جولة سؤال/جواب بالروم. أول رسالة تطابق checker تفوز.
+    react: يحط ✅/❌ على إجابات اللاعبين. file/image_url: صورة خاصة بالسؤال (مثل العلم) بدل صورة اللعبة."""
     if channel.id in active_rounds or is_channel_busy(channel.id):
         busy_name = active_channel_games.get(channel.id, title)
         await channel.send(f"فيه **{busy_name}** شغالة بهذا الروم حاليًا، خلصوها الأول.")
@@ -495,11 +498,18 @@ async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 
     token = next(_round_id_counter)
     active_rounds[channel.id] = {
         "checker": checker, "reward": reward,
-        "allowed_ids": allowed_ids, "token": token, "reveal": reveal,
+        "allowed_ids": allowed_ids, "token": token, "reveal": reveal, "react": react,
     }
     mark_busy(channel.id, title)
     embed = discord.Embed(title=title, description=prompt, color=VIBE_COLOR)
-    image = attach_game_image(embed, game_key)
+    if file is not None:
+        embed.set_image(url=f"attachment://{file.filename}")
+        image = file
+    elif image_url:
+        embed.set_image(url=image_url)
+        image = None
+    else:
+        image = attach_game_image(embed, game_key)
     stop_view = StopRoundView(channel.id, token, starter, timeout, hint)
     if image:
         msg = await channel.send(embed=embed, file=image, view=stop_view)
@@ -856,6 +866,27 @@ async def correct_cmd(ctx: commands.Context):
                        reward=(20, 35), reveal=correct, hint=make_text_hint(correct))
 
 
+# ---------- اعلام: صورة العلم الحقيقية (من مجلد flags أو من flagcdn) ----------
+FLAGS_DIR = "flags"   # مجلد صور الأعلام بجنب bot.py (اسم كل صورة رمز الدولة، مثل sa.png)
+FLAGS_CDN = "https://flagcdn.com/w640/{code}.png"
+
+
+def flag_code(flag_emoji: str) -> str:
+    """يحوّل إيموجي العلم 🇸🇦 إلى رمز الدولة sa (الإيموجي ما يبان للاعب، نستخدمه بس لمعرفة الدولة)."""
+    return "".join(chr(ord(ch) - 0x1F1E6 + 97) for ch in flag_emoji if 0x1F1E6 <= ord(ch) <= 0x1F1FF)
+
+
+def flag_image(flag_emoji: str):
+    """يرجع (ملف الصورة, رابط الصورة): لو الصورة موجودة بمجلد flags نستخدمها، وإلا نستخدم رابط flagcdn."""
+    code = flag_code(flag_emoji)
+    if not code:
+        return None, None
+    path = os.path.join(FLAGS_DIR, f"{code}.png")
+    if os.path.exists(path):
+        return discord.File(path, filename=f"{code}.png"), None
+    return None, FLAGS_CDN.format(code=code)
+
+
 # ---------- اعلام: اختيار المستوى بالأزرار قبل بدء الجولة ----------
 class FlagLevelButton(discord.ui.Button):
     def __init__(self, tier: str):
@@ -870,7 +901,8 @@ class FlagLevelButton(discord.ui.Button):
         view.chosen = self.tier
         for c in view.children:
             c.disabled = True
-        await interaction.response.edit_message(content=f"المستوى المختار: **{self.tier}**", view=view)
+        view.embed.description = f"المستوى المختار: **{self.tier}**"
+        await interaction.response.edit_message(embed=view.embed, view=view)
         view.stop()
 
 
@@ -880,15 +912,17 @@ class FlagLevelView(discord.ui.View):
         self.author = author
         self.chosen: str | None = None
         self.message: discord.Message | None = None
+        self.embed: discord.Embed | None = None   # إطار اختيار المستوى (فيه صورة اللعبة)
         for tier in FLAG_TIERS:
             self.add_item(FlagLevelButton(tier))
 
     async def on_timeout(self):
         for c in self.children:
             c.disabled = True
-        if self.message is not None:
+        if self.message is not None and self.embed is not None:
+            self.embed.description = "انتهى الوقت، ما تم اختيار مستوى."
             try:
-                await self.message.edit(content="انتهى الوقت، ما تم اختيار مستوى.", view=self)
+                await self.message.edit(embed=self.embed, view=self)
             except (discord.NotFound, discord.HTTPException):
                 pass
 
@@ -902,7 +936,16 @@ async def flags_cmd(ctx: commands.Context):
     view = None
     try:
         view = FlagLevelView(ctx.author)
-        msg = await ctx.send(f"{ctx.author.mention} اختر مستوى الأعلام اللي يناسب خبرتك:", view=view)
+        embed = discord.Embed(
+            title="لعبة أعلام",
+            description=f"{ctx.author.mention} اختر مستوى الأعلام اللي يناسب خبرتك:",
+            color=VIBE_COLOR)
+        view.embed = embed
+        image = attach_game_image(embed, "اعلام")   # صورة اللعبة مع اختيار المستوى
+        if image:
+            msg = await ctx.send(embed=embed, file=image, view=view)
+        else:
+            msg = await ctx.send(embed=embed, view=view)
         view.message = msg
         cancel_event = track_game_message(ctx.channel.id, msg)
         done, pending = await asyncio.wait(
@@ -920,11 +963,12 @@ async def flags_cmd(ctx: commands.Context):
     tier = view.chosen
     info = FLAG_TIERS[tier]
     flag, names = random.choice(info["flags"])
+    file, url = flag_image(flag)   # صورة العلم الحقيقية
     await start_round(ctx.channel, starter=ctx.author, title=f"خمن الدولة — مستوى {tier}",
-                       prompt=f"وش هذي الدولة؟ {flag}",
+                       prompt="وش اسم هذي الدولة؟ اكتب اسمها بالشات.",
                        checker=lambda c: answer_matches(c, names),
-                       reward=info["reward"], reveal=names[0], timeout=60, game_key="اعلام",
-                       hint=make_text_hint(names[0]))
+                       reward=info["reward"], reveal=names[0], timeout=60,
+                       hint=make_text_hint(names[0]), react=True, file=file, image_url=url)
 
 
 @commands.command(name="ايموجي")
@@ -2177,7 +2221,7 @@ async def spin_and_choose(msg: discord.Message, players: list[discord.Member],
     """يدوّر عجلة دائرية فيها أسماء اللاعبين وصورهم وسهم ثابت، ويرجع اللاعب اللي وقف عليه السهم.
     العجلة تنرسم بعدد اللاعبين (من 2 لين 1000). الاختيار عشوائي 100%: ترتيب الأقسام على العجلة يتخربط كل مرة،
     والفايز يتحدد بعشوائية النظام، ومافيه أي أفضلية للمضيف أو لرقم المقعد.
-    لو Pillow مو متوفرة، يرجع لأسلوب العجلة النصية القديم."""
+    لو Pillow مو متوفرة، يرجع لأسلوب العجلة النصية القديمة."""
     if not players:
         return None
     rng = random.SystemRandom()
@@ -4013,6 +4057,11 @@ async def games_on_message(message: discord.Message):
             if is_correct and active_rounds.get(message.channel.id, {}).get("token") == round_info["token"]:
                 del active_rounds[message.channel.id]
                 unmark_busy(message.channel.id)
+                if round_info.get("react"):
+                    try:
+                        await message.add_reaction("✅")
+                    except discord.HTTPException:
+                        pass
                 lo, hi = round_info["reward"]
                 pts = random.randint(lo, hi)
                 actual = add_game_reward(message.guild.id, message.author.id, pts)
@@ -4022,6 +4071,13 @@ async def games_on_message(message: discord.Message):
                 capped = " (وصلت السقف اليومي)" if actual < pts else ""
                 await message.channel.send(f"{message.author.mention} جاوب صح!{extra} (+{actual} نقطة{capped})")
                 await _remove_round_button(round_info.get("msg"))
+            elif (not is_correct and round_info.get("react") and message.content.strip()
+                  and len(message.content.split()) <= 6 and not message.content.startswith(".")):
+                # إجابة غلط: ❌ (بس على الرسائل القصيرة عشان ما يتفاعل مع الكلام العادي بالشات)
+                try:
+                    await message.add_reaction("❌")
+                except discord.HTTPException:
+                    pass
 
 
 # ============================================================
