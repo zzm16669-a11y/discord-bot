@@ -5,27 +5,23 @@
   1) نظام التحذيرات (تحذير + أزرار أسباب)
   2) نظام الاقتصاد / النقاط (رصيد / نقاطي / يومي / تحويل)
   3) نظام الجولات العام (لألعاب "أول من يجاوب يفوز")
-  4) مركز الألعاب:
-       - ألعاب جماعية (تبدأ بلوبي 30 ثانية، فيها زر انضمام وزر خروج، حتى 20 لاعب)
-       - ألعاب فردية / تحدي مباشر
+  4) مركز الألعاب
   5) نظام الإدارة الكامل (أعضاء / رومات / صوت) — بدون بريفكس، حسب الرتب
   6) .العاب و .شرح <اسم اللعبة> و .اوامر
+  7) أوامر u / s / r / a / p بدون بريفكس (p = بطاقة البروفايل)
+  8) زينة البروفايل بالمتجر (تاج / قبعة / كاب / نظارة / هالة)
 
 ملاحظات مهمة قبل التشغيل:
-  - كل أوامر النقاط والألعاب تبدأ بعلامة "." (مثال: .روليت ، .نقاطي ، .العاب ، .اوامر).
-  - أوامر الإدارة تبقى بدون بريفكس زي ما كانت (تحذير ، برا ، سجن ... إلخ).
-  - الرتب صارت تتحدد بالآيدي (مو بالاسم) — لو غيّرت أسماء الرتب ما يتأثر شي.
-    الآيديات بقسم "11) نظام الإدارة الكامل" تحت.
-  - رتبتا "سجن" و"اخرس" (Jailed / Muted) تتحددان بالآيدي (JAIL_ROLE_ID / MUTE_ROLE_ID)
-    ولازم تكونان موجودتين بالسيرفر ومظبوطة صلاحياتهم يدويًا:
-        * Jailed  (احجب عنها كل الرومات إلا روم السجن)
-        * Muted   (احجب عنها إرسال الرسائل بكل الرومات)
-    البوت ما ينشئهم تلقائيًا؛ لو الآيدي غلط يرد برسالة تنبيه.
-
-  - بعض الألعاب (مثل "ادمج" و"ريبلكا") فيها تفسير مبسّط مني لأسمائها —
-    لو تقصد شكل مختلف قولي وأعدلها.
-
-  (ملاحظة: كود الألعاب انفصل عن هذا الملف وصار بملف لحاله: games_bot.py)
+  - أوامر الأعضاء (نقاط / ألعاب / متجر) تبدأ بعلامة "." (مثال: .نقاطي ، .متجر).
+  - أوامر u / s / r / a / p بدون أي بريفكس (اكتب  p  أو  p @عضو  ).
+  - أوامر الإدارة بدون بريفكس (تحذير ، برا ، سجن ... إلخ):
+        * ما عنده صلاحية  ← البوت يحط رياكشن ❌ بس (بدون رد)
+        * نفّذ الأمر     ← رياكشن ✅
+        * كتبه غلط       ← البوت يرد "استخدم الأمر بطريقة صحيحة" مع مثال
+  - ملف صورة البطاقة لازم يكون جنب الملف بهذا الاسم:  Dai.png  (غيّره من PROFILE_BG_PATH)
+  - مكتبات إضافية للنص العربي بالصورة (اختيارية بس مهمة):
+        pip install Pillow arabic-reshaper python-bidi
+  - رتبتا "سجن" و"اخرس" (Jailed / Muted) تتحددان بالآيدي (JAIL_ROLE_ID / MUTE_ROLE_ID).
 """
 
 import discord
@@ -50,6 +46,13 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
+try:
+    import arabic_reshaper
+    from bidi.algorithm import get_display
+    ARABIC_SHAPING_OK = True
+except ImportError:
+    ARABIC_SHAPING_OK = False
+
 load_dotenv()
 
 DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
@@ -66,6 +69,7 @@ ROLES_REMOVED_FILE = "removed_roles.json"
 GAME_STATS_FILE = "game_stats.json"
 SHOP_ACTIVE_FILE = "shop_active.json"
 AFK_FILE = "afk.json"
+PROFILE_ITEMS_FILE = "profile_items.json"
 
 JAIL_ROLE_ID = 1552237859740844095   # رتبة السجن (Jailed)
 MUTE_ROLE_ID = 1538669784395415552   # رتبة الإسكات (Muted)
@@ -75,9 +79,6 @@ WARN_LOG_CHANNEL_ID = 1547197859169042442
 # ============================================================
 # 0) نظام اللوقات العام (روومات تسجيل منفصلة لكل نوع حدث)
 # ============================================================
-# كل مفتاح له آيدي الروم (الأساسي). الأسماء تبقى احتياط لو الآيدي ما انلقى.
-# روم "ticket-logs" ما ضفناه لأنه مخصص لبوت ثاني، وروم "moderator-only" مخصص لتواصل الإدارة
-# يدويًا وما يحتاج البوت يرسل فيه شي تلقائي.
 LOG_CHANNEL_IDS = {
     "member": 1538326595994001448,
     "role": 1538326865469505576,
@@ -191,10 +192,6 @@ colors.setup_colors(bot)
 # ============================================================
 # فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
 # ============================================================
-# ديسكورد لما ترد على رسالة وتسوي "Reply" مع تفعيل التنبيه، يحط صاحب الرسالة
-# جوا message.mentions حتى لو ما كتبت @اسمه صراحة بالنص. هذا يخلي أوامر زي "تايم"
-# أو "برا" ممكن تنفذ غلط على شخص انت بس رادّ عليه بدون ما تقصد تنفذ فيه أمر.
-# الحل: نصفّي القائمة ونخلي فيها بس الأعضاء اللي فعليًا مكتوب @هم بنص الرسالة.
 EXPLICIT_MENTION_PATTERN = re.compile(r"<@!?(\d+)>")
 
 # رابط دعوة ديسكورد (نستخدمه لتنبيهات security-logs)
@@ -230,6 +227,23 @@ def load_json(path: str) -> dict:
 def save_json(path: str, data: dict) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ============================================================
+# أدوات الرياكشن + رسالة "استخدم الأمر بطريقة صحيحة"
+# ============================================================
+async def react(message: discord.Message, emoji: str) -> None:
+    """يحط رياكشن على رسالة الأمر (يتجاهل الأخطاء بصمت)."""
+    try:
+        await message.add_reaction(emoji)
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        pass
+
+
+async def usage_error(message: discord.Message, example: str) -> None:
+    """يرد على الإداري إن الأمر انكتب غلط ويعطيه مثال صحيح."""
+    await message.channel.send(
+        f"{message.author.mention} ⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`{example}`")
 
 
 # ============================================================
@@ -315,7 +329,6 @@ async def send_warn_log(guild: discord.Guild, target, moderator, reason, warn_nu
 
 
 # ---------- قائمة الأسباب (منيو منسدلة — تستخدم لأمر تحذير ولكل أوامر العقوبات) ----------
-# عدّل القائمة زي ما تبي. الايموجي اختياري (None = بدون ايموجي).
 REASON_BUTTONS = [
     ("🤬", "سب وشتم"), ("📢", "إزعاج"), ("🔁", "سبام"), ("🔗", "نشر روابط"), ("📣", "إعلان وترويج"),
     ("🔊", "إزعاج صوتي"), (None, "قلة احترام للإدارة"),
@@ -383,7 +396,7 @@ class CancelReasonButton(discord.ui.Button):
 
 
 class ReasonView(discord.ui.View):
-    """رسالة فيها أزرار أسباب (مثل أزرار الروليت)، بس الإداري اللي كتب الأمر يقدر يضغط."""
+    """رسالة فيها أزرار أسباب، بس الإداري اللي كتب الأمر يقدر يضغط."""
 
     def __init__(self, moderator: discord.Member, target, action_title: str, action_emoji: str):
         super().__init__(timeout=REASON_TIMEOUT)
@@ -468,22 +481,24 @@ WARN_COMMAND_PATTERN = re.compile(r"^تحذير(?:\s|$)")
 
 async def handle_warn_command(message: discord.Message):
     author = message.author
+
+    # ما عنده صلاحية ← رياكشن ❌ بس
     if not is_staff_member(author):
-        await message.channel.send(f"{author.mention} ❌ ما عندك صلاحية لهذا الأمر.")
+        await react(message, "❌")
         return
 
     if not message.mentions:
-        await message.channel.send(f"{author.mention} ⚠️ الصيغة: `تحذير @العضو` (وبعدها تختار السبب من الأزرار)")
+        await usage_error(message, "تحذير @العضو سبب")
         return
 
     target = message.mentions[0]
     if target.bot or target.id == author.id:
-        await message.channel.send(f"{author.mention} ⚠️ ما تقدر تحذر نفسك أو بوت.")
+        await react(message, "❌")
         return
 
     # تسلسل الرتب: ما تقدر تحذر عضو رتبته أعلى منك أو مساوية لك
     if not can_act_on(author, target):
-        await message.channel.send(f"{author.mention} {HIERARCHY_DENY_TEXT}")
+        await react(message, "❌")
         return
 
     typed = strip_mentions(message.content.strip()[len("تحذير"):], message.mentions)
@@ -493,14 +508,7 @@ async def handle_warn_command(message: discord.Message):
 
     warn_number = add_warn(message.guild.id, target.id, reason, author.id)
     await send_warn_log(message.guild, target, author, reason, warn_number, message.channel.name)
-    await message.channel.send(f"✅ تم تسجيل تحذير رقم **#{warn_number}** بحق {target.mention} — السبب: {reason}")
-
-
-@bot.command(name="تحذيراته", aliases=["تنبيهاته", "warns"])
-async def show_warns(ctx: commands.Context, member: discord.Member = None):
-    member = member or ctx.author
-    count = get_warn_count(ctx.guild.id, member.id)
-    await ctx.send(f"📋 لدى {member.mention} **{count}** تحذير/تحذيرات مسجلة.")
+    await react(message, "✅")
 
 
 # ============================================================
@@ -572,7 +580,6 @@ async def transfer_cmd(ctx: commands.Context, member: discord.Member, amount: in
 async def leaderboard_cmd(ctx: commands.Context):
     data = load_json(ECONOMY_FILE)
     guild_data = data.get(str(ctx.guild.id), {})
-    # نستبعد المفاتيح المساعدة (تواريخ اليومي/سقف الألعاب) ونخلي أرقام اليوزرات بس
     scores = []
     for key, value in guild_data.items():
         if key.isdigit() and isinstance(value, int):
@@ -608,14 +615,13 @@ async def game_log_cmd(ctx: commands.Context, member: discord.Member = None):
     )
 
 
-
 @bot.command(name="اصدار")
 async def mint_points_cmd(ctx: commands.Context, amount: int):
     """يضيف نقاط من العدم لرصيد صاحب الأمر — بس لصاحب رول Owner / founder أو مالك السيرفر."""
     has_owner_role = isinstance(ctx.author, discord.Member) and has_role(ctx.author, [OWNER, FOUNDER])
     is_guild_owner = ctx.guild is not None and ctx.author.id == ctx.guild.owner_id
     if not (has_owner_role or is_guild_owner):
-        await ctx.send(f"{ctx.author.mention} ❌ ما عندك الصلاحية.")
+        await react(ctx.message, "❌")
         return
     if amount <= 0:
         await ctx.send("⚠️ المبلغ لازم يكون أكبر من صفر.")
@@ -661,8 +667,6 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
 # ============================================================
 # 10) .اوامر
 # ============================================================
-# قائمة الأوامر: Embed بنفس قالب الـ AFK + أزرار أقسام. الرد يطلع مخفي (ephemeral) لمن يضغط الزر،
-# وقسم الإدارة ما يشوفه إلا اللي معه رتبة إدارة (Trial Moderator وفوق) أو مالك السيرفر.
 HELP_PUBLIC_SECTIONS = {
     "points": ("⭐ النقاط والاقتصاد", [
         "`.رصيد [@عضو]` — تشوف رصيدك أو رصيد عضو ثاني.",
@@ -673,25 +677,27 @@ HELP_PUBLIC_SECTIONS = {
         "`.سجلي [@عضو]` — عدد مرات الفوز والخسارة بالألعاب.",
         "`.متجر` — تشوف الأشياء المتوفرة بالمتجر.",
         "`.شراء <العنصر>` — تشتري شي من المتجر بنقاطك.",
+        "`.لبس <العنصر>` — تلبس زينة اشتريتها على بطاقتك (تاج / قبعة / كاب / نظارة / هالة).",
+        "`.خلع` — تخلع كل الزينة اللي لابسها.",
     ]),
     "games": ("🎮 الألعاب", [
         "`.العاب` — قائمة كل الألعاب (الجماعية والفردية).",
         "`.شرح اسم_اللعبة` — شرح أي لعبة بالتفصيل.",
     ]),
-    "info": ("🔎 معلومات", [
-        "`.u [@عضو]` — معلومات الحساب.",
-        "`.s` — معلومات السيرفر.",
-        "`.r` — رتب السيرفر.",
-        "`.a [@عضو]` — صورة الحساب (الافتار).",
+    "info": ("🔎 معلومات (بدون نقطة)", [
+        "`p [@عضو]` — بطاقة البروفايل: الصورة + فلوس البنك + النقاط + الزينة.",
+        "`u [@عضو]` — معلومات الحساب.",
+        "`s` — معلومات السيرفر.",
+        "`r` — رتب السيرفر.",
+        "`a [@عضو]` — صورة الحساب (الافتار).",
     ]),
     "general": ("ℹ️ عام", [
-        "`.تحذيراته [@عضو]` — تشوف عدد التحذيرات المسجلة على عضو (أو عليك).",
         "`.قول <النص>` — يحذف رسالتك والبوت يكتب النص عنك.",
+        "`.afk <السبب>` — تفعّل وضع AFK.",
         "`.اوامر` — تعرض هذي القائمة.",
     ]),
 }
 
-# (المفتاح, النص, الايموجي, لون الزر)
 HELP_BUTTONS = [
     ("points", "النقاط", "⭐", discord.ButtonStyle.secondary),
     ("games", "الألعاب", "🎮", discord.ButtonStyle.secondary),
@@ -702,7 +708,6 @@ HELP_BUTTONS = [
 
 
 def _help_embed(title: str, description: str, user) -> discord.Embed:
-    """نفس قالب رسالة AFK: عنوان + وصف + صورة جنب + فوتر."""
     embed = discord.Embed(title=title, description=description, color=discord.Color.blurple())
     if bot.user is not None:
         embed.set_thumbnail(url=bot.user.display_avatar.url)
@@ -755,7 +760,7 @@ class HelpView(discord.ui.View):
 async def commands_list_cmd(ctx: commands.Context):
     embed = _help_embed(
         "📋 قائمة الأوامر",
-        "أوامر الأعضاء كلها تبدأ بـ `.`\n"
+        "أوامر الأعضاء تبدأ بـ `.` ما عدا أوامر المعلومات (`p` `u` `s` `r` `a`) فهي بدون نقطة.\n"
         "اضغط على القسم اللي تبيه من الأزرار تحت وتطلع لك أوامره.\n\n"
         "🛡️ قسم الإدارة يشوفه بس أصحاب رتب الإدارة",
         ctx.author)
@@ -770,21 +775,17 @@ SAY_COMMAND_PATTERN = re.compile(r"^\.قول\s+\S")
 @bot.command(name="قول")
 async def say_cmd(ctx: commands.Context, *, text: str = None):
     if not text or not text.strip():
-        await ctx.send("⚠️ الصيغة: `.قول النص اللي تبيه`")
+        await ctx.send("⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.قول النص اللي تبيه`")
         return
-    # عشان ما أحد يستغل البوت يتجاوز حماية الروابط
     if ctx.guild is not None and message_has_blocked_link(text) and not is_link_exempt(ctx.author):
         await ctx.send(f"{ctx.author.mention} ❌ ما أقدر أرسل روابط.")
         return
-    # (حذف رسالة صاحب الأمر يتم بأول on_message عشان يختفي بأسرع وقت)
-    # بدون منشنات (ما يمشي @everyone ولا @here ولا منشن رتب/أعضاء)
     await ctx.send(text, allowed_mentions=discord.AllowedMentions.none())
 
 
 # ============================================================
 # 11) نظام الإدارة الكامل — بدون بريفكس، حسب الرتب
 # ============================================================
-# الرتب تتحدد بالآيدي (مو بالاسم) — لو غيّرت اسم رتبة بالسيرفر ما يتأثر شي.
 FOUNDER = 1557117850508992552
 OWNER = 1524910780875673652
 CO_OWNER = 1524916030718214325
@@ -798,7 +799,6 @@ TRIAL_MOD = 1548014045825863750
 SUPPORT = 1544184383626281030
 STAFF = 1545041865869365309
 
-# أسماء العرض (تنكتب بقوائم الأوامر الإدارية فقط، مو للمقارنة)
 ROLE_LABELS = {
     FOUNDER: "founder",
     OWNER: "Owner",
@@ -814,7 +814,6 @@ ROLE_LABELS = {
     STAFF: "staff",
 }
 
-# الترتيب من الأدنى للأعلى — الـ founder فوق الـ Owner وله كل صلاحياته
 TOP_ROLES = [VICE_OWNER, CO_OWNER, OWNER, FOUNDER]
 ADMIN_ROLES = [ADMIN] + TOP_ROLES
 MANAGEMENT_ROLES = [MANAGEMENT] + ADMIN_ROLES
@@ -828,9 +827,6 @@ def has_role(member: discord.Member, allowed: list[int]) -> bool:
     return any(rid in ids for rid in allowed)
 
 
-# ---------- تسلسل الرتب (ما أحد ينفذ أمر على عضو رتبته أعلى منه أو مساوية له) ----------
-# الترتيب من الأدنى للأعلى هو نفس ترتيب TRIAL_ROLES:
-# Trial Moderator ➜ Moderator ➜ Head Moderator ➜ Management ➜ Admin ➜ Vice Owner ➜ Co-Owner ➜ Owner ➜ founder
 HIERARCHY_DENY_TEXT = "❌ ما تقدر تنفذ هذا الأمر على عضو رتبته أعلى منك أو مساوية لرتبتك."
 
 
@@ -845,7 +841,6 @@ def get_rank(member) -> int:
     for i, role_id in enumerate(TRIAL_ROLES):
         if role_id in ids:
             rank = max(rank, i)
-    # صاحب صلاحية Administrator بدون رتبة إدارة من القائمة نعتبره بمستوى Admin
     if rank < 0 and member.guild_permissions.administrator:
         rank = TRIAL_ROLES.index(ADMIN)
     return rank
@@ -877,7 +872,7 @@ def parse_duration(text: str) -> timedelta:
         return timedelta(days=value)
     if unit == "s":
         return timedelta(seconds=value)
-    return timedelta(minutes=value)  # افتراضي دقائق (m أو د أو بدون وحدة)
+    return timedelta(minutes=value)
 
 
 async def ensure_role(guild: discord.Guild, name: str) -> discord.Role:
@@ -891,56 +886,65 @@ async def reply(message: discord.Message, text: str):
     await message.channel.send(text)
 
 
+# ------------------------------------------------------------
+# كل دالة أمر إداري ترجع:
+#   True  ← نجح الأمر      (رياكشن ✅)
+#   False ← فشل الأمر      (رياكشن ❌)
+#   None  ← ما يحتاج رياكشن (كتب الأمر غلط / ألغى / انمسحت رسالة الأمر)
+# ------------------------------------------------------------
+
 # ---------- إدارة الأعضاء ----------
-# ملاحظة: أوامر العقوبات (برا / ترحيل / تايم / اخرس / سجن / تنزيل / اصمت / بره / اطلع)
-# لو ما كتبت فيها سبب، البوت يطلع لك أزرار أسباب تختار منها (ولو كتبت السبب ينفذ مباشرة).
 async def cmd_ban(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `برا @العضو السبب`")
-        return
+        await usage_error(message, "برا @العضو سبب")
+        return None
     target = message.mentions[0]
     reason = await get_reason(message, args, target, "حظر", "🔨")
     if reason is None:
-        return
+        return None
     try:
         await target.ban(reason=reason)
-        await reply(message, f"🔨 تم حظر {target.mention} — السبب: {reason}")
+        return True
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أحظر هذا العضو (صلاحياتي أقل من رتبته).")
+        return False
 
 
 async def cmd_unban(message: discord.Message, args: str):
     arg = args.strip()
     if not arg.isdigit():
-        await reply(message, "⚠️ الصيغة: `سماح <آيدي العضو>` (لازم الآيدي رقمي لأن العضو مو بالسيرفر)")
-        return
+        await usage_error(message, "سماح 123456789012345678")
+        return None
     try:
         user = discord.Object(id=int(arg))
         await message.guild.unban(user, reason=f"بواسطة {message.author}")
-        await reply(message, f"✅ تم فك الحظر عن المستخدم `{arg}`")
+        return True
     except discord.NotFound:
         await reply(message, "❌ ما فيه حظر بهذا الآيدي.")
+        return False
 
 
 async def cmd_kick(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `ترحيل @العضو السبب`")
-        return
+        await usage_error(message, "ترحيل @العضو سبب")
+        return None
     target = message.mentions[0]
     reason = await get_reason(message, args, target, "طرد", "👢")
     if reason is None:
-        return
+        return None
     try:
         await target.kick(reason=reason)
-        await reply(message, f"👢 تم طرد {target.mention} — السبب: {reason}")
         await log_mod_action(message.guild, "👢 طرد عضو", message.author, target, reason)
+        return True
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أطرد هذا العضو.")
+        return False
+
 
 async def cmd_timeout(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `تايم @العضو 10m السبب` (افتراضي 10 دقائق)")
-        return
+        await usage_error(message, "تايم @العضو 10m سبب")
+        return None
     target = message.mentions[0]
     remainder = strip_mentions(args, message.mentions)
     tokens = remainder.split()
@@ -952,67 +956,68 @@ async def cmd_timeout(message: discord.Message, args: str):
         typed_reason = remainder
     reason = typed_reason or await ask_reason(message, target, "تايم", "⏱️")
     if reason is None:
-        return
+        return None
     try:
         await target.timeout(discord.utils.utcnow() + duration, reason=reason)
-        await reply(message, f"⏱️ تم إعطاء {target.mention} تايم لمدة {duration} — السبب: {reason}")
         await log_mod_action(message.guild, "⏱️ تايم (كتم مؤقت)", message.author, target, reason,
                               {"المدة": str(duration)})
+        return True
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أعطي هذا العضو تايم.")
+        return False
 
 
 async def cmd_untimeout(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `تحرير @العضو`")
-        return
+        await usage_error(message, "تحرير @العضو")
+        return None
     target = message.mentions[0]
     await target.timeout(None, reason=f"بواسطة {message.author}")
-    await reply(message, f"✅ تم فك التايم عن {target.mention}")
     await log_mod_action(message.guild, "✅ فك تايم", message.author, target)
+    return True
 
 
 async def cmd_textmute(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `اخرس @العضو`")
-        return
+        await usage_error(message, "اخرس @العضو سبب")
+        return None
     target = message.mentions[0]
     reason = await get_reason(message, args, target, "إسكات بالشات", "🔇")
     if reason is None:
-        return
+        return None
     role = message.guild.get_role(MUTE_ROLE_ID)
     if role is None:
         await reply(message, "❌ رتبة الإسكات (Muted) مو موجودة بالسيرفر — تأكد من الآيدي بالكود.")
-        return
+        return False
     await target.add_roles(role, reason=f"بواسطة {message.author} — {reason}")
-    await reply(message, f"🔇 تم إسكات {target.mention} بالشات — السبب: {reason}")
     await log_mod_action(message.guild, "🔇 إسكات بالشات", message.author, target, reason)
+    return True
 
 
 async def cmd_textunmute(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `تكلم @العضو`")
-        return
+        await usage_error(message, "تكلم @العضو")
+        return None
     target = message.mentions[0]
     role = message.guild.get_role(MUTE_ROLE_ID)
     if role and role in target.roles:
         await target.remove_roles(role, reason=f"بواسطة {message.author}")
-    await reply(message, f"🔊 تم فك الإسكات عن {target.mention}")
     await log_mod_action(message.guild, "🔊 فك إسكات بالشات", message.author, target)
+    return True
 
 
 async def cmd_jail(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `سجن @العضو`")
-        return
+        await usage_error(message, "سجن @العضو سبب")
+        return None
     target = message.mentions[0]
     reason = await get_reason(message, args, target, "سجن", "🔒")
     if reason is None:
-        return
+        return None
     jail_role = message.guild.get_role(JAIL_ROLE_ID)
     if jail_role is None:
         await reply(message, "❌ رتبة السجن (Jailed) مو موجودة بالسيرفر — تأكد من الآيدي بالكود.")
-        return
+        return False
 
     keep_roles = [r for r in target.roles if r.name != "@everyone"]
     data = load_json(JAIL_FILE)
@@ -1024,16 +1029,17 @@ async def cmd_jail(message: discord.Message, args: str):
     try:
         await target.remove_roles(*keep_roles, reason="سجن")
         await target.add_roles(jail_role, reason=f"سجن بواسطة {message.author} — {reason}")
-        await reply(message, f"🔒 تم سجن {target.mention} — السبب: {reason}")
         await log_mod_action(message.guild, "🔒 سجن عضو", message.author, target, reason)
+        return True
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أسجن هذا العضو.")
+        return False
 
 
 async def cmd_unjail(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `فك @العضو`")
-        return
+        await usage_error(message, "فك @العضو")
+        return None
     target = message.mentions[0]
     data = load_json(JAIL_FILE)
     gid, mid = str(message.guild.id), str(target.id)
@@ -1047,77 +1053,24 @@ async def cmd_unjail(message: discord.Message, args: str):
         await target.add_roles(*roles, reason="فك السجن — استرجاع الرتب")
         data[gid].pop(mid, None)
         save_json(JAIL_FILE, data)
-    await reply(message, f"🔓 تم فك السجن عن {target.mention}")
+    return True
 
 
 async def cmd_nick(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `لقب @العضو [الاسم_الجديد]` (بدون اسم يرجع اسمه الأصلي)")
-        return
+        await usage_error(message, "لقب @العضو الاسم_الجديد")
+        return None
     target = message.mentions[0]
     new_nick = strip_mentions(args, message.mentions)
-    if not new_nick:
-        # بدون اسم جديد: نشيل اللقب ويرجع اسمه الأصلي
-        try:
-            await target.edit(nick=None, reason=f"بواسطة {message.author} — إرجاع الاسم الأصلي")
-            await reply(message, f"✏️ تم إرجاع اسم {target.mention} الأصلي.")
-        except discord.Forbidden:
-            await reply(message, "❌ ما أقدر أغيّر لقب هذا العضو.")
-        return
     try:
-        await target.edit(nick=new_nick, reason=f"بواسطة {message.author}")
-        await reply(message, f"✏️ تم تغيير لقب {target.mention} إلى **{new_nick}**")
+        if not new_nick:
+            await target.edit(nick=None, reason=f"بواسطة {message.author} — إرجاع الاسم الأصلي")
+        else:
+            await target.edit(nick=new_nick, reason=f"بواسطة {message.author}")
+        return True
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أغيّر لقب هذا العضو.")
-
-
-async def cmd_remove_role(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `تنزيل @العضو اسم الرتبة` (اكتب اسم الرتبة بدون @ عشان ما ينزعج أصحابها)")
-        return
-    target = message.mentions[0]
-    if message.role_mentions:
-        role = message.role_mentions[0]
-    else:
-        role_text = strip_mentions(args, message.mentions)
-        role = find_role_from_text(message.guild, role_text)
-        if role is None:
-            await reply(message, "⚠️ ما لقيت رتبة بهذا الاسم — اكتب اسمها بالضبط أو الآيدي.")
-            return
-    if role not in target.roles:
-        await reply(message, f"⚠️ {target.mention} أصلًا ما عنده رتبة {role.name}")
-        return
-    # اسم الرتبة ياخذ نص الأمر كله، فالسبب دايمًا من الأزرار
-    reason = await ask_reason(message, target, f"سحب رتبة {role.name}", "📤")
-    if reason is None:
-        return
-    await target.remove_roles(role, reason=f"بواسطة {message.author} — {reason}")
-    data = load_json(ROLES_REMOVED_FILE)
-    gid, mid = str(message.guild.id), str(target.id)
-    data.setdefault(gid, {})
-    data[gid][mid] = role.id
-    save_json(ROLES_REMOVED_FILE, data)
-    await reply(message, f"📤 تم سحب رتبة {role.name} من {target.mention} — السبب: {reason}")
-    await log_mod_action(message.guild, "📤 سحب رتبة", message.author, target, reason, {"الرتبة": role.name})
-
-
-async def cmd_restore_role(message: discord.Message, args: str):
-    if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `رجع @العضو`")
-        return
-    target = message.mentions[0]
-    data = load_json(ROLES_REMOVED_FILE)
-    gid, mid = str(message.guild.id), str(target.id)
-    role_id = data.get(gid, {}).get(mid)
-    if not role_id:
-        await reply(message, f"⚠️ ما فيه رتبة محفوظة نرجعها لـ {target.mention}")
-        return
-    role = message.guild.get_role(role_id)
-    if role:
-        await target.add_roles(role, reason=f"بواسطة {message.author}")
-        data[gid].pop(mid, None)
-        save_json(ROLES_REMOVED_FILE, data)
-        await reply(message, f"📥 تم إرجاع رتبة {role.name} لـ {target.mention}")
+        return False
 
 
 def find_role_from_text(guild: discord.Guild, text: str) -> discord.Role | None:
@@ -1139,10 +1092,10 @@ def find_role_from_text(guild: discord.Guild, text: str) -> discord.Role | None:
     return None
 
 
-async def cmd_give_role(message: discord.Message, args: str):
+async def cmd_remove_role(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `رول @العضو اسم الرتبة` (اكتب اسم الرتبة بدون @ عشان ما ينزعج أصحابها)")
-        return
+        await usage_error(message, "تنزيل @العضو اسم الرتبة")
+        return None
     target = message.mentions[0]
     if message.role_mentions:
         role = message.role_mentions[0]
@@ -1150,212 +1103,256 @@ async def cmd_give_role(message: discord.Message, args: str):
         role_text = strip_mentions(args, message.mentions)
         role = find_role_from_text(message.guild, role_text)
         if role is None:
-            await reply(message, "⚠️ ما لقيت رتبة بهذا الاسم — اكتب اسمها بالضبط أو الآيدي.")
-            return
+            await usage_error(message, "تنزيل @العضو اسم الرتبة")
+            return None
+    if role not in target.roles:
+        await reply(message, f"⚠️ {target.mention} أصلًا ما عنده رتبة {role.name}")
+        return False
+    reason = await ask_reason(message, target, f"سحب رتبة {role.name}", "📤")
+    if reason is None:
+        return None
+    await target.remove_roles(role, reason=f"بواسطة {message.author} — {reason}")
+    data = load_json(ROLES_REMOVED_FILE)
+    gid, mid = str(message.guild.id), str(target.id)
+    data.setdefault(gid, {})
+    data[gid][mid] = role.id
+    save_json(ROLES_REMOVED_FILE, data)
+    await log_mod_action(message.guild, "📤 سحب رتبة", message.author, target, reason, {"الرتبة": role.name})
+    return True
+
+
+async def cmd_restore_role(message: discord.Message, args: str):
+    if not message.mentions:
+        await usage_error(message, "رجع @العضو")
+        return None
+    target = message.mentions[0]
+    data = load_json(ROLES_REMOVED_FILE)
+    gid, mid = str(message.guild.id), str(target.id)
+    role_id = data.get(gid, {}).get(mid)
+    if not role_id:
+        await reply(message, f"⚠️ ما فيه رتبة محفوظة نرجعها لـ {target.mention}")
+        return False
+    role = message.guild.get_role(role_id)
+    if role:
+        await target.add_roles(role, reason=f"بواسطة {message.author}")
+        data[gid].pop(mid, None)
+        save_json(ROLES_REMOVED_FILE, data)
+        return True
+    return False
+
+
+async def cmd_give_role(message: discord.Message, args: str):
+    if not message.mentions:
+        await usage_error(message, "رول @العضو اسم الرتبة")
+        return None
+    target = message.mentions[0]
+    if message.role_mentions:
+        role = message.role_mentions[0]
+    else:
+        role_text = strip_mentions(args, message.mentions)
+        role = find_role_from_text(message.guild, role_text)
+        if role is None:
+            await usage_error(message, "رول @العضو اسم الرتبة")
+            return None
     author = message.author
-    if role.is_default():
-        await reply(message, "❌ هذي الرتبة ما تنعطى.")
-        return
-    if role in target.roles:
-        await reply(message, f"⚠️ {target.mention} عنده رتبة {role.name} أصلًا")
-        return
-    # ما أحد يعطي رتبة أعلى من رتبته أو مساوية لها (إلا مالك السيرفر)
+    if role.is_default() or role in target.roles:
+        return False
     if author.id != message.guild.owner_id and role >= author.top_role:
-        await reply(message, "❌ ما تقدر تعطي رتبة أعلى من رتبتك أو مساوية لها.")
-        return
+        return False
     try:
         await target.add_roles(role, reason=f"بواسطة {author}")
-        await reply(message, f"📥 تم إعطاء {target.mention} رتبة {role.name}")
+        return True
     except discord.Forbidden:
         await reply(message, "❌ ما أقدر أعطي هذي الرتبة (رتبتي أقل منها).")
+        return False
 
 
 # ---------- إدارة الرومات ----------
 async def cmd_purge(message: discord.Message, args: str):
     amount_text = args.strip().split()[0] if args.strip() else "50"
-    amount = int(amount_text) if amount_text.isdigit() else 50
-    amount = min(amount, 200)
+    if not amount_text.isdigit():
+        await usage_error(message, "مسح 50")
+        return None
+    amount = min(int(amount_text), 200)
     try:
-        await message.delete()  # يحذف رسالة الأمر نفسها
+        await message.delete()
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         pass
     deleted = await message.channel.purge(limit=amount, before=message)
     await message.channel.send(f"🧹 تم حذف {len(deleted)} رسالة.", delete_after=7)
     await log_mod_action(message.guild, "🧹 مسح جماعي", message.author, None, None,
                           {"العدد": str(len(deleted)), "الروم": message.channel.mention})
+    return None  # رسالة الأمر انحذفت، ما نقدر نحط رياكشن
 
 
 async def cmd_lock(message: discord.Message, args: str):
     overwrite = message.channel.overwrites_for(message.guild.default_role)
     overwrite.send_messages = False
     await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-    await message.channel.send("🔒 تم قفل الروم.")
+    return True
 
 
 async def cmd_unlock(message: discord.Message, args: str):
     overwrite = message.channel.overwrites_for(message.guild.default_role)
     overwrite.send_messages = None
     await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-    await message.channel.send("🔓 تم فتح الروم.")
+    return True
 
 
 async def cmd_hide(message: discord.Message, args: str):
     overwrite = message.channel.overwrites_for(message.guild.default_role)
     overwrite.view_channel = False
     await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-    await message.channel.send("🙈 تم إخفاء الروم.")
+    return True
 
 
 async def cmd_show(message: discord.Message, args: str):
     overwrite = message.channel.overwrites_for(message.guild.default_role)
     overwrite.view_channel = None
     await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-    await message.channel.send("👁️ تم إظهار الروم.")
+    return True
 
 
 # ---------- إدارة الصوت ----------
 async def cmd_vc_kick(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `بره @العضو`")
-        return
+        await usage_error(message, "بره @العضو سبب")
+        return None
     target = message.mentions[0]
-    if target.voice and target.voice.channel:
-        reason = await get_reason(message, args, target, "إخراج من الروم الصوتي", "👋")
-        if reason is None:
-            return
-        await target.move_to(None, reason=f"بواسطة {message.author} — {reason}")
-        await reply(message, f"👋 تم إخراج {target.mention} من الروم الصوتي — السبب: {reason}")
-        await log_mod_action(message.guild, "👋 إخراج من الروم الصوتي", message.author, target, reason)
-    else:
+    if not (target.voice and target.voice.channel):
         await reply(message, "⚠️ العضو مو بروم صوتي.")
+        return False
+    reason = await get_reason(message, args, target, "إخراج من الروم الصوتي", "👋")
+    if reason is None:
+        return None
+    await target.move_to(None, reason=f"بواسطة {message.author} — {reason}")
+    await log_mod_action(message.guild, "👋 إخراج من الروم الصوتي", message.author, target, reason)
+    return True
 
 
 async def cmd_vc_mute(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `اصمت @العضو`")
-        return
+        await usage_error(message, "اصمت @العضو سبب")
+        return None
     target = message.mentions[0]
     reason = await get_reason(message, args, target, "إسكات صوتي", "🔇")
     if reason is None:
-        return
+        return None
     await target.edit(mute=True, reason=f"بواسطة {message.author} — {reason}")
-    await reply(message, f"🔇 تم إسكات {target.mention} صوتيًا — السبب: {reason}")
     await log_mod_action(message.guild, "🔇 إسكات صوتي", message.author, target, reason)
+    return True
 
 
 async def cmd_vc_unmute(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `انطق @العضو`")
-        return
+        await usage_error(message, "انطق @العضو")
+        return None
     target = message.mentions[0]
     await target.edit(mute=False, reason=f"بواسطة {message.author}")
-    await reply(message, f"🔊 تم فك الإسكات الصوتي عن {target.mention}.")
+    return True
 
 
 async def cmd_vc_pull(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `اسحب @العضو` (وأنت داخل روم صوتي)")
-        return
+        await usage_error(message, "اسحب @العضو")
+        return None
     if not (message.author.voice and message.author.voice.channel):
         await reply(message, "⚠️ لازم تكون داخل روم صوتي عشان تسحب له أحد.")
-        return
+        return False
     target = message.mentions[0]
     if target.voice:
         await target.move_to(message.author.voice.channel, reason=f"بواسطة {message.author}")
-        await reply(message, f"📥 تم سحب {target.mention} لروم {message.author.voice.channel.name}")
-    else:
-        await reply(message, "⚠️ العضو مو داخل أي روم صوتي حاليًا.")
+        return True
+    await reply(message, "⚠️ العضو مو داخل أي روم صوتي حاليًا.")
+    return False
 
 
 async def cmd_vc_gather(message: discord.Message, args: str):
     if not (message.author.voice and message.author.voice.channel):
         await reply(message, "⚠️ لازم تكون داخل روم صوتي عشان تجمع الكل عندك.")
-        return
+        return False
     destination = message.author.voice.channel
-    count = 0
     for vc in message.guild.voice_channels:
         if vc.id == destination.id:
             continue
         for member in list(vc.members):
             await member.move_to(destination, reason=f"تجميع بواسطة {message.author}")
-            count += 1
-    await reply(message, f"📦 تم جمع {count} عضو داخل {destination.name}")
+    return True
 
 
 async def cmd_vc_comehere(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `تعال @العضو`")
-        return
+        await usage_error(message, "تعال @العضو")
+        return None
     target = message.mentions[0]
-    if not (message.author.voice):
+    if not message.author.voice:
         await reply(message, "⚠️ لازم تكون بروم صوتي عشان يسحبك البوت... انتقل يدويًا.")
-        return
+        return False
     if target.voice and target.voice.channel:
         await message.author.move_to(target.voice.channel, reason="تعال")
-        await reply(message, f"➡️ تم نقلك لروم {target.voice.channel.name}")
-    else:
-        await reply(message, "⚠️ هذا العضو مو داخل روم صوتي.")
+        return True
+    await reply(message, "⚠️ هذا العضو مو داخل روم صوتي.")
+    return False
 
 
 async def cmd_vc_kicklock(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `اطلع @العضو`")
-        return
+        await usage_error(message, "اطلع @العضو سبب")
+        return None
     target = message.mentions[0]
     if not (target.voice and target.voice.channel):
         await reply(message, "⚠️ العضو مو داخل روم صوتي.")
-        return
+        return False
     channel = target.voice.channel
     reason = await get_reason(message, args, target, "طرد من الصوت وقفل الروم", "🚫")
     if reason is None:
-        return
+        return None
     await target.move_to(None, reason=f"بواسطة {message.author} — {reason}")
     overwrite = channel.overwrites_for(message.guild.default_role)
     overwrite.connect = False
     await channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-    await reply(message, f"🚫 تم طرد {target.mention} وقفل روم {channel.name} — السبب: {reason}")
     await log_mod_action(message.guild, "🚫 طرد من الصوت وقفل الروم", message.author, target, reason,
                           {"الروم": channel.name})
+    return True
 
 
 async def cmd_vc_open(message: discord.Message, args: str):
     """فتح_صوتي ← يفتح الروم الصوتي اللي أنت فيه (يشيل القفل اللي حطه أمر اطلع)."""
     if not (message.author.voice and message.author.voice.channel):
         await reply(message, "⚠️ لازم تكون داخل الروم الصوتي عشان تفتحه.")
-        return
+        return False
     channel = message.author.voice.channel
     overwrite = channel.overwrites_for(message.guild.default_role)
-    overwrite.connect = None  # يرجع للوضع الافتراضي (يشيل المنع)
+    overwrite.connect = None
     await channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-    await reply(message, f"🔓 تم فتح روم {channel.name} للكل.")
     await log_mod_action(message.guild, "🔓 فتح روم صوتي", message.author, None, None,
                           {"الروم": channel.name})
+    return True
 
 
 async def cmd_vc_allow(message: discord.Message, args: str):
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `مسموح @العضو` (وأنت داخل الروم الصوتي)")
-        return
+        await usage_error(message, "مسموح @العضو")
+        return None
     if not (message.author.voice and message.author.voice.channel):
         await reply(message, "⚠️ لازم تكون داخل الروم الصوتي المقفول عشان تسمح لأحد.")
-        return
+        return False
     target = message.mentions[0]
     channel = message.author.voice.channel
     overwrite = channel.overwrites_for(target)
     overwrite.connect = True
     await channel.set_permissions(target, overwrite=overwrite)
-    await reply(message, f"✅ تم السماح لـ {target.mention} بدخول {channel.name}")
+    return True
 
 
 async def cmd_remove_warn(message: discord.Message, args: str):
     """شيل تحذير @عضو  ← يشيل آخر تحذير | شيل تحذير @عضو الكل  ← يشيل كل تحذيراته."""
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `شيل تحذير @العضو` (يشيل آخر تحذير) أو `شيل تحذير @العضو الكل`")
-        return
+        await usage_error(message, "شيل تحذير @العضو")
+        return None
     target = message.mentions[0]
     if target.id == message.author.id:
-        await reply(message, f"{message.author.mention} ⚠️ ما تقدر تشيل تحذير عن نفسك.")
-        return
+        return False
     remove_all = strip_mentions(args, message.mentions).strip() in ("الكل", "كل", "all")
 
     data = load_json(WARNS_FILE)
@@ -1363,22 +1360,18 @@ async def cmd_remove_warn(message: discord.Message, args: str):
     user_warns = data.get(gid, {}).get(mid, [])
     if not user_warns:
         await reply(message, f"⚠️ {target.mention} ما عليه أي تحذير.")
-        return
+        return False
 
     if remove_all:
-        removed_count = len(user_warns)
         data[gid][mid] = []
-        text = f"✅ تم حذف كل تحذيرات {target.mention} (**{removed_count}**)."
     else:
-        removed = user_warns.pop()
+        user_warns.pop()
         data[gid][mid] = user_warns
-        text = (f"✅ تم حذف التحذير رقم **#{removed.get('number', len(user_warns) + 1)}** عن {target.mention}"
-                f" — باقي عليه **{len(user_warns)}** تحذير.")
     save_json(WARNS_FILE, data)
-    await reply(message, text)
     await log_mod_action(message.guild, "🧹 إزالة تحذير", message.author, target,
                          extra={"المحذوف": "الكل" if remove_all else "آخر تحذير",
                                 "المتبقي": len(data[gid][mid])})
+    return True
 
 
 # ---------- جدول الأوامر الإدارية ----------
@@ -1422,17 +1415,13 @@ ADMIN_COMMANDS = {
     "فتح_صوتي": (ADMIN_ROLES, cmd_vc_open),
 }
 
-# الأوامر اللي تنفذ على عضو (منشن) — لازم رتبة المنفّذ تكون أعلى من رتبة العضو (تسلسل الرتب).
-# ما دخلنا: سماح (آيدي مو منشن) / رول (له شرط رتبه الخاص) / تعال و كم هير بيبي (انتقال لعندك مو عقوبة).
 HIERARCHY_TRIGGERS = {
     "برا", "ترحيل", "كيك", "تايم", "اص", "تحرير", "اخرس", "تكلم", "سجن", "فك",
     "لقب", "اسم", "تنزيل", "رجع", "شيل تحذير",
     "بره", "اصمت", "انطق", "اسحب", "اطلع", "مسموح",
 }
-# أوامر يسمح فيها المنفّذ يطبقها على نفسه (تغيير لقبك)
 HIERARCHY_SELF_ALLOWED = {"لقب", "اسم"}
 
-# رتّب المفاتيح الأطول أولًا (عشان "كم هير بيبي" ما تتعارض مع كلمة مفردة)
 SORTED_TRIGGERS = sorted(ADMIN_COMMANDS.keys(), key=len, reverse=True)
 
 
@@ -1441,23 +1430,35 @@ async def try_dispatch_admin_command(message: discord.Message) -> bool:
     for trigger in SORTED_TRIGGERS:
         if content == trigger or content.startswith(trigger + " "):
             allowed_roles, handler = ADMIN_COMMANDS[trigger]
+
+            # ما عنده صلاحية ← رياكشن ❌ بدون أي رد
             if not isinstance(message.author, discord.Member) or not has_role(message.author, allowed_roles):
-                await reply(message, f"{message.author.mention} ❌ ما عندك صلاحية لهذا الأمر.")
+                await react(message, "❌")
                 return True
-            # تسلسل الرتب: ما تنفذ على عضو رتبته أعلى منك أو مساوية لك
+
+            # تسلسل الرتب ← رياكشن ❌
             if trigger in HIERARCHY_TRIGGERS and message.mentions:
                 target = message.mentions[0]
                 if not can_act_on(message.author, target, allow_self=(trigger in HIERARCHY_SELF_ALLOWED)):
-                    await reply(message, f"{message.author.mention} {HIERARCHY_DENY_TEXT}")
+                    await react(message, "❌")
                     return True
+
             args = content[len(trigger):].strip()
-            await handler(message, args)
+            try:
+                result = await handler(message, args)
+            except (discord.Forbidden, discord.HTTPException) as e:
+                print(f"[Admin] فشل تنفيذ '{trigger}': {e}")
+                result = False
+
+            if result is True:
+                await react(message, "✅")
+            elif result is False:
+                await react(message, "❌")
             return True
     return False
 
 
 # ---------- .اوامر اداريه: قائمة الأوامر الإدارية مع الرتب المسموح لها ----------
-# كل عنصر: (المفاتيح بجدول ADMIN_COMMANDS, طريقة الكتابة, الوصف, نص الرتبة أو None لو تنحسب تلقائيًا)
 ADMIN_HELP_SECTIONS = [
     ("👥 إدارة الأعضاء", [
         (["برا"], "برا @عضو [السبب]", "حظر عضو من السيرفر.", None),
@@ -1506,6 +1507,7 @@ def build_admin_help_embeds() -> list[discord.Embed]:
             "الأوامر الإدارية تنكتب **بدون نقطة** (مثال: `تايم @عضو 10m`).\n"
             "الرتبة المكتوبة تحت كل أمر هي **أقل رتبة** تقدر تستخدمه، وكل الرتب الأعلى منها تقدر تستخدمه بعد.\n"
             "لو ما كتبت سبب بأوامر العقوبات، يطلع لك البوت أزرار أسباب تختار منها.\n"
+            "✅ رياكشن صح = انفّذ الأمر | ❌ رياكشن اكس = ما عندك صلاحية أو ما انفّذ.\n"
             "⚠️ الأوامر اللي على الأعضاء تمشي بتسلسل الرتب: ما تقدر تنفذها على عضو رتبته أعلى منك أو مساوية لك.\n\n"
             f"**ترتيب الرتب من الأدنى للأعلى:**\n{hierarchy}"
         ),
@@ -1526,7 +1528,7 @@ async def send_admin_commands_help(ctx: commands.Context):
     author = ctx.author
     is_guild_owner = ctx.guild is not None and author.id == ctx.guild.owner_id
     if not (isinstance(author, discord.Member) and (is_guild_owner or has_role(author, TRIAL_ROLES))):
-        await ctx.send(f"{author.mention} ❌ ما عندك الصلاحية.")
+        await react(ctx.message, "❌")
         return
 
     await ctx.send(embeds=build_admin_help_embeds())
@@ -1535,9 +1537,6 @@ async def send_admin_commands_help(ctx: commands.Context):
 # ============================================================
 # 12) المتجر — شراء أشياء بالنقاط
 # ============================================================
-# ألوان جاهزة للرتب المؤقتة اللي يشتريها اللاعبين. غيّر الأسماء أو الألوان زي ما تبي.
-# ملاحظة: عشان اللون يبان فعليًا بقائمة الأعضاء، لازم ترفع هذي الرتب (بعد ما البوت ينشئها أول مرة)
-# لمكان أعلى من رتب الأعضاء العادية بترتيب رتب السيرفر يدويًا.
 SHOP_COLOR_ROLES = {
     "احمر": 0xE74C3C,
     "ازرق": 0x3498DB,
@@ -1551,6 +1550,31 @@ SHOP_TITLE_PRICE = 300
 SHOP_COLOR_PRICE = 250
 SHOP_WARN_CLEAR_PRICE = 500
 
+# ---------- زينة بطاقة البروفايل (أمر p) — تنشترى مرة وحدة وتبقى للأبد ----------
+# slot: head = فوق الراس (واحدة بس تنلبس) / face = على الوجه
+PROFILE_ITEMS = {
+    "تاج":   {"price": 1500, "slot": "head", "emoji": "👑"},
+    "قبعة":  {"price": 800,  "slot": "head", "emoji": "🎩"},
+    "كاب":   {"price": 600,  "slot": "head", "emoji": "🧢"},
+    "هالة":  {"price": 1200, "slot": "head", "emoji": "😇"},
+    "نظارة": {"price": 500,  "slot": "face", "emoji": "🕶️"},
+}
+PROFILE_ITEM_ALIASES = {
+    "قبعه": "قبعة", "قبوع": "قبعة", "قبعات": "قبعة",
+    "نظاره": "نظارة", "نضارة": "نظارة", "نضاره": "نظارة",
+    "هاله": "هالة", "كاب": "كاب", "طاقيه": "كاب", "طاقية": "كاب",
+}
+
+
+def _profile_items_text() -> str:
+    lines = ["🖼️ **زينة بطاقة البروفايل (أمر `p`)** — شراء مرة وحدة وتبقى لك"]
+    for name, info in PROFILE_ITEMS.items():
+        lines.append(f"{info['emoji']} **{name}** — {info['price']} نقطة")
+    lines.append("الشراء: `.شراء تاج` ← يتلبس تلقائيًا")
+    lines.append("التبديل: `.لبس اسم_العنصر` — الخلع: `.خلع`")
+    return "\n".join(lines)
+
+
 SHOP_ITEMS_TEXT = (
     "🛍️ **المتجر**\n\n"
     f"🎭 **لقب مؤقت** — {SHOP_TITLE_PRICE} نقطة ({SHOP_TITLE_DURATION_HOURS} ساعة)\n"
@@ -1560,8 +1584,25 @@ SHOP_ITEMS_TEXT = (
     "الشراء: `.شراء لون اسم_اللون`\n\n"
     f"🧹 **حذف تنبيه** — {SHOP_WARN_CLEAR_PRICE} نقطة\n"
     "يشيل أقدم تنبيه مسجل عليك.\n"
-    "الشراء: `.شراء تنظيف`"
+    "الشراء: `.شراء تنظيف`\n\n"
+    + _profile_items_text()
 )
+
+
+def get_profile_items(guild_id: int, user_id: int) -> dict:
+    data = load_json(PROFILE_ITEMS_FILE)
+    entry = data.get(str(guild_id), {}).get(str(user_id), {})
+    return {
+        "owned": list(entry.get("owned", [])),
+        "head": entry.get("head"),
+        "face": entry.get("face"),
+    }
+
+
+def save_profile_items(guild_id: int, user_id: int, entry: dict) -> None:
+    data = load_json(PROFILE_ITEMS_FILE)
+    data.setdefault(str(guild_id), {})[str(user_id)] = entry
+    save_json(PROFILE_ITEMS_FILE, data)
 
 
 @bot.command(name="متجر")
@@ -1590,16 +1631,17 @@ def _shop_clear_active(guild_id: int, user_id: int) -> dict | None:
 @bot.command(name="شراء")
 async def buy_cmd(ctx: commands.Context, item: str = None, *, extra_text: str = None):
     if not item:
-        await ctx.send("⚠️ اكتب `.متجر` عشان تشوف الأشياء المتوفرة، وبعدها `.شراء <العنصر>`")
+        await ctx.send("⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.شراء تاج`\nواكتب `.متجر` عشان تشوف الأشياء المتوفرة.")
         return
     item = item.strip()
+    item = PROFILE_ITEM_ALIASES.get(item, item)
     author = ctx.author
     balance = get_balance(ctx.guild.id, author.id)
 
     if item == "لقب":
         price = SHOP_TITLE_PRICE
         if not extra_text or not extra_text.strip():
-            await ctx.send("⚠️ الصيغة: `.شراء لقب النص_اللي_تبيه`")
+            await ctx.send("⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.شراء لقب النص_اللي_تبيه`")
             return
         title_text = extra_text.strip()
         if balance < price:
@@ -1624,7 +1666,7 @@ async def buy_cmd(ctx: commands.Context, item: str = None, *, extra_text: str = 
         color_name = (extra_text or "").strip()
         if color_name not in SHOP_COLOR_ROLES:
             options = "، ".join(SHOP_COLOR_ROLES)
-            await ctx.send(f"⚠️ الصيغة: `.شراء لون اسم_اللون`\nالألوان المتوفرة: {options}")
+            await ctx.send(f"⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.شراء لون احمر`\nالألوان المتوفرة: {options}")
             return
         if balance < price:
             await ctx.send(f"❌ رصيدك ما يكفي (تحتاج {price} نقطة).")
@@ -1665,8 +1707,51 @@ async def buy_cmd(ctx: commands.Context, item: str = None, *, extra_text: str = 
         add_balance(ctx.guild.id, author.id, -price)
         await ctx.send(f"✅ تم حذف أقدم تنبيه عندك. باقي عندك **{len(user_warns)}** تنبيه.")
 
+    elif item in PROFILE_ITEMS:
+        info = PROFILE_ITEMS[item]
+        entry = get_profile_items(ctx.guild.id, author.id)
+        if item in entry["owned"]:
+            await ctx.send(f"⚠️ تملك **{item}** من قبل، البسه بـ `.لبس {item}`")
+            return
+        if balance < info["price"]:
+            await ctx.send(f"❌ رصيدك ما يكفي (تحتاج {info['price']} نقطة).")
+            return
+        add_balance(ctx.guild.id, author.id, -info["price"])
+        entry["owned"].append(item)
+        entry[info["slot"]] = item
+        save_profile_items(ctx.guild.id, author.id, entry)
+        await ctx.send(f"✅ اشتريت {info['emoji']} **{item}** وانلبس على بطاقتك! جرّب اكتب `p`")
+
     else:
         await ctx.send("⚠️ ما لقيت هذا العنصر، اكتب `.متجر` عشان تشوف الأشياء المتوفرة.")
+
+
+@bot.command(name="لبس")
+async def wear_cmd(ctx: commands.Context, *, name: str = None):
+    if not name or not name.strip():
+        await ctx.send("⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.لبس تاج`")
+        return
+    name = PROFILE_ITEM_ALIASES.get(name.strip(), name.strip())
+    if name not in PROFILE_ITEMS:
+        await ctx.send("⚠️ ما فيه عنصر بهذا الاسم، اكتب `.متجر` تشوف الزينة المتوفرة.")
+        return
+    entry = get_profile_items(ctx.guild.id, ctx.author.id)
+    if name not in entry["owned"]:
+        await ctx.send(f"❌ ما تملك **{name}** — اشتره أول بـ `.شراء {name}`")
+        return
+    info = PROFILE_ITEMS[name]
+    entry[info["slot"]] = name
+    save_profile_items(ctx.guild.id, ctx.author.id, entry)
+    await ctx.send(f"✅ لبست {info['emoji']} **{name}** — جرّب اكتب `p`")
+
+
+@bot.command(name="خلع")
+async def unwear_cmd(ctx: commands.Context):
+    entry = get_profile_items(ctx.guild.id, ctx.author.id)
+    entry["head"] = None
+    entry["face"] = None
+    save_profile_items(ctx.guild.id, ctx.author.id, entry)
+    await ctx.send("✅ خلعت كل الزينة (تقدر تلبسها مرة ثانية بـ `.لبس`).")
 
 
 @tasks.loop(minutes=5)
@@ -1705,18 +1790,225 @@ async def shop_expiry_task():
 
 
 # ============================================================
-# 12.5) أوامر المعلومات السريعة — .u (يوزر) / .s (سيرفر) / .r (رتب) / .a (افتار)
+# 12.4) بطاقة البروفايل (أمر p) — رسم الصورة
+# ============================================================
+# اسم ملف الصورة (القالب) — حطه جنب ملف البوت بهذا الاسم بالضبط
+PROFILE_BG_PATH = "Dai.png"
+
+# مواقع العناصر على القالب (القالب 1060 × 1484)
+PROFILE_CIRCLE_CENTER = (861, 875)
+PROFILE_CIRCLE_RADIUS = 163
+PROFILE_LEFT_BOX = (32, 1143, 520, 1398)     # البنك
+PROFILE_RIGHT_BOX = (540, 1143, 1028, 1398)  # النقاط
+
+PROFILE_FONT_CANDIDATES = [
+    "font.ttf",
+    "arial.ttf", "Arial.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansArabic-Bold.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+]
+
+BANK_FILE_GUESSES = ["bank.json", "bank_data.json", "bank_accounts.json"]
+
+
+def get_bank_money(guild_id: int, user_id: int) -> int:
+    """يجيب فلوس العضو بالبنك. يجرب دوال شائعة داخل bank.py، وإذا ما لقى يقرأ ملف json للبنك."""
+    for fn_name in ("get_bank_balance", "get_bank_money", "get_bank", "get_account_balance",
+                    "get_balance", "get_money"):
+        fn = getattr(bank, fn_name, None)
+        if callable(fn):
+            try:
+                value = fn(guild_id, user_id)
+                if asyncio.iscoroutine(value):
+                    value.close()
+                    continue
+                return int(value)
+            except Exception:
+                continue
+    for path in BANK_FILE_GUESSES:
+        data = load_json(path)
+        entry = data.get(str(guild_id), {}).get(str(user_id))
+        if isinstance(entry, (int, float)):
+            return int(entry)
+        if isinstance(entry, dict):
+            for key in ("balance", "bank", "money", "amount"):
+                if isinstance(entry.get(key), (int, float)):
+                    return int(entry[key])
+    return 0
+
+
+def _load_font(size: int):
+    for path in PROFILE_FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def _shape(text: str) -> str:
+    """يوصّل الحروف العربية ويعدل الاتجاه (لو المكتبات متوفرة)."""
+    if ARABIC_SHAPING_OK:
+        try:
+            return get_display(arabic_reshaper.reshape(text))
+        except Exception:
+            return text
+    return text
+
+
+def _fit_font(draw, text: str, max_width: int, start_size: int, min_size: int = 20):
+    size = start_size
+    while size > min_size:
+        font = _load_font(size)
+        bbox = draw.textbbox((0, 0), text, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            return font
+        size -= 2
+    return _load_font(min_size)
+
+
+def _circle_avatar(avatar_bytes: bytes, diameter: int):
+    av = Image.open(BytesIO(avatar_bytes)).convert("RGBA").resize((diameter, diameter), Image.LANCZOS)
+    big = diameter * 4
+    mask = Image.new("L", (big, big), 0)
+    ImageDraw.Draw(mask).ellipse((0, 0, big - 1, big - 1), fill=255)
+    mask = mask.resize((diameter, diameter), Image.LANCZOS)
+    av.putalpha(mask)
+    return av
+
+
+def _accessory_layer(kind: str, r: int):
+    """يرسم زينة (تاج/قبعة/كاب/نظارة/هالة) على طبقة شفافة. الإحداثيات بوحدة نصف قطر الصورة (u,v)."""
+    k = 3  # تكبير للرسم عشان الحواف تطلع ناعمة
+    half = int(r * 2.0)
+    side = half * 2
+    layer = Image.new("RGBA", (side * k, side * k), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    center = side * k / 2
+
+    def P(u, v):
+        return (center + u * r * k, center + v * r * k)
+
+    def box(u1, v1, u2, v2):
+        x1, y1 = P(u1, v1)
+        x2, y2 = P(u2, v2)
+        return [x1, y1, x2, y2]
+
+    def circ(u, v, rad, fill):
+        d.ellipse(box(u - rad, v - rad, u + rad, v + rad), fill=fill)
+
+    line_w = max(2, int(0.035 * r * k))
+
+    if kind == "تاج":
+        gold, dark_gold = (245, 197, 24, 255), (176, 124, 10, 255)
+        pts = [P(-0.62, -0.8), P(-0.70, -1.55), P(-0.32, -1.2), P(0, -1.72),
+               P(0.32, -1.2), P(0.70, -1.55), P(0.62, -0.8)]
+        d.polygon(pts, fill=gold)
+        d.line(pts + [pts[0]], fill=dark_gold, width=line_w, joint="curve")
+        d.rounded_rectangle(box(-0.64, -0.98, 0.64, -0.8), radius=int(0.05 * r * k), fill=(214, 160, 20, 255),
+                            outline=dark_gold, width=line_w // 2)
+        circ(-0.70, -1.55, 0.07, (220, 40, 60, 255))
+        circ(0, -1.72, 0.08, (60, 120, 230, 255))
+        circ(0.70, -1.55, 0.07, (220, 40, 60, 255))
+        for u in (-0.3, 0, 0.3):
+            circ(u, -0.89, 0.04, (255, 255, 255, 255))
+
+    elif kind == "قبعة":
+        d.ellipse(box(-0.95, -1.02, 0.95, -0.66), fill=(25, 25, 28, 255))
+        d.rectangle(box(-0.52, -1.75, 0.52, -0.84), fill=(38, 38, 44, 255))
+        d.ellipse(box(-0.52, -1.83, 0.52, -1.67), fill=(62, 62, 70, 255))
+        d.rectangle(box(-0.52, -1.12, 0.52, -0.9), fill=(170, 30, 40, 255))
+        d.line([P(-0.4, -1.6), P(-0.4, -1.2)], fill=(255, 255, 255, 50), width=line_w)
+
+    elif kind == "كاب":
+        blue, dark_blue = (41, 128, 185, 255), (28, 90, 135, 255)
+        d.pieslice(box(-0.85, -1.45, 0.85, -0.45), 180, 360, fill=blue)
+        d.line([P(0, -1.45), P(0, -0.95)], fill=dark_blue, width=line_w // 2)
+        d.rectangle(box(-0.85, -1.0, 0.85, -0.92), fill=dark_blue)
+        d.ellipse(box(0.1, -1.04, 1.28, -0.8), fill=dark_blue)
+        circ(0, -1.45, 0.06, dark_blue)
+
+    elif kind == "هالة":
+        d.ellipse(box(-0.6, -1.76, 0.6, -1.34), outline=(255, 223, 90, 90), width=int(0.16 * r * k))
+        d.ellipse(box(-0.55, -1.7, 0.55, -1.4), outline=(255, 225, 100, 255), width=int(0.07 * r * k))
+
+    elif kind == "نظارة":
+        dark = (15, 15, 18, 235)
+        rad = int(0.15 * r * k)
+        d.rounded_rectangle(box(-0.88, -0.28, -0.06, 0.2), radius=rad, fill=dark)
+        d.rounded_rectangle(box(0.06, -0.28, 0.88, 0.2), radius=rad, fill=dark)
+        d.rectangle(box(-0.1, -0.16, 0.1, -0.08), fill=dark)
+        d.line([P(-0.72, -0.17), P(-0.5, -0.17)], fill=(255, 255, 255, 120), width=line_w)
+        d.line([P(0.2, -0.17), P(0.42, -0.17)], fill=(255, 255, 255, 120), width=line_w)
+
+    return layer.resize((side, side), Image.LANCZOS), half
+
+
+def render_profile_card(avatar_bytes: bytes, display_name: str, handle: str,
+                        bank_money: int, points: int, head: str | None, face: str | None) -> BytesIO:
+    base = Image.open(PROFILE_BG_PATH).convert("RGBA")
+    draw = ImageDraw.Draw(base)
+    cx, cy = PROFILE_CIRCLE_CENTER
+    r = PROFILE_CIRCLE_RADIUS
+
+    # الصورة داخل الدائرة
+    inner = int(r * 2 * 0.95)
+    avatar = _circle_avatar(avatar_bytes, inner)
+    base.paste(avatar, (cx - inner // 2, cy - inner // 2), avatar)
+
+    # الزينة (الوجه أول ثم الراس)
+    for kind in (face, head):
+        if kind in PROFILE_ITEMS:
+            layer, half = _accessory_layer(kind, int(r * 0.95))
+            base.paste(layer, (cx - half, cy - half), layer)
+
+    draw = ImageDraw.Draw(base)
+    text_main = (225, 245, 248, 255)
+    text_dim = (150, 190, 198, 255)
+
+    # الاسم
+    name_font = _fit_font(draw, _shape(display_name), 640, 66, 28)
+    draw.text((62, 1040), _shape(display_name), font=name_font, fill=text_main, anchor="lm")
+    handle_font = _load_font(32)
+    draw.text((64, 1096), handle, font=handle_font, fill=text_dim, anchor="lm")
+
+    # صندوقين البنك والنقاط
+    bank_label = _shape("البنك") if ARABIC_SHAPING_OK else "BANK"
+    points_label = _shape("النقاط") if ARABIC_SHAPING_OK else "POINTS"
+    for box_xy, label, value in ((PROFILE_LEFT_BOX, bank_label, bank_money),
+                                  (PROFILE_RIGHT_BOX, points_label, points)):
+        x1, y1, x2, y2 = box_xy
+        mx = (x1 + x2) // 2
+        label_font = _load_font(46)
+        draw.text((mx, y1 + 62), label, font=label_font, fill=text_dim, anchor="mm")
+        value_text = f"{value:,}"
+        value_font = _fit_font(draw, value_text, (x2 - x1) - 60, 96, 30)
+        draw.text((mx, y1 + 160), value_text, font=value_font, fill=text_main, anchor="mm")
+
+    out = BytesIO()
+    base.convert("RGB").save(out, format="PNG")
+    out.seek(0)
+    return out
+
+
+# ============================================================
+# 12.5) أوامر المعلومات — بدون بريفكس: u / s / r / a / p
 # ============================================================
 VERIFICATION_NAMES_AR = {"none": "بدون", "low": "منخفض", "medium": "متوسط", "high": "عالي", "highest": "أعلى مستوى"}
 
 
 def _ts(dt: datetime, style: str = "F") -> str:
-    """يحول وقت لتنسيق ديسكورد (يتحول تلقائيًا لتوقيت اللي يشوفه)."""
     return f"<t:{int(dt.timestamp())}:{style}>"
 
 
 def _join_limited(items: list[str], limit: int = 1000, sep: str = " ") -> str:
-    """يجمع عناصر بنص واحد ما يتعدى limit حرف، وإذا زاد يقطع ويكتب كم عنصر انحذف."""
     out, used = [], 0
     for i, item in enumerate(items):
         extra = len(item) + (len(sep) if out else 0)
@@ -1728,12 +2020,9 @@ def _join_limited(items: list[str], limit: int = 1000, sep: str = " ") -> str:
     return sep.join(out)
 
 
-@bot.command(name="u")
-async def user_info_cmd(ctx: commands.Context, member: discord.Member = None):
-    """.u [@عضو] — معلومات الحساب."""
-    if ctx.guild is None:
-        return
-    member = member or ctx.author
+async def info_user(message: discord.Message, member: discord.Member):
+    """u [@عضو] — معلومات الحساب."""
+    guild = message.guild
     color = member.color if member.color.value else discord.Color.blurple()
     embed = discord.Embed(title=f"👤 معلومات {member.display_name}", color=color)
     embed.set_thumbnail(url=member.display_avatar.url)
@@ -1747,20 +2036,17 @@ async def user_info_cmd(ctx: commands.Context, member: discord.Member = None):
     if member.joined_at:
         embed.add_field(name="تاريخ الدخول للسيرفر",
                         value=f"{_ts(member.joined_at)}\n({_ts(member.joined_at, 'R')})", inline=False)
-    roles = [r for r in reversed(member.roles) if r != ctx.guild.default_role]
+    roles = [r for r in reversed(member.roles) if r != guild.default_role]
     embed.add_field(name="أعلى رتبة", value=roles[0].mention if roles else "لا يوجد", inline=True)
     embed.add_field(name=f"الرتب ({len(roles)})",
                     value=_join_limited([r.mention for r in roles]) if roles else "لا يوجد", inline=False)
-    embed.set_footer(text=f"طلب بواسطة {ctx.author.display_name}")
-    await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    embed.set_footer(text=f"طلب بواسطة {message.author.display_name}")
+    await message.channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
-@bot.command(name="s")
-async def server_info_cmd(ctx: commands.Context):
-    """.s — معلومات السيرفر."""
-    guild = ctx.guild
-    if guild is None:
-        return
+async def info_server(message: discord.Message):
+    """s — معلومات السيرفر."""
+    guild = message.guild
     bots = sum(1 for m in guild.members if m.bot)
     total = guild.member_count or len(guild.members)
     embed = discord.Embed(title=f"🏠 {guild.name}", color=discord.Color.blurple())
@@ -1787,33 +2073,26 @@ async def server_info_cmd(ctx: commands.Context):
     embed.add_field(name="مستوى التحقق",
                     value=VERIFICATION_NAMES_AR.get(guild.verification_level.name, guild.verification_level.name),
                     inline=True)
-    embed.set_footer(text=f"طلب بواسطة {ctx.author.display_name}")
-    await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    embed.set_footer(text=f"طلب بواسطة {message.author.display_name}")
+    await message.channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
-@bot.command(name="r")
-async def roles_info_cmd(ctx: commands.Context):
-    """.r — كل رتب السيرفر (من الأعلى للأدنى) مع عدد أعضاء كل رتبة."""
-    guild = ctx.guild
-    if guild is None:
-        return
+async def info_roles(message: discord.Message):
+    """r — كل رتب السيرفر (من الأعلى للأدنى) مع عدد أعضاء كل رتبة."""
+    guild = message.guild
     roles = [r for r in reversed(guild.roles) if r != guild.default_role]
     if not roles:
-        await ctx.send("⚠️ ما فيه رتب بهذا السيرفر.")
+        await message.channel.send("⚠️ ما فيه رتب بهذا السيرفر.")
         return
     lines = [f"{r.mention} — **{len(r.members)}**" for r in roles]
     embed = discord.Embed(title=f"🎭 رتب السيرفر ({len(roles)})", color=discord.Color.blurple(),
                           description=_join_limited(lines, limit=4000, sep="\n"))
     embed.set_footer(text="الرقم = عدد الأعضاء بالرتبة")
-    await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    await message.channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
-@bot.command(name="a")
-async def avatar_cmd(ctx: commands.Context, member: discord.Member = None):
-    """.a [@عضو] — صورة الحساب بحجم كبير."""
-    if ctx.guild is None:
-        return
-    member = member or ctx.author
+async def info_avatar(message: discord.Message, member: discord.Member):
+    """a [@عضو] — صورة الحساب بحجم كبير."""
     avatar = member.display_avatar
     formats = ["png", "jpg", "webp"] + (["gif"] if avatar.is_animated() else [])
     links = " • ".join(f"[{f.upper()}]({avatar.with_format(f).with_size(1024).url})" for f in formats)
@@ -1821,14 +2100,84 @@ async def avatar_cmd(ctx: commands.Context, member: discord.Member = None):
     embed.set_image(url=avatar.with_size(1024).url)
     if member.guild_avatar:
         embed.set_footer(text="هذي صورته الخاصة بالسيرفر")
-    await ctx.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    await message.channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+
+async def info_profile(message: discord.Message, member: discord.Member):
+    """p [@عضو] — بطاقة البروفايل: الصورة + فلوس البنك + النقاط + الزينة."""
+    if not PIL_AVAILABLE:
+        await message.channel.send("❌ مكتبة Pillow مو منصّبة (`pip install Pillow`).")
+        return
+    if not os.path.exists(PROFILE_BG_PATH):
+        await message.channel.send(f"❌ ملف القالب `{PROFILE_BG_PATH}` مو موجود جنب ملف البوت.")
+        return
+    async with message.channel.typing():
+        try:
+            avatar_bytes = await member.display_avatar.replace(size=256, format="png").read()
+            entry = get_profile_items(message.guild.id, member.id)
+            bank_money = get_bank_money(message.guild.id, member.id)
+            points = get_balance(message.guild.id, member.id)
+            buf = await asyncio.to_thread(
+                render_profile_card, avatar_bytes, member.display_name, f"@{member.name}",
+                bank_money, points, entry.get("head"), entry.get("face"))
+        except Exception as e:
+            print(f"[Profile] خطأ برسم البطاقة: {e}")
+            await message.channel.send("❌ صار خطأ وأنا أرسم البطاقة.")
+            return
+    await message.channel.send(file=discord.File(buf, filename="profile.png"))
+
+
+INFO_COMMAND_KEYS = {"u", "s", "r", "a", "p"}
+_MENTION_ONLY = re.compile(r"^<@!?(\d+)>$")
+
+
+async def try_dispatch_info_command(message: discord.Message) -> bool:
+    """أوامر u / s / r / a / p بدون بريفكس.
+    ملاحظة: لو الكلام بعد الحرف مو منشن/آيدي (مثل "a man") نتجاهله عشان ما يتداخل مع الكلام العادي."""
+    if message.guild is None:
+        return False
+    parts = message.content.strip().split(None, 1)
+    if not parts:
+        return False
+    key = parts[0].lower()
+    if key not in INFO_COMMAND_KEYS:
+        return False
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    if key in ("s", "r"):
+        if arg:
+            return False
+        if key == "s":
+            await info_server(message)
+        else:
+            await info_roles(message)
+        return True
+
+    # u / a / p
+    member = message.author
+    if arg:
+        mention_match = _MENTION_ONLY.match(arg)
+        if mention_match or arg.isdigit():
+            uid = int(mention_match.group(1)) if mention_match else int(arg)
+            member = message.guild.get_member(uid)
+            if member is None:
+                await usage_error(message, f"{key} @العضو")
+                return True
+        else:
+            return False
+
+    if key == "u":
+        await info_user(message, member)
+    elif key == "a":
+        await info_avatar(message, member)
+    else:
+        await info_profile(message, member)
+    return True
 
 
 # ============================================================
 # 13) نظام AFK — .afk <السبب>
 # ============================================================
-# لما العضو يكتب .afk نايم يتسجل AFK بالسبب، ولما يرسل أي رسالة ثانية يرجع تلقائيًا.
-# ولو أحد منشنه أو رد (Reply) على رسالته وهو AFK، البوت يعلمه إنه AFK ويعرض السبب.
 AFK_MAX_REASON_LENGTH = 200
 AFK_COMMAND_PATTERN = re.compile(r"^\.afk(\s|$)", re.IGNORECASE)
 
@@ -1889,7 +2238,6 @@ async def afk_cmd(ctx: commands.Context, *, reason: str = None):
 
 
 async def _get_replied_member(message: discord.Message) -> discord.Member | None:
-    """يرجع العضو اللي رد عليه صاحب الرسالة (لو الرسالة رد Reply على رسالة عضو بالسيرفر)."""
     ref = message.reference
     if ref is None or message.guild is None:
         return None
@@ -1905,7 +2253,6 @@ async def _get_replied_member(message: discord.Message) -> discord.Member | None
 
 
 async def handle_afk_on_message(message: discord.Message) -> None:
-    """لو صاحب الرسالة AFK نرجّعه، ولو منشن أو رد على أحد AFK نعلمه. ما يتدخل بأمر .afk نفسه."""
     if message.guild is None:
         return
 
@@ -1929,7 +2276,6 @@ async def handle_afk_on_message(message: discord.Message) -> None:
             except (discord.Forbidden, discord.HTTPException):
                 pass
 
-    # الأعضاء اللي نفحص إذا هم AFK: المنشنين صراحة + صاحب الرسالة اللي انرد عليها (بدون تكرار)
     to_check: dict[int, discord.Member] = {m.id: m for m in message.mentions}
     replied_member = await _get_replied_member(message)
     if replied_member is not None:
@@ -1960,9 +2306,6 @@ async def handle_afk_on_message(message: discord.Message) -> None:
 # ============================================================
 # 14) نظام حماية الروابط — أي رابط = مسح الرسالة + تايم يوم كامل
 # ============================================================
-# المعفيين: مالك السيرفر، أصحاب صلاحية Administrator، وأي أحد معه رتبة من Trial Moderator وفوق.
-# الدومينات المسموحة (ما ينعاقب عليها): روابط الصور/الملفات الداخلية بديسكورد وروابط الـGIF.
-# تقدر تزيد أو تشيل منها. وتقدر تحط آيديات رومات مسموح فيها الروابط بـ LINK_ALLOWED_CHANNEL_IDS.
 LINK_TIMEOUT = timedelta(days=1)
 LINK_WHITELIST_DOMAINS = {
     "tenor.com", "media.tenor.com", "giphy.com", "media.giphy.com",
@@ -2064,8 +2407,6 @@ async def log_invite_link(message: discord.Message) -> None:
 # ============================================================
 # رد السلام التلقائي (كل صيغ "السلام عليكم")
 # ============================================================
-# يلقط: السلام عليكم / سلام عليكم / السلام عليك / سلامو عليكم / السلام عليكم ورحمة الله / ...ورحمة الله وبركاته
-# ويتجاهل "وعليكم السلام" عشان ما يرد على الردود.
 SALAM_PATTERN = re.compile(r"(?:^|\s)(?:ال)?سلا+م[ون]?\s*(?:عليكم|عليك|عليكن|علكيم)(?:\s|$)")
 SALAM_REPLY = "وعليكم السلام ورحمة الله وبركاته 🌹"
 
@@ -2081,13 +2422,10 @@ def is_salam_message(content: str) -> bool:
 # ============================================================
 # روم الفخ "ممنوع-الارسال" — أي أحد يرسل فيه يتبند فورًا
 # ============================================================
-# الروم يتحدد بالآيدي (روم الترحيل / الباند).
-# الإداريين (Trial Moderator وفوق) ومالك السيرفر وأصحاب Administrator ما يتبندون لو كتبوا فيه (احتياط من الغلط).
-# لو تبي حتى الإداريين يتبندون غيّر TRAP_EXEMPT_STAFF إلى False (والبوت أصلًا ما يقدر يبند رتبة أعلى منه).
 TRAP_CHANNEL_NAME = "ممنوع-الارسال"
 TRAP_CHANNEL_ID = 1552574286605197396
 TRAP_EXEMPT_STAFF = True
-TRAP_DELETE_SECONDS = 3600   # يمسح رسائل العضو من آخر ساعة (يفيد لو الحساب مخترق وينشر سبام)
+TRAP_DELETE_SECONDS = 3600
 
 
 def is_trap_channel(channel) -> bool:
@@ -2095,7 +2433,7 @@ def is_trap_channel(channel) -> bool:
 
 
 async def handle_trap_message(message: discord.Message) -> bool:
-    """يبند اللي أرسل برسالة بروم الفخ. يرجع True لو تعامل مع الرسالة (يعني ما نكمل بقية المعالجة)."""
+    """يبند اللي أرسل برسالة بروم الفخ. يرجع True لو تعامل مع الرسالة."""
     author = message.author
     guild = message.guild
     if TRAP_EXEMPT_STAFF and is_staff_member(author):
@@ -2112,7 +2450,7 @@ async def handle_trap_message(message: discord.Message) -> bool:
         try:
             await guild.ban(author, reason=reason, delete_message_seconds=TRAP_DELETE_SECONDS)
         except TypeError:
-            await guild.ban(author, reason=reason)  # نسخة discord.py قديمة ما تدعم delete_message_seconds
+            await guild.ban(author, reason=reason)
         banned = True
     except (discord.Forbidden, discord.HTTPException) as e:
         print(f"[Trap] ما قدرت أبند {author} ({author.id}): {e}")
@@ -2128,9 +2466,6 @@ async def handle_trap_message(message: discord.Message) -> bool:
 # ============================================================
 # رياكشن تلقائي على الصور (رومات locket / streaks)
 # ============================================================
-# أي رسالة فيها صورة بهذي الرومات يحط عليها البوت رياكشن (بدون رد).
-# الرسائل اللي بدون صور يتجاهلها.
-# غيّر الإيموجيات من REACTION_EMOJIS (تقدر تحط أكثر من واحد).
 REACTION_CHANNEL_IDS = {
     1538293753306161192,   # locket
     1540256888761876480,   # streaks
@@ -2176,7 +2511,6 @@ async def handle_image_reaction(message: discord.Message) -> None:
             pass
 
 
-# ---------- روم locket: صور ومقاطع فقط (الباقي ينحذف إلا الإدارة العليا) ----------
 def is_locket_exempt(member) -> bool:
     """الإدارة العليا (Vice Owner / Co-Owner / Owner / founder) ومالك السيرفر يكتبون بروم locket عادي."""
     if not isinstance(member, discord.Member):
@@ -2203,7 +2537,7 @@ async def send_divider_cmd(ctx: commands.Context):
         await ctx.send("⚠️ ملف الفاصل `divider.png` مو موجود.")
         return
     await ctx.send(file=discord.File(DIVIDER_IMAGE_PATH))
-  
+
 
 # ============================================================
 # معالج الرسائل الموحّد
@@ -2212,7 +2546,6 @@ async def send_divider_cmd(ctx: commands.Context):
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
-
 
     # روم الفخ: أول شي قبل أي معالجة ثانية
     if message.guild is not None and is_trap_channel(message.channel):
@@ -2223,8 +2556,7 @@ async def on_message(message: discord.Message):
     if await handle_locket_filter(message):
         return
 
-    # ".قول <نص>": نحذف رسالة صاحب الأمر فورًا (قبل أي معالجة ثانية) عشان ما أحد يلحق يشوفها.
-    # نفس شروط say_cmd: لازم يكون فيه نص، وما نحذف لو النص فيه رابط ممنوع (البوت بيرفض الإرسال).
+    # ".قول <نص>": نحذف رسالة صاحب الأمر فورًا
     if message.guild is not None and SAY_COMMAND_PATTERN.match(message.content):
         say_text = message.content.split(None, 1)[1]
         if not (message_has_blocked_link(say_text) and not is_link_exempt(message.author)):
@@ -2238,11 +2570,10 @@ async def on_message(message: discord.Message):
         if INVITE_LINK_PATTERN.search(message.content):
             await log_invite_link(message)
 
-    # نصفّي المنشنات: لو المستخدم بس رادّ (Reply) على حد بدون ما يكتب @اسمه صراحة،
-    # ما نعتبره منشن — عشان "تايم"/"برا"/... ما تنفذ غلط بمجرد الرد على رسالة الشخص.
+    # نصفّي المنشنات: الرد على رسالة بدون كتابة @ صريحة ما يعتبر منشن
     message.mentions = filter_explicit_mentions(message)
 
-    # نظام AFK: رجوع تلقائي لصاحب الرسالة + تنبيه لو منشنوا أو ردوا على أحد AFK
+    # نظام AFK
     await handle_afk_on_message(message)
 
     # رياكشن على الصور برومات locket / streaks
@@ -2262,6 +2593,10 @@ async def on_message(message: discord.Message):
     if await bank.try_dispatch_bank_admin(message):
         return
 
+    # أوامر p / u / s / r / a (بدون بريفكس)
+    if await try_dispatch_info_command(message):
+        return
+
     if await try_dispatch_admin_command(message):
         return
 
@@ -2279,6 +2614,23 @@ async def on_ready():
         await send_log(guild, "bot", embed)
 
 
+# أمثلة الاستخدام الصحيح لأوامر النقطة (تظهر لما يكتب العضو الأمر غلط)
+PREFIX_USAGE_EXAMPLES = {
+    "تحويل": ".تحويل @عضو 100",
+    "اصدار": ".اصدار 1000",
+    "شراء": ".شراء تاج",
+    "لبس": ".لبس تاج",
+    "قول": ".قول النص اللي تبيه",
+    "رصيد": ".رصيد @عضو",
+    "سجلي": ".سجلي @عضو",
+}
+
+
+def _usage_example_for(ctx: commands.Context) -> str:
+    name = ctx.command.name if ctx.command else ""
+    return PREFIX_USAGE_EXAMPLES.get(name, f".{name} @عضو")
+
+
 @bot.event
 async def on_command_error(ctx: commands.Context, error: commands.CommandError):
     if isinstance(error, bank.BankChannelRequired):
@@ -2286,13 +2638,11 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
     elif isinstance(error, games.GamesRoleRequired):
         await games.handle_games_role_error(ctx)
     elif isinstance(error, commands.MemberNotFound):
-        await ctx.send("⚠️ ما لقيت هذا العضو — تأكد إنك تعمل منشن حقيقي (@) من قائمة الاقتراحات.")
-    elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(f"⚠️ ناقص معطى بالأمر. مثال صحيح: `.{ctx.command.name} @عضو`")
-    elif isinstance(error, commands.BadArgument):
-        await ctx.send("⚠️ صيغة الأمر غلط، تأكد من كتابته صح.")
+        await ctx.send(f"⚠️ ما لقيت هذا العضو — استخدم الأمر بطريقة صحيحة، مثال:\n`{_usage_example_for(ctx)}`")
+    elif isinstance(error, (commands.MissingRequiredArgument, commands.BadArgument)):
+        await ctx.send(f"⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`{_usage_example_for(ctx)}`")
     elif isinstance(error, commands.CommandNotFound):
-        return  # تجاهل الأوامر غير الموجودة بصمت
+        return
     else:
         print(f"[خطأ غير متوقع] {error}")
         if ctx.guild is not None:
@@ -2394,7 +2744,6 @@ async def on_member_update(before: discord.Member, after: discord.Member):
     if not added and not removed:
         return
 
-    # نجيب من اللي أعطى/سحب الرتبة من الأوديت لوق
     executor = await get_audit_executor(after.guild, discord.AuditLogAction.member_role_update, after.id)
 
     embed = discord.Embed(title="🎭 تعديل رتب عضو", color=discord.Color.blurple(),
@@ -2414,7 +2763,6 @@ async def on_member_update(before: discord.Member, after: discord.Member):
 
 @bot.event
 async def on_guild_role_create(role: discord.Role):
-    """يسجل إنشاء رتبة جديدة: وش الرتبة واسمها ومن اللي سواها."""
     executor = await get_audit_executor(role.guild, discord.AuditLogAction.role_create, role.id)
     embed = discord.Embed(title="➕ تم إنشاء رتبة", color=discord.Color.green(),
                            timestamp=datetime.now(timezone.utc))
@@ -2427,7 +2775,6 @@ async def on_guild_role_create(role: discord.Role):
 
 @bot.event
 async def on_guild_role_delete(role: discord.Role):
-    """يسجل حذف رتبة: وش الرتبة واسمها ومن اللي حذفها."""
     executor = await get_audit_executor(role.guild, discord.AuditLogAction.role_delete, role.id)
     embed = discord.Embed(title="🗑️ تم حذف رتبة", color=discord.Color.red(),
                            timestamp=datetime.now(timezone.utc))
@@ -2562,10 +2909,10 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self._ok()
 
-    def do_HEAD(self):  # بعض مواقع المراقبة (زي UptimeRobot) تستخدم HEAD
+    def do_HEAD(self):
         self._ok(body=False)
 
-    def log_message(self, format, *args):  # يمنع سبام اللوق مع كل بينق
+    def log_message(self, format, *args):
         return
 
 
