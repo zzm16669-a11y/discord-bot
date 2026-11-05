@@ -576,7 +576,7 @@ async def transfer_cmd(ctx: commands.Context, member: discord.Member, amount: in
     await ctx.send(f"✅ تم تحويل **{amount}** نقطة إلى {member.mention}")
 
 
-@bot.command(name="توب", aliases=["ليدربورد"])
+@commands.command(name="توب", aliases=["ليدربورد"])
 async def leaderboard_cmd(ctx: commands.Context):
     data = load_json(ECONOMY_FILE)
     guild_data = data.get(str(ctx.guild.id), {})
@@ -596,7 +596,12 @@ async def leaderboard_cmd(ctx: commands.Context):
         name = member.mention if member else f"عضو غادر (`{uid}`)"
         rank = medals[i] if i < 3 else f"`#{i + 1}`"
         lines.append(f"{rank} {name} — **{pts}** نقطة")
-    await ctx.send("\n".join(lines))
+    await ctx.send("\n".join(lines), allowed_mentions=discord.AllowedMentions.none())
+
+
+# يتسجل بس لو ما فيه أمر "توب" ثاني (من games.py أو غيره) — هذا يمنع خطأ "الأمر مسجل مرتين"
+if bot.get_command("توب") is None and bot.get_command("ليدربورد") is None:
+    bot.add_command(leaderboard_cmd)
 
 
 @bot.command(name="سجلي", aliases=["سجل"])
@@ -2140,6 +2145,7 @@ async def try_dispatch_info_command(message: discord.Message) -> bool:
     if not parts:
         return False
     key = parts[0].lower()
+
     if key not in INFO_COMMAND_KEYS:
         return False
     arg = parts[1].strip() if len(parts) > 1 else ""
