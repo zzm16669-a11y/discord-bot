@@ -15,6 +15,11 @@ bank.py — نظام البنك (وحدة داخل بوت الكنترول bot.p
     اللي يحتاجه البنك من bot.py شيئين بس:
       1) bank.try_dispatch_bank_admin(message)  ← كلمة "بنك" (لوحة الأزرار) + "بنك @عضو" + أوامر بنك_اضافة / بنك_خصم
       2) bank.BankChannelRequired               ← رسالة "أوامر البنك تشتغل بس في روم البنك"
+  - أوامر الإدارة (بنك_اضافة / بنك_خصم):
+      * ما عنده صلاحية ← رياكشن ❌ بدون رد
+      * نجح الأمر       ← رياكشن ✅
+      * كتبه غلط        ← رد "استخدم الأمر بطريقة صحيحة" مع مثال
+  - bank.get_bank_balance(guild_id, user_id) ← يستخدمها أمر p بالبوت الأساسي (بطاقة البروفايل).
   - صور اختيارية من مجلد bank_images (لو الملف موجود يطلع، ولو لا يطلع بدونه):
       work.png / crime_win.png / crime_fail.png / rob_win.png / rob_fail.png
   - مستقلة بالكامل: ما تستورد شي من bot.py (ما فيه استيراد دائري).
@@ -100,6 +105,20 @@ def has_role(member: discord.Member, allowed: list[int]) -> bool:
 
 async def reply(message: discord.Message, text: str):
     await message.channel.send(text)
+
+
+async def react(message: discord.Message, emoji: str) -> None:
+    """يحط رياكشن على رسالة الأمر (يتجاهل الأخطاء بصمت)."""
+    try:
+        await message.add_reaction(emoji)
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        pass
+
+
+async def usage_error(message: discord.Message, example: str) -> None:
+    """يرد إن الأمر انكتب غلط ويعطي مثال صحيح."""
+    await message.channel.send(
+        f"{message.author.mention} ⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`{example}`")
 
 
 # ---------- اللوقات (mod-logs / bot-logs) ----------
@@ -331,6 +350,16 @@ def bank_acct(data: dict, guild_id: int, user_id: int) -> dict:
     if not isinstance(acct.get("items"), dict):
         acct["items"] = {}
     return acct
+
+
+def get_bank_balance(guild_id: int, user_id: int) -> int:
+    """رصيد العضو بالبنك (بدون الكاش) — للقراءة فقط، ما ينشئ حساب ولا يغيّر شي. يستخدمها أمر p بالبوت الأساسي.
+    لو تبي الكاش يدخل معه غيّر السطر الأخير إلى: acct.get("bank", 0) + acct.get("cash", 0)"""
+    data = load_json(BANK_FILE)
+    acct = data.get(str(guild_id), {}).get(str(user_id))
+    if not isinstance(acct, dict):
+        return 0
+    return int(acct.get("bank", 0))
 
 
 def _level(acct: dict) -> int:
@@ -1083,35 +1112,39 @@ async def show_member_account(message: discord.Message, member: discord.Member) 
 # ============================================================
 # أوامر الإدارة الخاصة بالبنك — بدون بريفكس (Admin وفوق)
 # ============================================================
+# كل دالة ترجع:
+#   True  ← نجح الأمر (رياكشن ✅)
+#   False ← فشل الأمر (رياكشن ❌)
+#   None  ← كتب الأمر غلط وانرسل له مثال (بدون رياكشن)
 async def cmd_bank_add(message: discord.Message, args: str):
     """بنك_اضافة @عضو <مبلغ> ← يضيف كاش لحساب عضو بالبنك."""
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `بنك_اضافة @العضو المبلغ`")
-        return
+        await usage_error(message, "بنك_اضافة @العضو 500")
+        return None
     target = message.mentions[0]
     amount = parse_amount(strip_mentions(args, message.mentions))
     if target.bot or not amount:
-        await reply(message, "⚠️ الصيغة: `بنك_اضافة @العضو المبلغ` (المبلغ رقم أكبر من صفر).")
-        return
+        await usage_error(message, "بنك_اضافة @العضو 500")
+        return None
     data = bank_load()
     acct = bank_acct(data, message.guild.id, target.id)
     acct["cash"] += amount
     bank_save(data)
-    await reply(message, f"✅ تمت إضافة **{fmt(amount)}** {CURRENCY} كاش لـ {target.mention}.")
     await log_mod_action(message.guild, "🏦 إضافة رصيد بنكي", message.author, target, None,
                          {"المبلغ": f"{fmt(amount)} {CURRENCY}"})
+    return True
 
 
 async def cmd_bank_remove(message: discord.Message, args: str):
     """بنك_خصم @عضو <مبلغ> ← يخصم من كاش العضو أولًا ثم من رصيده بالبنك (ما ينزل تحت صفر)."""
     if not message.mentions:
-        await reply(message, "⚠️ الصيغة: `بنك_خصم @العضو المبلغ`")
-        return
+        await usage_error(message, "بنك_خصم @العضو 500")
+        return None
     target = message.mentions[0]
     amount = parse_amount(strip_mentions(args, message.mentions))
     if target.bot or not amount:
-        await reply(message, "⚠️ الصيغة: `بنك_خصم @العضو المبلغ` (المبلغ رقم أكبر من صفر).")
-        return
+        await usage_error(message, "بنك_خصم @العضو 500")
+        return None
     data = bank_load()
     acct = bank_acct(data, message.guild.id, target.id)
     from_cash = min(acct["cash"], amount)
@@ -1120,10 +1153,10 @@ async def cmd_bank_remove(message: discord.Message, args: str):
     acct["bank"] -= from_bank
     taken = from_cash + from_bank
     bank_save(data)
-    await reply(message, f"✅ تم خصم **{fmt(taken)}** {CURRENCY} من {target.mention} "
-                         f"(كاش: {fmt(from_cash)} • بنك: {fmt(from_bank)}).")
     await log_mod_action(message.guild, "🏦 خصم رصيد بنكي", message.author, target, None,
-                         {"المبلغ": f"{fmt(taken)} {CURRENCY}"})
+                         {"المبلغ": f"{fmt(taken)} {CURRENCY}",
+                          "كاش": fmt(from_cash), "بنك": fmt(from_bank)})
+    return True
 
 
 BANK_ADMIN_COMMANDS = {
@@ -1141,11 +1174,23 @@ async def try_dispatch_admin_command(message: discord.Message) -> bool:
     for trigger in SORTED_TRIGGERS:
         if content == trigger or content.startswith(trigger + " "):
             allowed_roles, handler = BANK_ADMIN_COMMANDS[trigger]
+
+            # ما عنده صلاحية ← رياكشن ❌ بدون أي رد
             if not isinstance(message.author, discord.Member) or not has_role(message.author, allowed_roles):
-                await reply(message, f"{message.author.mention} ❌ ما عندك صلاحية لهذا الأمر.")
+                await react(message, "❌")
                 return True
+
             args = content[len(trigger):].strip()
-            await handler(message, args)
+            try:
+                result = await handler(message, args)
+            except (discord.Forbidden, discord.HTTPException) as e:
+                print(f"[بنك] فشل تنفيذ '{trigger}': {e}")
+                result = False
+
+            if result is True:
+                await react(message, "✅")
+            elif result is False:
+                await react(message, "❌")
             return True
     return False
 
