@@ -19,8 +19,8 @@
         * نفّذ الأمر     ← رياكشن ✅
         * كتبه غلط       ← البوت يرد "استخدم الأمر بطريقة صحيحة" مع مثال
   - ملف صورة البطاقة لازم يكون جنب الملف بهذا الاسم:  Dai.png  (غيّره من PROFILE_BG_PATH)
-  - مكتبات إضافية للنص العربي بالصورة (اختيارية بس مهمة):
-        pip install Pillow arabic-reshaper python-bidi
+  - مكتبات إضافية للنص العربي بالصورة (مهمة، بدونها يطلع الكلام مقلوب):
+        pip install -r requirements.txt
   - رتبتا "سجن" و"اخرس" (Jailed / Muted) تتحددان بالآيدي (JAIL_ROLE_ID / MUTE_ROLE_ID).
 """
 
@@ -1847,25 +1847,41 @@ def get_bank_money(guild_id: int, user_id: int) -> int:
 
 
 def _load_font(size: int):
+    """يحمّل الخط بمحرك BASIC عشان Pillow ما يسوي معالجة اتجاه النص بنفسه
+    (لو raqm مفعّل كان يقلب النص مرتين مع arabic_reshaper + bidi فيطلع مقلوب)."""
+    try:
+        basic = ImageFont.Layout.BASIC
+    except AttributeError:
+        basic = getattr(ImageFont, "LAYOUT_BASIC", None)
     for path in PROFILE_FONT_CANDIDATES:
         try:
+            if basic is not None:
+                return ImageFont.truetype(path, size, layout_engine=basic)
             return ImageFont.truetype(path, size)
         except OSError:
             continue
+        except TypeError:
+            try:
+                return ImageFont.truetype(path, size)
+            except OSError:
+                continue
     try:
         return ImageFont.load_default(size)
     except TypeError:
         return ImageFont.load_default()
 
 
+_ARABIC_CHARS = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]")
+
+
 def _shape(text: str) -> str:
-    """يوصّل الحروف العربية ويعدل الاتجاه (لو المكتبات متوفرة)."""
-    if ARABIC_SHAPING_OK:
-        try:
-            return get_display(arabic_reshaper.reshape(text))
-        except Exception:
-            return text
-    return text
+    """يوصّل الحروف العربية ويعدل الاتجاه. النص الإنجليزي/الأرقام ما نلمسها أبدًا (عشان ما تنقلب)."""
+    if not text or not ARABIC_SHAPING_OK or not _ARABIC_CHARS.search(text):
+        return text
+    try:
+        return get_display(arabic_reshaper.reshape(text))
+    except Exception:
+        return text
 
 
 def _fit_font(draw, text: str, max_width: int, start_size: int, min_size: int = 20):
@@ -1978,11 +1994,12 @@ def render_profile_card(avatar_bytes: bytes, display_name: str, handle: str,
     text_main = (225, 245, 248, 255)
     text_dim = (150, 190, 198, 255)
 
-    # الاسم
-    name_font = _fit_font(draw, _shape(display_name), 640, 66, 28)
-    draw.text((62, 1040), _shape(display_name), font=name_font, fill=text_main, anchor="lm")
+    # الاسم (يتشكّل عربي فقط إذا فيه حروف عربية، والإنجليزي يبقى زي ما هو)
+    shaped_name = _shape(display_name)
+    name_font = _fit_font(draw, shaped_name, 640, 66, 28)
+    draw.text((62, 1040), shaped_name, font=name_font, fill=text_main, anchor="lm")
     handle_font = _load_font(32)
-    draw.text((64, 1096), handle, font=handle_font, fill=text_dim, anchor="lm")
+    draw.text((64, 1096), _shape(handle), font=handle_font, fill=text_dim, anchor="lm")
 
     # صندوقين البنك والنقاط
     bank_label = _shape("البنك") if ARABIC_SHAPING_OK else "BANK"
