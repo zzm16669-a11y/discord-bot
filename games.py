@@ -14,6 +14,7 @@ games.py — مركز الألعاب (وحدة داخل بوت الكنترول 
   - رول التشغيل: "Event Team" — يتحدد بالآيدي (GAMES_ROLE_ID). مجلد الصور game_images بجنب bot.py.
   - النقاط تنحفظ بنفس economy.json و game_stats.json اللي يستخدمها bot.py (صار البوت واحد، فالرصيد موحّد).
   - المتجر: مخزون اللاعبين ينحفظ بملف inventory.json (جنب economy.json)، والشراء يخصم من نفس رصيد النقاط.
+  - المزايا التجميلية (دخلة / إطار / تاج) تنحفظ بملف cosmetics.json، ولوحة .توب تقراها بدالة get_cosmetic().
   - مستقلة بالكامل: ما تستورد شي من bot.py.
 """
 
@@ -47,6 +48,7 @@ except ImportError:
 ECONOMY_FILE = "economy.json"
 GAME_STATS_FILE = "game_stats.json"
 INVENTORY_FILE = "inventory.json"
+COSMETICS_FILE = "cosmetics.json"
 
 # الحد الأقصى للنقاط اللي يقدر اللاعب ياخذها من الألعاب خلال 24 ساعة (يحمي من تكديس النقاط بسرعة غير طبيعية).
 # النقاط اللي تجي من .يومي أو .تحويل أو .اصدار ما تدخل بهذا الحد.
@@ -73,6 +75,7 @@ GAME_IMAGES = {
     "اسرع": "fastest.png", "فكك": "split.png", "رتب": "unscramble.png", "ادمج": "combine.png",
     "اعلام": "flags.png", "اعكس": "reverse.png", "حرف": "letter.png", "ترتيب": "ordering.png",
     "الوان": "colors.png", "ايموجي": "emoji.png", "اكشف": "memory.png",
+    "توب": "top.png",
 }
 
 
@@ -203,7 +206,19 @@ SHOP_ITEMS = {
     "reroll": {"name": "إعادة رمي", "price": 80},   # نرد: ترمي النرد مرة ثانية
     "extra": {"name": "محاولات إضافية", "price": 100},  # غميضة: تزيد محاولات الباحث
     "peek": {"name": "نظرة", "price": 70},          # اكشف: تشوف كل البطاقات ثواني
+    # ---------- الجديد ----------
+    # "kind": نوع الشراء. بدونها = ميزة تنخزن بالمخزون وتنستهلك باللعب.
+    "lootbox": {"name": "صندوق الحظ", "price": 120, "kind": "lootbox"},   # يطلع منه ميزة عشوائية بندرة مختلفة
+    "entrance": {"name": "دخلة", "price": 400, "kind": "entrance"},        # رسالة فوز خاصة بدل "جاوب صح!"
+    "frame": {"name": "إطار", "price": 300, "kind": "frame"},              # حلقة لون حول صورتك بلوحة .توب
+    "crown": {"name": "تاج", "price": 500, "kind": "crown"},               # تاج فوق صورتك بلوحة .توب
 }
+
+# الإطار والتاج يبانون على لوحة .توب بس، ولوحة .توب صارت ترسمهم فخليناها True.
+# (لو رجّعتها False يختفون من المتجر لين تفتحها من جديد.)
+COSMETICS_SHOP_OPEN = True
+# مدة الإطار والتاج بالأيام (None = دايمين). المدة ما تنذكر للاعب بأي رسالة.
+COSMETIC_DAYS = 7
 
 
 def get_balance(guild_id: int, user_id: int) -> int:
@@ -251,6 +266,139 @@ def consume_item(guild_id: int, user_id: int, item: str) -> bool:
     return True
 
 
+# ---------- صندوق الحظ: الندرة والميزات اللي تطلع منه ----------
+# (اسم الندرة, وزنها, الميزات). الميزة اللي مو موجودة بالمتجر تنتخطى تلقائيًا (لو شلت ميزة قديمة ما ينكسر شي).
+LOOTBOX_RARITIES = [
+    ("عادي", 70, ["hint", "reroll", "peek", "extra", "scout"]),
+    ("نادر", 25, ["protect", "reverse"]),
+    ("أسطوري", 5, ["bomb"]),
+]
+
+
+def roll_lootbox():
+    """يسحب ندرة ثم ميزة عشوائية منها. يرجع (الندرة, مفتاح الميزة) أو (None, None) لو ما فيه شي متاح."""
+    pools = []
+    for rarity, weight, keys in LOOTBOX_RARITIES:
+        valid = [k for k in keys if k in SHOP_ITEMS]
+        if valid:
+            pools.append((rarity, weight, valid))
+    if not pools:
+        return None, None
+    rarity, _, keys = random.choices(pools, weights=[p[1] for p in pools], k=1)[0]
+    return rarity, random.choice(keys)
+
+
+# ---------- المزايا التجميلية (دخلة / إطار / تاج) ----------
+def get_cosmetic(guild_id: int, user_id: int, key: str):
+    """يرجع بيانات الميزة التجميلية لو فعّالة، وإلا None (المنتهية تحسب None).
+    إطار: {"color": "#hex", "color_name": ...} — تاج: {} — دخلة: {"text": ...}
+    لوحة .توب تستدعيها لكل لاعب عشان ترسم الإطار والتاج."""
+    entry = load_json(COSMETICS_FILE).get(str(guild_id), {}).get(str(user_id), {}).get(key)
+    if not entry:
+        return None
+    until = entry.get("until")
+    if until:
+        try:
+            if datetime.fromisoformat(until) <= datetime.now(timezone.utc):
+                return None
+        except ValueError:
+            return None
+    return entry
+
+
+def set_cosmetic(guild_id: int, user_id: int, key: str, entry: dict) -> None:
+    data = load_json(COSMETICS_FILE)
+    data.setdefault(str(guild_id), {}).setdefault(str(user_id), {})[key] = entry
+    save_json(COSMETICS_FILE, data)
+
+
+def _next_until(existing):
+    """نهاية الميزة: لو لسا فعّالة تنزاد عليها المدة، وإلا تبدأ من الحين. None لو COSMETIC_DAYS = None."""
+    if COSMETIC_DAYS is None:
+        return None
+    base = datetime.now(timezone.utc)
+    if existing and existing.get("until"):
+        try:
+            old = datetime.fromisoformat(existing["until"])
+            if old > base:
+                base = old
+        except ValueError:
+            pass
+    return (base + timedelta(days=COSMETIC_DAYS)).isoformat()
+
+
+FRAME_COLORS = {
+    "أزرق جليدي": "#9FC4E0", "ذهبي": "#E6B84A", "فضي": "#C9D1D9",
+    "أخضر": "#4FBF8B", "بنفسجي": "#9B7BE0", "أحمر": "#E05A5A", "وردي": "#E57DB3",
+}
+# الدخلة نص حر من اللاعب، فنمنع الروابط والمنشن (قوانين السيرفر تمنع الإعلانات)
+ENTRANCE_BLOCKED = ("http", "www.", "discord.gg", ".gg/", "@everyone", "@here")
+
+
+def _clean_entrance(text: str):
+    """ينظّف نص الدخلة. يرجع None لو فيه رابط أو منشن."""
+    text = " ".join(text.split())
+    low = text.lower()
+    if any(b in low for b in ENTRANCE_BLOCKED) or "<@" in text or "<#" in text:
+        return None
+    return discord.utils.escape_mentions(text)
+
+
+async def _not_enough(interaction: discord.Interaction, item: dict) -> None:
+    balance = get_balance(interaction.guild.id, interaction.user.id)
+    await interaction.response.send_message(
+        f"رصيدك (**{balance}**) ما يكفي، سعر {item['name']} **{item['price']}** نقطة.", ephemeral=True)
+
+
+class EntranceModal(discord.ui.Modal, title="دخلتك"):
+    """نافذة كتابة رسالة الفوز. النقاط تنخصم بعد الإرسال (مو قبل)."""
+    text = discord.ui.TextInput(label="رسالة فوزك", placeholder="مثال: نزل الملك!", min_length=2, max_length=60)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        item = SHOP_ITEMS["entrance"]
+        gid, uid = interaction.guild.id, interaction.user.id
+        clean = _clean_entrance(self.text.value)
+        if clean is None:
+            await interaction.response.send_message(
+                "ما تقدر تحط روابط أو منشن بالدخلة، جرّب نص ثاني (ما انخصم منك شي).", ephemeral=True)
+            return
+        if not spend_points(gid, uid, item["price"]):
+            await _not_enough(interaction, item)
+            return
+        set_cosmetic(gid, uid, "entrance", {"text": clean})
+        balance = get_balance(gid, uid)
+        await interaction.response.send_message(
+            f"{UI_ICONS['accept']} صارت دخلتك: **{clean}** — تطلع لما تفوز بألعاب الجولات. رصيدك **{balance}** نقطة.",
+            ephemeral=True)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        print(f"[متجر] خطأ بنافذة الدخلة: {error}")
+        if not interaction.response.is_done():
+            await interaction.response.send_message("صار خطأ، جرب مرة ثانية.", ephemeral=True)
+
+
+class FrameColorSelect(discord.ui.Select):
+    """اختيار لون الإطار. النقاط تنخصم بعد الاختيار."""
+
+    def __init__(self):
+        options = [discord.SelectOption(label=n, value=n) for n in FRAME_COLORS]
+        super().__init__(placeholder="اختر لون إطارك", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        item = SHOP_ITEMS["frame"]
+        gid, uid = interaction.guild.id, interaction.user.id
+        name = self.values[0]
+        if not spend_points(gid, uid, item["price"]):
+            await _not_enough(interaction, item)
+            return
+        existing = get_cosmetic(gid, uid, "frame")
+        set_cosmetic(gid, uid, "frame", {"color": FRAME_COLORS[name], "color_name": name,
+                                         "until": _next_until(existing)})
+        balance = get_balance(gid, uid)
+        await interaction.response.edit_message(
+            content=f"{UI_ICONS['accept']} اشتريت **إطار {name}** — ورصيدك **{balance}** نقطة.", view=None)
+
+
 class ShopBuyButton(discord.ui.Button):
     def __init__(self, key: str):
         item = SHOP_ITEMS[key]
@@ -263,16 +411,65 @@ class ShopBuyButton(discord.ui.Button):
             await interaction.response.send_message("المتجر يشتغل داخل السيرفر بس.", ephemeral=True)
             return
         gid, uid = interaction.guild.id, interaction.user.id
-        if not spend_points(gid, uid, item["price"]):
+        kind = item.get("kind", "item")
+
+        # دخلة / إطار: اللاعب يكتب أو يختار أول، والنقاط تنخصم بعد التأكيد
+        if kind == "entrance":
+            if get_balance(gid, uid) < item["price"]:
+                await _not_enough(interaction, item)
+                return
+            await interaction.response.send_modal(EntranceModal())
+            return
+        if kind == "frame":
+            if get_balance(gid, uid) < item["price"]:
+                await _not_enough(interaction, item)
+                return
+            pick = discord.ui.View(timeout=120)
+            pick.add_item(FrameColorSelect())
+            await interaction.response.send_message(
+                "اختر لون إطارك (النقاط تنخصم بعد الاختيار):", view=pick, ephemeral=True)
+            return
+
+        # صندوق الحظ: نسحب أول، ولو ما فيه شي متاح ما ننخصم
+        if kind == "lootbox":
+            rarity, won_key = roll_lootbox()
+            if won_key is None:
+                await interaction.response.send_message("الصندوق مو متاح الحين.", ephemeral=True)
+                return
+            if not spend_points(gid, uid, item["price"]):
+                await _not_enough(interaction, item)
+                return
+            count = add_item(gid, uid, won_key)
             balance = get_balance(gid, uid)
             await interaction.response.send_message(
-                f"رصيدك (**{balance}**) ما يكفي، سعر {item['name']} **{item['price']}** نقطة.", ephemeral=True)
+                f"{UI_ICONS['accept']} فتحت **صندوق الحظ** وطلع لك **{SHOP_ITEMS[won_key]['name']}** "
+                f"({rarity}) — عندك منها **{count}**، ورصيدك **{balance}** نقطة.", ephemeral=True)
             return
+
+        if not spend_points(gid, uid, item["price"]):
+            await _not_enough(interaction, item)
+            return
+
+        if kind == "crown":
+            existing = get_cosmetic(gid, uid, "crown")
+            set_cosmetic(gid, uid, "crown", {"until": _next_until(existing)})
+            balance = get_balance(gid, uid)
+            await interaction.response.send_message(
+                f"{UI_ICONS['accept']} اشتريت **تاج** — ورصيدك **{balance}** نقطة.", ephemeral=True)
+            return
+
+        # ميزة عادية: تنخزن بالمخزون
         count = add_item(gid, uid, self.key)
         balance = get_balance(gid, uid)
         await interaction.response.send_message(
             f"{UI_ICONS['accept']} اشتريت **{item['name']}** — عندك منها **{count}**، ورصيدك **{balance}** نقطة.",
             ephemeral=True)
+
+
+def _shop_keys() -> list:
+    """مفاتيح المتجر اللي تبان للاعب (الإطار والتاج مخفيين لين COSMETICS_SHOP_OPEN = True)."""
+    return [k for k, v in SHOP_ITEMS.items()
+            if v.get("kind") not in ("frame", "crown") or COSMETICS_SHOP_OPEN]
 
 
 class ShopView(discord.ui.LayoutView):
@@ -283,7 +480,7 @@ class ShopView(discord.ui.LayoutView):
         super().__init__(timeout=180)
         if note:
             self.add_item(discord.ui.TextDisplay(note))
-        keys = list(SHOP_ITEMS)
+        keys = _shop_keys()
         for i in range(0, len(keys), 5):
             self.add_item(discord.ui.ActionRow(*[ShopBuyButton(k) for k in keys[i:i + 5]]))
 
@@ -3894,6 +4091,174 @@ async def _run_chairs(ctx: commands.Context):
 
 
 # ============================================================
+# أمر .توب — متصدرين النقاط (صورة) + الإطار والتاج من المتجر
+# ============================================================
+# مواقع العناصر كنسب من مقاس صورة الخلفية top.png (من 0 إلى 1).
+# لو ما انطبقت على صفوف صورتك، عدّل هالأرقام بس (أرسل لي الصورة وأحسبها لك).
+TOP_ROWS_CY = [0.335, 0.455, 0.575, 0.695, 0.815]   # مركز كل صف من فوق لتحت (نسبة من الارتفاع)
+TOP_ROW_H = 0.100                                     # ارتفاع الصف (نسبة من الارتفاع)
+TOP_ROW_X0, TOP_ROW_X1 = 0.20, 0.80                   # بداية ونهاية الصف (نسبة من العرض)
+TOP_RANK_X = 0.222                                    # مكان رقم الترتيب (نسبة من العرض)
+TOP_CIRCLE_CX = 0.265                                 # مركز دايرة الأفتار (نسبة من العرض)
+TOP_CIRCLE_R = 0.045                                  # نصف قطر الدايرة (نسبة من الارتفاع)
+TOP_DEFAULT_SIZE = (1672, 941)                        # مقاس الصورة لو ما لقينا top.png
+
+
+def _hex_rgb(hex_color, default=(159, 196, 224)):
+    """يحوّل لون #RRGGBB إلى (R, G, B)، ولو فيه خلل يرجع اللون الافتراضي."""
+    h = (hex_color or "").lstrip("#")
+    if len(h) != 6:
+        return default
+    try:
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return default
+
+
+def _top_text(draw, x, cy, text, font, fill, align="left"):
+    """يكتب النص بنص الصف عموديًا، ومحاذاته يسار / يمين / وسط."""
+    l, t, r, b = draw.textbbox((0, 0), text, font=font)
+    w, h = r - l, b - t
+    px = x if align == "left" else x - w if align == "right" else x - w / 2
+    draw.text((px - l, cy - h / 2 - t), text, font=font, fill=fill)
+
+
+def _top_fit(draw, text: str, font, max_w: float) -> str:
+    """يقصّ الاسم الطويل وينهيه بنقاط عشان ما يتداخل مع النقاط. يرجع النص المشكّل جاهز للرسم."""
+    cut = text
+    while len(cut) > 1 and draw.textlength(_ar_text(cut + ("…" if cut != text else "")), font=font) > max_w:
+        cut = cut[:-1]
+    return _ar_text(cut + ("…" if cut != text else ""))
+
+
+def _draw_crown(draw, cx, base_y, w, h, fill, outline):
+    """يرسم تاج صغير (3 رؤوس) قاعدته عند base_y."""
+    x0 = cx - w / 2
+    pts = [(x0, base_y), (x0, base_y - h * 0.55), (x0 + w * 0.25, base_y - h * 0.28),
+           (cx, base_y - h), (x0 + w * 0.75, base_y - h * 0.28), (x0 + w, base_y - h * 0.55),
+           (x0 + w, base_y)]
+    draw.polygon(pts, fill=fill, outline=outline)
+
+
+async def _no_avatar():
+    return None
+
+
+async def build_top_image(guild: discord.Guild, rows: list) -> bytes:
+    """يرسم لوحة المتصدرين: rows = [(آيدي اللاعب, نقاطه)] مرتبة من الأعلى. يرجع PNG bytes.
+    الخلفية: game_images/top.png (ولو مو موجودة يرسم خلفية بسيطة بنفس التخطيط)."""
+    bg_path = os.path.join(GAME_IMAGES_DIR, GAME_IMAGES["توب"])
+    has_bg = os.path.exists(bg_path)
+    if has_bg:
+        img = Image.open(bg_path).convert("RGBA")
+    else:
+        img = Image.new("RGBA", TOP_DEFAULT_SIZE, (31, 46, 48, 255))
+    W, H = img.size
+    draw = ImageDraw.Draw(img)
+
+    members = []
+    for uid, _ in rows:
+        m = guild.get_member(uid)
+        if m is None:
+            try:
+                m = await guild.fetch_member(uid)
+            except discord.HTTPException:
+                m = None
+        members.append(m)
+    avatars = await asyncio.gather(*(_get_avatar_circle(m) if m is not None else _no_avatar()
+                                     for m in members))
+
+    name_font = _replica_font(max(14, int(H * 0.036)))
+    pts_font = _replica_font(max(14, int(H * 0.032)))
+    rank_font = _replica_font(max(14, int(H * 0.048)))
+    r = int(H * TOP_CIRCLE_R)
+    av_r = r - 3
+    cx = int(W * TOP_CIRCLE_CX)
+    x0, x1 = int(W * TOP_ROW_X0), int(W * TOP_ROW_X1)
+    half = int(H * TOP_ROW_H / 2)
+    rank_colors = [(255, 215, 0, 255), (192, 192, 192, 255), (205, 127, 50, 255)]
+
+    for i, (uid, pts) in enumerate(rows):
+        cy = int(H * TOP_ROWS_CY[i])
+        member = members[i]
+
+        if not has_bg:   # بدون صورة خلفية: نرسم الصف والدايرة بنفسنا
+            draw.rounded_rectangle((x0, cy - half, x1, cy + half), radius=half // 2,
+                                   fill=(57, 70, 74, 255), outline=(169, 194, 196, 255), width=2)
+            draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(31, 46, 48, 255),
+                         outline=(169, 194, 196, 255), width=2)
+
+        # رقم الترتيب
+        _top_text(draw, int(W * TOP_RANK_X), cy, str(i + 1), rank_font,
+                  rank_colors[i] if i < 3 else (255, 255, 255, 255), "center")
+
+        # الأفتار داخل الدايرة
+        av = avatars[i]
+        if av is not None:
+            av = av.resize((av_r * 2, av_r * 2), Image.LANCZOS)
+            img.paste(av, (cx - av_r, cy - av_r), av)
+        else:
+            draw.ellipse((cx - av_r, cy - av_r, cx + av_r, cy + av_r), fill=(86, 100, 113, 255))
+
+        # الإطار (من المتجر): حلقة بلون اللاعب حول الأفتار
+        frame = get_cosmetic(guild.id, uid, "frame")
+        if frame:
+            color = _hex_rgb(frame.get("color")) + (255,)
+            draw.ellipse((cx - r - 2, cy - r - 2, cx + r + 2, cy + r + 2),
+                         outline=color, width=max(4, r // 8))
+
+        # التاج (من المتجر): فوق يسار الأفتار
+        if get_cosmetic(guild.id, uid, "crown"):
+            _draw_crown(draw, cx - r * 0.55, cy - r * 0.55, r * 0.9, r * 0.6,
+                        fill=(169, 194, 196, 255), outline=(31, 46, 48, 255))
+
+        # الاسم والنقاط
+        name = member.display_name if member is not None else "غير معروف"
+        pts_text = _ar_text(f"{pts:,} نقطة")
+        pts_w = draw.textlength(pts_text, font=pts_font)
+        right = x1 - 30
+        name_x = cx + r + 24
+        max_name_w = (right - pts_w - 24) - name_x
+        _top_text(draw, name_x, cy, _top_fit(draw, name, name_font, max_name_w),
+                  name_font, (255, 255, 255, 255), "left")
+        _top_text(draw, right, cy, pts_text, pts_font, (169, 194, 196, 255), "right")
+
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@commands.command(name="توب")
+async def top_cmd(ctx: commands.Context):
+    """متصدرين النقاط: أغنى 5 لاعبين بصورة (مفتوح للكل، ما يحتاج رول الألعاب)."""
+    if ctx.guild is None:
+        return
+    data = load_json(ECONOMY_FILE).get(str(ctx.guild.id), {})
+    rows = [(int(k), int(v)) for k, v in data.items()
+            if str(k).isdigit() and isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0]
+    rows.sort(key=lambda x: -x[1])
+    rows = rows[:5]
+    if not rows:
+        await ctx.send("ما فيه أحد عنده نقاط للحين.")
+        return
+
+    png = None
+    if PIL_AVAILABLE:
+        try:
+            async with ctx.typing():
+                png = await build_top_image(ctx.guild, rows)
+        except Exception as e:
+            print(f"[توب] تعذّر رسم الصورة: {e}")
+    if png:
+        await ctx.send(file=discord.File(BytesIO(png), filename="top.png"))
+        return
+    # بدون Pillow أو لو فشل الرسم: قائمة نصية
+    lines = [f"{i}. <@{uid}> — **{pts:,}** نقطة" for i, (uid, pts) in enumerate(rows, 1)]
+    await ctx.send("**متصدرين النقاط**\n" + "\n".join(lines),
+                   allowed_mentions=discord.AllowedMentions.none())
+
+
+# ============================================================
 # 10) مركز الألعاب: .العاب و .شرح
 # ============================================================
 GAME_LIST = {
@@ -3927,6 +4292,16 @@ GAME_LIST = {
     ],
 }
 
+_NEW_SHOP_HELP = (
+    "• **صندوق الحظ**: تفتحه على طول ويطلع لك ميزة عشوائية بندرة مختلفة (عادي، نادر، أسطوري) وتنضاف لمخزونك.\n"
+    "• **دخلة**: تكتب رسالة فوز خاصة فيك، وتطلع بدل \"جاوب صح!\" لما تفوز بألعاب الجولات.\n"
+)
+if COSMETICS_SHOP_OPEN:
+    _NEW_SHOP_HELP += (
+        "• **إطار**: حلقة بلون تختاره حول صورتك بلوحة .توب.\n"
+        "• **تاج**: تاج فوق صورتك بلوحة .توب.\n"
+    )
+
 GAME_HELP = {
     "روليت": "الكل ينضم باللوبي (زر دخول)، وبعدها اللاعب المختار يطلع وحد من اللعبة كل دور (عنده 15 ثانية، ولو ما اختار أحد يطلع هو من اللعبة)، لين يبقى ناجي وحد وياخذ النقاط. فيه زر طرد عشوائي، وزر انسحاب يقدر أي لاعب باقي يطلع فيه نفسه من اللعبة.",
     "xo": "اكس أو كلاسيكية بينك وبين عضو تحدده بالمنشن، أول وحد يكمل خط يفوز. اللي دوره وما لعب خلال 15 ثانية يخسر.",
@@ -3952,6 +4327,7 @@ GAME_HELP = {
     "الوان": "البوت يسأل سؤال عن الألوان (خلط ألوان، لون شي معروف، ألوان مكمّلة...)، وأول وحد يجاوب صح يفوز.",
     "ايموجي": "البوت يعرض رموز مركبة (وتحتها التصنيف: فيلم / شخصية / قصة / مكان...)، وأول وحد يخمن المقصود يفوز.",
     "اكشف": "لعبة ذاكرة فردية، دور بطاقتين متطابقتين من شبكة 16 بطاقة بأقل عدد محاولات ممكن.",
+    "توب": "يعرض أغنى 5 لاعبين بالنقاط بصورة، ويبان فيها إطار وتاج اللي اشتراهم من المتجر.",
     "متجر": (
         "زر **المتجر** موجود بلوبي كل لعبة جماعية، تشتري فيه ميزات بنقاطك (كلها أزرار شراء، والميزة تنخزن عندك لين تستخدمها):\n"
         "• **حماية**: لو أحد حاول يطلّعك بالروليت ما تطلع وننتقل للراوند اللي بعده. تنفع بالروليت (ضد الطرد والقنبلة)، لعبة الأزرار، والكراسي.\n"
@@ -3962,6 +4338,7 @@ GAME_HELP = {
         "• **إعادة رمي**: بالنرد بعد ما ترمي تقدر تعيد الرمية مرة وحدة.\n"
         "• **محاولات إضافية**: بالغميضة تزيد محاولات الباحث.\n"
         "• **نظرة**: بلعبة اكشف تشوف كل البطاقات ثواني.\n"
+        + _NEW_SHOP_HELP +
         "لو ضغطت زر ميزة وما عندك منها، يفتح لك المتجر مباشرة."
     ),
 }
@@ -3978,6 +4355,7 @@ async def games_list_cmd(ctx: commands.Context):
     lines.append("\nاكتب `.نقاطي` عشان تشوف رصيدك.")
     lines.append("اكتب `.شرح اسم_اللعبة` (بدون النقطة داخل الاسم) عشان أشرحلك أي لعبة بالتفصيل.")
     lines.append("اكتب `.شرح متجر` عشان تعرف ميزات المتجر (حماية، عكسية، قنبلة...).")
+    lines.append("اكتب `.توب` عشان تشوف متصدرين النقاط.")
     lines.append("اكتب `.اوامر` عشان تشوف باقي الأوامر.")
     await ctx.send("\n".join(lines))
 
@@ -4069,7 +4447,13 @@ async def games_on_message(message: discord.Message):
                 reveal = round_info.get("reveal", "")
                 extra = f" الإجابة: **{reveal}**" if reveal else ""
                 capped = " (وصلت السقف اليومي)" if actual < pts else ""
-                await message.channel.send(f"{message.author.mention} جاوب صح!{extra} (+{actual} نقطة{capped})")
+                # الدخلة (من المتجر): رسالة فوز خاصة بدل "جاوب صح!"
+                entrance = get_cosmetic(message.guild.id, message.author.id, "entrance")
+                win_text = entrance["text"] if entrance and entrance.get("text") else "جاوب صح!"
+                await message.channel.send(
+                    f"{message.author.mention} {win_text}{extra} (+{actual} نقطة{capped})",
+                    allowed_mentions=discord.AllowedMentions(everyone=False, roles=False,
+                                                             users=[message.author], replied_user=False))
                 await _remove_round_button(round_info.get("msg"))
             elif (not is_correct and round_info.get("react") and message.content.strip()
                   and len(message.content.split()) <= 6 and not message.content.startswith(".")):
