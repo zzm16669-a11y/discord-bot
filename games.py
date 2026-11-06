@@ -28,6 +28,7 @@ import math
 import os
 import re
 import random
+from difflib import SequenceMatcher
 from io import BytesIO
 from datetime import datetime, timezone, timedelta
 
@@ -806,16 +807,49 @@ LETTER_BANK = list(dict.fromkeys([
 _LETTER_BANK_NORM = {normalize(w) for w in LETTER_BANK}
 
 
-def answer_matches(content: str, names: list[str]) -> bool:
-    """يطابق إجابة اللاعب مع قائمة إجابات مقبولة (كلمة كاملة، يتجاهل 'ال' والهمزات والتشكيل)."""
-    text = re.sub(r"[^\w\s]", " ", normalize(content))
+# ---------- مطابقة الإجابات (متسامحة مثل الإنسان) ----------
+# المبدأ: الإجابة الصحيحة تنقبل بأي صيغة معقولة (اختصار / غلطة إملائية بسيطة)،
+# بس ما ننقبل اسم شي ثاني معروف (مثلًا آيسلندا مو أيرلندا).
+_COUNTRY_PREFIXES = {"جمهوريه", "مملكه", "دوله", "سلطنه", "اماره"}
+
+
+def _loose_clean(text: str) -> str:
+    """ينظّف النص للمقارنة: تطبيع + شيل علامات الترقيم + مسافات مفردة."""
+    cleaned = re.sub(r"[^\w\s]", " ", normalize(text))
+    return " ".join(cleaned.split())
+
+
+def _strip_al(word: str) -> str:
+    return word[2:] if word.startswith("ال") and len(word) > 3 else word
+
+
+def _loosely_same(user: str, target: str) -> bool:
+    """مقارنة متسامحة بين إجابة اللاعب والإجابة الصحيحة (كلاهما مطبّع): نفس الكلمة، أو اختصارها
+    (تشيك ← تشيكيا)، أو فيها غلطة إملائية بسيطة."""
+    uc = _strip_al(user).replace(" ", "")
+    tc = _strip_al(target).replace(" ", "")
+    if not uc or not tc:
+        return False
+    if uc == tc:
+        return True
+    if len(uc) >= 4 and tc.startswith(uc) and len(uc) / len(tc) >= 0.6:
+        return True
+    if len(tc) >= 5 and abs(len(uc) - len(tc)) <= 1 and SequenceMatcher(None, uc, tc).ratio() >= 0.8:
+        return True
+    return False
+
+
+def answer_matches(content: str, names: list[str], known: set | None = None) -> bool:
+    """يطابق إجابة اللاعب مع قائمة إجابات مقبولة. يتجاهل "ال" والهمزات والتشكيل، ويقبل الاختصار والأخطاء البسيطة.
+    known: أسماء معروفة ثانية (مثل باقي الدول) — لو اللاعب كتب واحد منها بالضبط ما نتسامح معه."""
+    text = _loose_clean(content)
     words = text.split()
     if not words or len(words) > 6:
         return False
-    padded = " " + " ".join(words) + " "
+    padded = " " + text + " "
+    targets = []
     for name in names:
-        n = re.sub(r"[^\w\s]", " ", normalize(name))
-        n = " ".join(n.split())
+        n = _loose_clean(name)
         if not n:
             continue
         variants = {n}
@@ -825,6 +859,20 @@ def answer_matches(content: str, names: list[str]) -> bool:
             variants.add("ال" + n)
         for v in variants:
             if f" {v} " in padded:
+                return True
+        targets.append(n)
+
+    candidates = {text}
+    candidates.update(w for w in words if len(w) >= 3)
+    if len(words) > 1 and words[0] in _COUNTRY_PREFIXES:
+        candidates.add(" ".join(words[1:]))
+    for cand in candidates:
+        if len(_strip_al(cand).replace(" ", "")) < 3:
+            continue
+        if known is not None and _strip_al(cand) in known:
+            continue   # اسم شي ثاني مكتوب بالضبط، مو غلطة إملائية
+        for t in targets:
+            if _loosely_same(cand, t):
                 return True
     return False
 
@@ -925,6 +973,17 @@ FLAG_TIERS = {
         ],
     },
 }
+
+def _build_known_flag_names() -> set:
+    known = set()
+    for tier in FLAG_TIERS.values():
+        for _flag, names in tier["flags"]:
+            for n in names:
+                known.add(_strip_al(_loose_clean(n)))
+    return known
+
+
+_ALL_FLAG_NAMES = _build_known_flag_names()
 
 # ---------- ايموجي: رموز مركبة (أفلام / شخصيات / قصص / أماكن) — أصعب من رمز واحد ----------
 # كل عنصر: (الرموز, [الأجوبة المقبولة], التصنيف)
@@ -1163,7 +1222,7 @@ async def flags_cmd(ctx: commands.Context):
     file, url = flag_image(flag)   # صورة العلم الحقيقية
     await start_round(ctx.channel, starter=ctx.author, title=f"خمن الدولة — مستوى {tier}",
                        prompt="وش اسم هذي الدولة؟ اكتب اسمها بالشات.",
-                       checker=lambda c: answer_matches(c, names),
+                       checker=lambda c: answer_matches(c, names, known=_ALL_FLAG_NAMES),
                        reward=info["reward"], reveal=names[0], timeout=60,
                        hint=make_text_hint(names[0]), react=True, file=file, image_url=url)
 
@@ -1310,7 +1369,7 @@ async def guess_start(ctx: commands.Context, max_number: int = 100):
         await warn_busy(ctx)
         return
     if max_number < 10:
-        await ctx.send("اختر رقم أقصى 10 أو أكثر.")
+        await ctx.send("اختر رقمًا أقصى 10 أو أكثر.")
         return
     number = random.randint(1, max_number)
     active_guess_games[ctx.channel.id] = {"number": number, "max": max_number}
@@ -3146,7 +3205,7 @@ async def _run_hideseek(ctx: commands.Context):
         if p.id not in view.found:
             add_game_reward(ctx.guild.id, p.id, 40)
     remaining = len(hiders) - len(view.found)
-    await ctx.send(f"{seeker.mention} لقى **{len(view.found)}** وبقي **{remaining}** ماله دري عنهم.")
+    await ctx.send(f"{seeker.mention} لقى **{len(view.found)}** وبقي **{remaining}** ما لقاهم.")
 
 
 # ---------- ريبلكا (البوت يسأل لاعب عن شي يبدأ بحرف معين) ----------
@@ -3378,6 +3437,52 @@ REPLICA_BANK = {
     """),
 }
 
+# كلمات إضافية للفئات (تنضاف للبنك فوق) — زد عليها براحتك
+_REPLICA_EXTRA = {
+    "جماد": _bank("""
+        أرجوحة, أسطوانة, آيباد
+        بيجامة, بلوزة, بكرة, بخاخ, براد, بطاقة, بوابة, بدلة, بالطو, برميل
+        تنكة, تلسكوب, تقويم, تسريحة
+        ثريا, ثوب
+        جيتار, جريدة, جراب
+        حاجز, حلة, حطب, حامل, حنفية
+        خزنة, خرطوم, خيط
+        دلة, دبابة, دش
+        رسالة, رزمة
+        زنبيل, زيت
+        سبحة, سطل, سلك, سنارة, سكة
+        شفرة, شبكة, شريط
+        صدرية, صفيحة
+        ضوء, ضمادة
+        ظرف
+        عدة, عقال, عباية
+        غلاية, غواصة, غترة, غطاء
+        فازة, فأرة
+        قفاز, قرص, قفص
+        كنب, كنبة, كيبورد, كاسة, كباية, كمامة, كلبشات, كابل, كوفية, كراج, كشك, كشاف, كرتون, كاسيت, كيس
+        لاصق, لافتة
+        ميزان, مجرفة, مقلاة, مخدة, مرتبة, محفظة, مصيدة, مبخرة, مغلف, مايك, ماوس, مكواة, مبرد, مصعد
+        ناقوس, نبراس
+        هراوة
+    """),
+    "حيوان": _bank("""
+        كلب, كنغر, كوبرا, كركدن, كبش, كروان
+        جاموس, جمل, جرذ, جرو
+        ضبع, ضب, ضفدع
+        غراب, غزال, غرير
+        ظبي
+    """),
+    "نبات": _bank("""
+        كزبرة, كرنب, كراث, كوسا, كاكاو, كستناء
+        جرجير, جزر
+        ذرة
+        ضرو
+    """),
+}
+for _c, _ws in _REPLICA_EXTRA.items():
+    REPLICA_BANK.setdefault(_c, []).extend(_ws)
+
+
 # فهرس سريع: الفئة -> {الحرف الأول: {الإجابات المطبّعة}}
 REPLICA_INDEX: dict = {}
 for _cat, _words in REPLICA_BANK.items():
@@ -3387,6 +3492,28 @@ for _cat, _words in REPLICA_BANK.items():
         if _k:
             _idx.setdefault(_k[0], set()).add(_k)
     REPLICA_INDEX[_cat] = _idx
+
+# فهرس عام: الكلمة -> الفئات اللي تنتمي لها (عشان نعرف لو اللاعب جاوب بكلمة من فئة ثانية)
+REPLICA_ALL: dict = {}
+for _cat, _words in REPLICA_BANK.items():
+    for _w in _words:
+        _k = _replica_norm_key(_w)
+        if _k:
+            REPLICA_ALL.setdefault(_k, set()).add(_cat)
+
+
+def _replica_variants(key: str) -> set:
+    """صيغ قريبة للكلمة (جمع/مفرد، ة/ه) عشان "كنبات" تنفهم مثل "كنبة"."""
+    out = set()
+    if key.endswith("ات") and len(key) > 4:
+        out.update({key[:-2], key[:-2] + "ه"})
+    if key.endswith(("ون", "ين")) and len(key) > 4:
+        out.add(key[:-2])
+    if key.endswith("ه"):
+        out.add(key[:-1])
+    else:
+        out.add(key + "ه")
+    return out
 
 
 def _replica_categories_for(letter: str) -> list:
@@ -3512,14 +3639,32 @@ def _build_replica_stats_images(title: str, rows: list) -> list:
 
 def _replica_key(text: str, letter: str, category: str):
     """يطبّع إجابة اللاعب ويتأكد إنها تبدأ بالحرف المطلوب (يتجاهل "ال" التعريف والهمزات)
-    وإنها من الفئة المطلوبة فعلًا (مثلًا لو الفئة حيوان ما تنقبل "باب").
+    وإنها من الفئة المطلوبة. المنطق مثل الإنسان:
+      - كلمة معروفة بالفئة ← تنقبل.
+      - كلمة معروفة بفئة ثانية فقط (مثل "باب" لحيوان) ← ترفض.
+      - كلمة مو بالبنك أصلًا ← ننقبلها بحسن نية لو شكلها كلمة حقيقية (3 حروف فأكثر)،
+        عشان البنك ما يكون ناقص ويظلم اللاعب.
     يرجع الإجابة المطبّعة، أو None لو ما تصلح."""
     key = _replica_norm_key(text)
-    if key is None or len(key.replace(" ", "")) < 2 or key[0] != normalize(letter):
+    if key is None or key[0] != normalize(letter):
         return None
-    if key not in REPLICA_INDEX.get(category, {}).get(key[0], ()):
+    flat = key.replace(" ", "")
+    if len(flat) < 2:
         return None
-    return key
+    own = REPLICA_INDEX.get(category, {}).get(key[0], ())
+    if key in own:
+        return key
+    for alt in _replica_variants(key):
+        if alt in own:
+            return alt
+    found = set(REPLICA_ALL.get(key, ()))
+    for alt in _replica_variants(key):
+        found |= REPLICA_ALL.get(alt, set())
+    if found:
+        return None   # كلمة معروفة لكن من فئة ثانية
+    if len(flat) >= 3 and len(set(flat)) >= 2 and re.fullmatch(r"[\u0621-\u064A ]+", key):
+        return key
+    return None
 
 
 async def _await_replica_answer(bot_obj, channel, player, letter: str, category: str, used: set, cancel_event: asyncio.Event):
@@ -3809,7 +3954,7 @@ class MafiaVoteView(discord.ui.View):
                 await interaction.response.send_message("أنت مو باللعبة.", ephemeral=True)
                 return
             self.votes[interaction.user.id] = target.id
-            await interaction.response.send_message(f"صوّتّ ضد {target.mention}", ephemeral=True)
+            await interaction.response.send_message(f"صوّتَّ ضد {target.mention}", ephemeral=True)
             if len(self.votes) >= len(self.players):
                 self.done.set()
         return cb
@@ -4353,7 +4498,7 @@ async def games_list_cmd(ctx: commands.Context):
     for cmd, desc in GAME_LIST["فردية"]:
         lines.append(f"`{cmd}`")
     lines.append("\nاكتب `.نقاطي` عشان تشوف رصيدك.")
-    lines.append("اكتب `.شرح اسم_اللعبة` (بدون النقطة داخل الاسم) عشان أشرحلك أي لعبة بالتفصيل.")
+    lines.append("اكتب `.شرح اسم_اللعبة` (بدون نقطة قبل الاسم) عشان أشرحلك أي لعبة بالتفصيل.")
     lines.append("اكتب `.شرح متجر` عشان تعرف ميزات المتجر (حماية، عكسية، قنبلة...).")
     lines.append("اكتب `.توب` عشان تشوف متصدرين النقاط.")
     lines.append("اكتب `.اوامر` عشان تشوف باقي الأوامر.")
