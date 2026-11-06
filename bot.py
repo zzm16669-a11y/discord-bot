@@ -41,7 +41,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont, ImageChops
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -166,6 +166,13 @@ async def get_audit_executor(guild: discord.Guild, action: discord.AuditLogActio
     except (discord.Forbidden, discord.HTTPException):
         pass
     return None
+
+
+async def audit_who(guild: discord.Guild, action: discord.AuditLogAction, target_id: int,
+                    max_age: int = 15, fallback: str = "غير معروف") -> str:
+    """يرجع منشن اللي سوا العملية (من سجل التدقيق) أو fallback لو ما انعرف."""
+    user = await get_audit_executor(guild, action, target_id, max_age)
+    return user.mention if user else fallback
 
 
 intents = discord.Intents.default()
@@ -454,7 +461,7 @@ class ReasonView(discord.ui.View):
             try:
                 await self.message.edit(
                     embed=self._embed(self.action_title, discord.Color.dark_grey(),
-                                       footer="⏳ انتهى الوقت — ما تم تنفيذ شي"),
+                                       footer="⏳ انتهى الوقت — ما تم تنفيذ أي شيء"),
                     view=self)
             except (discord.NotFound, discord.HTTPException):
                 pass
@@ -587,7 +594,7 @@ async def leaderboard_cmd(ctx: commands.Context):
     scores.sort(key=lambda x: x[1], reverse=True)
     top = scores[:10]
     if not top:
-        await ctx.send("📉 ما فيه أي نقاط مسجلة بهذا السيرفر لين الحين.")
+        await ctx.send("📉 ما فيه أي نقاط مسجلة بهذا السيرفر إلى الآن.")
         return
     medals = ["🥇", "🥈", "🥉"]
     lines = ["🏆 **توب 10 — أعلى النقاط بالسيرفر**\n"]
@@ -665,6 +672,10 @@ async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
         embed.add_field(name="الكاتب", value=cached.author.mention, inline=True)
         embed.add_field(name="الروم", value=cached.channel.mention, inline=True)
         embed.add_field(name="المحتوى", value=(cached.content[:1000] if cached.content else "(بدون نص)"), inline=False)
+        deleter = await get_audit_executor(cached.guild, discord.AuditLogAction.message_delete,
+                                           cached.author.id, max_age=10)
+        embed.add_field(name="اللي حذفها",
+                        value=deleter.mention if deleter else "الكاتب نفسه (أو غير معروف)", inline=True)
         embed.set_footer(text=f"معرف العضو: {cached.author.id}")
         await send_log(cached.guild, "delete", embed)
 
@@ -1291,7 +1302,7 @@ async def cmd_vc_comehere(message: discord.Message, args: str):
         return None
     target = message.mentions[0]
     if not message.author.voice:
-        await reply(message, "⚠️ لازم تكون بروم صوتي عشان يسحبك البوت... انتقل يدويًا.")
+        await reply(message, "⚠️ لازم تكون داخل روم صوتي عشان أنقلك لعند العضو.")
         return False
     if target.voice and target.voice.channel:
         await message.author.move_to(target.voice.channel, reason="تعال")
@@ -1477,7 +1488,7 @@ ADMIN_HELP_SECTIONS = [
         (["فك"], "فك @عضو", "فك السجن وإرجاع رتب العضو.", None),
         (["لقب", "اسم"], "لقب / اسم @عضو [الاسم_الجديد]", "تغيير لقب عضو بالسيرفر، وبدون اسم جديد يرجع اسمه الأصلي.", None),
         (["تنزيل"], "تنزيل @عضو اسم_الرتبة", "سحب رتبة من عضو (السبب من الأزرار).", None),
-        (["رجع"], "رجع @عضو", "إرجاع آخر رتبة انسحبت من العضو.", None),
+        (["رجع"], "رجع @عضو", "إرجاع آخر رتبة سُحبت من العضو.", None),
         (["رول"], "رول @عضو اسم_الرتبة", "إعطاء رتبة لعضو (بشرط تكون أقل من رتبتك).", None),
         (["تحذير"], "تحذير @عضو [السبب]", "تسجيل تحذير رسمي على عضو، وتطلع لك أزرار أسباب تختار منها.",
          f"أي إداري (**{ROLE_LABELS[TRIAL_MOD]}** وأعلى)"),
@@ -1556,29 +1567,88 @@ SHOP_COLOR_PRICE = 250
 SHOP_WARN_CLEAR_PRICE = 500
 
 # ---------- زينة بطاقة البروفايل (أمر p) — تنشترى مرة وحدة وتبقى للأبد ----------
-# slot: head = فوق الراس (واحدة بس تنلبس) / face = على الوجه
+# slot: head = فوق الراس (واحدة بس تنلبس) / face = نظارات / mouth = شنب
+# tilt: ميلان الزينة بالدرجات (موجب = لليسار، سالب = لليمين). id: اسم ملف الصورة الاختياري.
+# تقدر تحط صورة PNG شفافة واقعية بمجلد profile_items باسم <id>.png (مثال: profile_items/crown.png)
+# وبدل الرسم الجاهز يستخدمها البوت (img_w = عرضها بوحدة نصف قطر الصورة، img_y = ارتفاعها فوق/تحت المركز).
+PROFILE_ITEMS_DIR = "profile_items"
 PROFILE_ITEMS = {
-    "تاج":   {"price": 1500, "slot": "head", "emoji": "👑"},
-    "قبعة":  {"price": 800,  "slot": "head", "emoji": "🎩"},
-    "كاب":   {"price": 600,  "slot": "head", "emoji": "🧢"},
-    "هالة":  {"price": 1200, "slot": "head", "emoji": "😇"},
-    "نظارة": {"price": 500,  "slot": "face", "emoji": "🕶️"},
+    # ----- فوق الراس -----
+    "تاج":          {"id": "crown",    "price": 1500, "slot": "head",  "tilt": -14, "img_w": 1.6, "img_y": -1.35},
+    "قبعة":         {"id": "tophat",   "price": 800,  "slot": "head",  "tilt": -12, "img_w": 1.7, "img_y": -1.35},
+    "كاب":          {"id": "cap",      "price": 600,  "slot": "head",  "tilt": -13, "img_w": 1.9, "img_y": -1.15},
+    "هالة":         {"id": "halo",     "price": 1200, "slot": "head",  "tilt": -10, "img_w": 1.4, "img_y": -1.55},
+    "قبعة كاوبوي":  {"id": "cowboy",   "price": 900,  "slot": "head",  "tilt": -14, "img_w": 2.3, "img_y": -1.2},
+    "قبعة ساحر":    {"id": "wizard",   "price": 1000, "slot": "head",  "tilt": -12, "img_w": 1.8, "img_y": -1.4},
+    "قبعة طباخ":    {"id": "chef",     "price": 700,  "slot": "head",  "tilt": -10, "img_w": 1.5, "img_y": -1.3},
+    "خوذة فايكنج":  {"id": "viking",   "price": 1100, "slot": "head",  "tilt": -9,  "img_w": 2.5, "img_y": -1.2},
+    "قرون":         {"id": "horns",    "price": 900,  "slot": "head",  "tilt": -8,  "img_w": 1.6, "img_y": -1.3},
+    "قبعة سانتا":   {"id": "santa",    "price": 750,  "slot": "head",  "tilt": -15, "img_w": 1.9, "img_y": -1.3},
+    "بيريه":        {"id": "beret",    "price": 650,  "slot": "head",  "tilt": -16, "img_w": 1.9, "img_y": -1.15},
+    "غترة":         {"id": "ghutra",   "price": 1000, "slot": "head",  "tilt": -6,  "img_w": 2.3, "img_y": -0.8},
+    # ----- النظارات -----
+    "نظارة":        {"id": "glasses",  "price": 500,  "slot": "face",  "tilt": -5,  "img_w": 1.9, "img_y": -0.05},
+    "نظارة شمسية":  {"id": "aviator",  "price": 700,  "slot": "face",  "tilt": -5,  "img_w": 1.9, "img_y": -0.05},
+    "نظارة قلوب":   {"id": "hearts",   "price": 600,  "slot": "face",  "tilt": -5,  "img_w": 1.9, "img_y": -0.05},
+    # ----- الفم -----
+    "شنب":          {"id": "mustache", "price": 400,  "slot": "mouth", "tilt": 0,   "img_w": 1.5, "img_y": 0.45},
 }
 PROFILE_ITEM_ALIASES = {
-    "قبعه": "قبعة", "قبوع": "قبعة", "قبعات": "قبعة",
-    "نظاره": "نظارة", "نضارة": "نظارة", "نضاره": "نظارة",
-    "هاله": "هالة", "كاب": "كاب", "طاقيه": "كاب", "طاقية": "كاب",
+    "كاوبوي": "قبعة كاوبوي", "ساحر": "قبعة ساحر", "طباخ": "قبعة طباخ", "سانتا": "قبعة سانتا",
+    "فايكنج": "خوذة فايكنج", "فايكنغ": "خوذة فايكنج", "خوذة": "خوذة فايكنج",
+    "شماغ": "غترة", "شماق": "غترة", "عقال": "غترة", "قرن": "قرون", "قبعه": "قبعة", "قبوع": "قبعة",
+    "نضارة": "نظارة", "نضاره": "نظارة", "شمسيه": "نظارة شمسية", "نظارة طيار": "نظارة شمسية",
+    "قلوب": "نظارة قلوب", "طاقيه": "كاب", "طاقية": "كاب", "شوارب": "شنب", "شارب": "شنب",
 }
+
+
+def resolve_profile_item(text: str | None) -> str | None:
+    """يفهم اسم الزينة بأي صيغة (قبعه/قبعة، كاوبوي/قبعة كاوبوي...) ويرجع اسمها الرسمي أو None."""
+    text = " ".join((text or "").split())
+    if not text:
+        return None
+    if text in PROFILE_ITEMS:
+        return text
+    if text in PROFILE_ITEM_ALIASES:
+        return PROFILE_ITEM_ALIASES[text]
+    fixed = " ".join(w[:-1] + "ة" if w.endswith("ه") and len(w) > 2 else w for w in text.split())
+    if fixed in PROFILE_ITEMS:
+        return fixed
+    if fixed in PROFILE_ITEM_ALIASES:
+        return PROFILE_ITEM_ALIASES[fixed]
+    # كلمة وحدة من الاسم (مثل "ساحر") لو تدل على عنصر واحد بس
+    hits = [n for n in PROFILE_ITEMS if fixed and fixed in n.split()]
+    return hits[0] if len(hits) == 1 else None
+
+
+# روم الأوامر (الثيرمنل) — حط آيدي الروم هنا عشان البوت يوجّه الناس له بعد الشراء.
+# لو خليته 0 يدور على روم اسمه فيه terminal / ثيرمنل / ترمنل.
+COMMANDS_CHANNEL_ID = 0
+_COMMANDS_CHANNEL_HINTS = ("terminal", "ثيرمنل", "ترمنل", "تيرمنل", "ثرمنل")
+
+
+def commands_channel_text(guild: discord.Guild) -> str:
+    """منشن روم الأوامر لو لقيناه، وإلا عبارة عامة."""
+    ch = guild.get_channel(COMMANDS_CHANNEL_ID) if COMMANDS_CHANNEL_ID else None
+    if ch is None:
+        for c in guild.text_channels:
+            if any(h in c.name.lower() for h in _COMMANDS_CHANNEL_HINTS):
+                ch = c
+                break
+    return ch.mention if ch is not None else "روم الأوامر"
 
 
 def _profile_items_text() -> str:
-    lines = ["🖼️ **زينة بطاقة البروفايل (أمر `p`)** — شراء مرة وحدة وتبقى لك"]
-    for name, info in PROFILE_ITEMS.items():
-        lines.append(f"{info['emoji']} **{name}** — {info['price']} نقطة")
-    lines.append("الشراء: `.شراء تاج` ← يتلبس تلقائيًا")
-    lines.append("التبديل: `.لبس اسم_العنصر` — الخلع: `.خلع`")
-    return "\n".join(lines)
-
+    def fmt(slot):
+        return "\n".join(f"• **{n}** — {i['price']} نقطة" for n, i in PROFILE_ITEMS.items() if i["slot"] == slot)
+    return (
+        "**زينة بطاقة البروفايل (أمر `p`)** — شراء مرة وحدة وتبقى لك\n\n"
+        f"__فوق الراس__\n{fmt('head')}\n\n"
+        f"__النظارات__\n{fmt('face')}\n\n"
+        f"__الفم__\n{fmt('mouth')}\n\n"
+        "الشراء: `.شراء قبعة كاوبوي` ← يتلبس تلقائيًا (راس + نظارة + شنب تلبسهم مع بعض)\n"
+        "التبديل: `.لبس اسم_العنصر` — الخلع: `.خلع`"
+    )
 
 SHOP_ITEMS_TEXT = (
     "🛍️ **المتجر**\n\n"
@@ -1601,6 +1671,7 @@ def get_profile_items(guild_id: int, user_id: int) -> dict:
         "owned": list(entry.get("owned", [])),
         "head": entry.get("head"),
         "face": entry.get("face"),
+        "mouth": entry.get("mouth"),
     }
 
 
@@ -1639,7 +1710,9 @@ async def buy_cmd(ctx: commands.Context, item: str = None, *, extra_text: str = 
         await ctx.send("⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.شراء تاج`\nواكتب `.متجر` عشان تشوف الأشياء المتوفرة.")
         return
     item = item.strip()
-    item = PROFILE_ITEM_ALIASES.get(item, item)
+    profile_key = None
+    if item not in ("لقب", "لون", "تنظيف"):
+        profile_key = resolve_profile_item(f"{item} {extra_text or ''}")
     author = ctx.author
     balance = get_balance(ctx.guild.id, author.id)
 
@@ -1659,7 +1732,7 @@ async def buy_cmd(ctx: commands.Context, item: str = None, *, extra_text: str = 
         try:
             await author.edit(nick=new_nick, reason="شراء لقب مؤقت من المتجر")
         except discord.Forbidden:
-            await ctx.send("❌ ما أقدر أغيّر لقبك (رتبتك أعلى من رتبتي أو ناقصني صلاحية).")
+            await ctx.send("❌ ما أقدر أغيّر لقبك (رتبتك أعلى من رتبتي أو ينقصني صلاحية).")
             return
         add_balance(ctx.guild.id, author.id, -price)
         _shop_set_active(ctx.guild.id, author.id, "title", SHOP_TITLE_DURATION_HOURS,
@@ -1712,11 +1785,12 @@ async def buy_cmd(ctx: commands.Context, item: str = None, *, extra_text: str = 
         add_balance(ctx.guild.id, author.id, -price)
         await ctx.send(f"✅ تم حذف أقدم تنبيه عندك. باقي عندك **{len(user_warns)}** تنبيه.")
 
-    elif item in PROFILE_ITEMS:
+    elif profile_key:
+        item = profile_key
         info = PROFILE_ITEMS[item]
         entry = get_profile_items(ctx.guild.id, author.id)
         if item in entry["owned"]:
-            await ctx.send(f"⚠️ تملك **{item}** من قبل، البسه بـ `.لبس {item}`")
+            await ctx.send(f"⚠️ تملك **{item}** مسبقًا، البسه بـ `.لبس {item}`")
             return
         if balance < info["price"]:
             await ctx.send(f"❌ رصيدك ما يكفي (تحتاج {info['price']} نقطة).")
@@ -1725,7 +1799,7 @@ async def buy_cmd(ctx: commands.Context, item: str = None, *, extra_text: str = 
         entry["owned"].append(item)
         entry[info["slot"]] = item
         save_profile_items(ctx.guild.id, author.id, entry)
-        await ctx.send(f"✅ اشتريت {info['emoji']} **{item}** وانلبس على بطاقتك! جرّب اكتب `p`")
+        await ctx.send(f"✅ اشتريت **{item}** وانلبست على بطاقتك! جرّب اكتب `p` في {commands_channel_text(ctx.guild)}")
 
     else:
         await ctx.send("⚠️ ما لقيت هذا العنصر، اكتب `.متجر` عشان تشوف الأشياء المتوفرة.")
@@ -1736,8 +1810,8 @@ async def wear_cmd(ctx: commands.Context, *, name: str = None):
     if not name or not name.strip():
         await ctx.send("⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.لبس تاج`")
         return
-    name = PROFILE_ITEM_ALIASES.get(name.strip(), name.strip())
-    if name not in PROFILE_ITEMS:
+    name = resolve_profile_item(name)
+    if name is None or name not in PROFILE_ITEMS:
         await ctx.send("⚠️ ما فيه عنصر بهذا الاسم، اكتب `.متجر` تشوف الزينة المتوفرة.")
         return
     entry = get_profile_items(ctx.guild.id, ctx.author.id)
@@ -1747,7 +1821,7 @@ async def wear_cmd(ctx: commands.Context, *, name: str = None):
     info = PROFILE_ITEMS[name]
     entry[info["slot"]] = name
     save_profile_items(ctx.guild.id, ctx.author.id, entry)
-    await ctx.send(f"✅ لبست {info['emoji']} **{name}** — جرّب اكتب `p`")
+    await ctx.send(f"✅ لبست **{name}** — جرّب اكتب `p` في {commands_channel_text(ctx.guild)}")
 
 
 @bot.command(name="خلع")
@@ -1755,6 +1829,7 @@ async def unwear_cmd(ctx: commands.Context):
     entry = get_profile_items(ctx.guild.id, ctx.author.id)
     entry["head"] = None
     entry["face"] = None
+    entry["mouth"] = None
     save_profile_items(ctx.guild.id, ctx.author.id, entry)
     await ctx.send("✅ خلعت كل الزينة (تقدر تلبسها مرة ثانية بـ `.لبس`).")
 
@@ -1905,75 +1980,319 @@ def _circle_avatar(avatar_bytes: bytes, diameter: int):
     return av
 
 
+# ---------- رسم الزينة (واقعية بتدرجات وظلال، وتنرسم مايلة) ----------
+class _Canvas:
+    """لوحة رسم للزينة: الإحداثيات بوحدة نصف قطر الصورة (u أفقي، v عمودي، 0,0 = مركز الصورة)."""
+
+    def __init__(self, r: int, k: int = 2):
+        self.r, self.k = r, k
+        self.half = int(r * 2.0)
+        self.side = self.half * 2
+        self.size = self.side * k
+        self.img = Image.new("RGBA", (self.size, self.size), (0, 0, 0, 0))
+        self.c = self.size / 2
+
+    def P(self, u, v):
+        return (self.c + u * self.r * self.k, self.c + v * self.r * self.k)
+
+    def w(self, f):
+        return max(1, int(f * self.r * self.k))
+
+    def draw(self):
+        return ImageDraw.Draw(self.img, "RGBA")
+
+    def _fill(self, bbox, mask_fn, c1, c2=None, horizontal=False):
+        x0, y0, x1, y1 = [int(v) for v in bbox]
+        x0, y0 = max(0, x0 - 1), max(0, y0 - 1)
+        x1, y1 = min(self.size, x1 + 2), min(self.size, y1 + 2)
+        w, h = x1 - x0, y1 - y0
+        if w < 2 or h < 2:
+            return
+        c2 = c2 or c1
+        grad = Image.new("RGBA", (w, h))
+        gd = ImageDraw.Draw(grad)
+        n = w if horizontal else h
+        for i in range(n):
+            t = i / max(1, n - 1)
+            col = tuple(int(c1[j] + (c2[j] - c1[j]) * t) for j in range(4))
+            gd.line([(i, 0), (i, h)] if horizontal else [(0, i), (w, i)], fill=col)
+        mask = Image.new("L", (w, h), 0)
+        mask_fn(ImageDraw.Draw(mask), x0, y0)
+        grad.putalpha(mask)
+        self.img.alpha_composite(grad, (x0, y0))
+
+    def poly(self, pts, c1, c2=None, outline=None, ow=0.025, horizontal=False):
+        pp = [self.P(*p) for p in pts]
+        xs, ys = [p[0] for p in pp], [p[1] for p in pp]
+        self._fill((min(xs), min(ys), max(xs), max(ys)),
+                   lambda d, x0, y0: d.polygon([(x - x0, y - y0) for x, y in pp], fill=255), c1, c2, horizontal)
+        if outline:
+            self.draw().line(pp + [pp[0]], fill=outline, width=self.w(ow), joint="curve")
+
+    def shape(self, kind, u1, v1, u2, v2, c1, c2=None, outline=None, ow=0.025,
+              horizontal=False, start=0, end=360, rad=0.05):
+        (x1, y1), (x2, y2) = self.P(u1, v1), self.P(u2, v2)
+
+        def mk(d, x0, y0):
+            b = [x1 - x0, y1 - y0, x2 - x0, y2 - y0]
+            if kind == "ellipse":
+                d.ellipse(b, fill=255)
+            elif kind == "rrect":
+                d.rounded_rectangle(b, radius=self.w(rad), fill=255)
+            elif kind == "pie":
+                d.pieslice(b, start, end, fill=255)
+            elif kind == "chord":
+                d.chord(b, start, end, fill=255)
+
+        self._fill((x1, y1, x2, y2), mk, c1, c2, horizontal)
+        if outline:
+            d, b, wd = self.draw(), [x1, y1, x2, y2], self.w(ow)
+            if kind == "ellipse":
+                d.ellipse(b, outline=outline, width=wd)
+            elif kind == "rrect":
+                d.rounded_rectangle(b, radius=self.w(rad), outline=outline, width=wd)
+            else:
+                d.arc(b, start, end, fill=outline, width=wd)
+
+    def circ(self, u, v, rad, c1, c2=None, outline=None, ow=0.02):
+        self.shape("ellipse", u - rad, v - rad, u + rad, v + rad, c1, c2, outline, ow)
+
+    def line(self, pts, color, width):
+        self.draw().line([self.P(*p) for p in pts], fill=color, width=self.w(width), joint="curve")
+
+    def shine(self, u1, v1, u2, v2, alpha=110):
+        """لمعة بيضاء شفافة (بيضاوية صغيرة) تعطي إحساس المعدن/اللمعان."""
+        (x1, y1), (x2, y2) = self.P(u1, v1), self.P(u2, v2)
+        self.draw().ellipse([x1, y1, x2, y2], fill=(255, 255, 255, alpha))
+
+    def finish(self):
+        return self.img.resize((self.side, self.side), Image.LANCZOS)
+
+
+def _star_pts(cx, cy, R, n=5):
+    pts = []
+    for i in range(n * 2):
+        ang = -math.pi / 2 + i * math.pi / n
+        rr = R if i % 2 == 0 else R * 0.45
+        pts.append((cx + rr * math.cos(ang), cy + rr * math.sin(ang)))
+    return pts
+
+
+GOLD_L, GOLD_D, GOLD_X = (255, 232, 130, 255), (196, 134, 14, 255), (120, 76, 6, 255)
+
+
+def _acc_crown(c):
+    pts = [(-0.66, -0.78), (-0.76, -1.60), (-0.36, -1.20), (0, -1.80), (0.36, -1.20), (0.76, -1.60), (0.66, -0.78)]
+    c.poly(pts, GOLD_L, GOLD_D, outline=GOLD_X, ow=0.03)
+    c.poly([(-0.30, -1.18), (0, -1.78), (0.30, -1.18), (0, -0.95)], (255, 244, 180, 255), (230, 170, 40, 255))
+    c.shape("rrect", -0.70, -1.02, 0.70, -0.76, GOLD_L, GOLD_D, outline=GOLD_X, ow=0.03, rad=0.06)
+    for u in (-0.42, -0.14, 0.14, 0.42):
+        c.circ(u, -0.89, 0.045, (255, 255, 255, 255), (210, 220, 235, 255))
+    c.circ(-0.76, -1.60, 0.085, (255, 120, 140, 255), (190, 20, 50, 255), outline=GOLD_X)
+    c.circ(0, -1.80, 0.10, (150, 200, 255, 255), (30, 90, 210, 255), outline=GOLD_X)
+    c.circ(0.76, -1.60, 0.085, (255, 120, 140, 255), (190, 20, 50, 255), outline=GOLD_X)
+    c.shine(-0.52, -1.0, -0.2, -0.93, 150)
+
+
+def _acc_tophat(c):
+    c.shape("ellipse", -1.0, -1.0, 1.0, -0.70, (58, 58, 66, 255), (10, 10, 12, 255), outline=(0, 0, 0, 255))
+    c.shape("rrect", -0.56, -1.86, 0.0, -0.86, (14, 14, 18, 255), (74, 74, 86, 255), horizontal=True, rad=0.0)
+    c.shape("rrect", 0.0, -1.86, 0.56, -0.86, (74, 74, 86, 255), (14, 14, 18, 255), horizontal=True, rad=0.0)
+    c.shape("ellipse", -0.56, -1.96, 0.56, -1.74, (104, 104, 116, 255), (46, 46, 54, 255), outline=(0, 0, 0, 255))
+    c.shape("rrect", -0.56, -1.17, 0.56, -0.96, (200, 40, 55, 255), (120, 14, 26, 255), rad=0.0)
+    c.shape("rrect", -0.12, -1.20, 0.12, -0.93, (255, 226, 120, 255), (190, 130, 14, 255), outline=GOLD_X, ow=0.015, rad=0.02)
+    c.line([(-0.40, -1.74), (-0.40, -1.25)], (255, 255, 255, 60), 0.04)
+
+
+def _acc_cap(c):
+    c.shape("pie", -0.90, -1.52, 0.90, -0.46, (70, 160, 225, 255), (24, 84, 150, 255), outline=(16, 60, 110, 255),
+            start=180, end=360)
+    c.line([(0, -1.5), (0, -0.96)], (16, 60, 110, 255), 0.02)
+    c.line([(-0.5, -1.4), (-0.35, -0.96)], (16, 60, 110, 255), 0.02)
+    c.line([(0.5, -1.4), (0.35, -0.96)], (16, 60, 110, 255), 0.02)
+    c.shape("rrect", -0.90, -1.0, 0.90, -0.90, (36, 110, 175, 255), (18, 70, 120, 255), rad=0.03)
+    c.shape("ellipse", 0.05, -1.02, 1.40, -0.78, (36, 110, 175, 255), (14, 62, 108, 255), outline=(10, 44, 80, 255))
+    c.circ(0, -1.52, 0.06, (36, 110, 175, 255), (14, 62, 108, 255))
+    c.shine(-0.55, -1.38, -0.2, -1.2, 90)
+
+
+def _acc_halo(c):
+    box = (-0.64, -1.66, 0.64, -1.24)
+    d = c.draw()
+    (x1, y1), (x2, y2) = c.P(box[0], box[1]), c.P(box[2], box[3])
+    for wd, a in ((0.22, 36), (0.16, 64), (0.11, 100)):
+        d.ellipse([x1, y1, x2, y2], outline=(255, 232, 120, a), width=c.w(wd))
+    d.ellipse([x1, y1, x2, y2], outline=(255, 206, 60, 255), width=c.w(0.065))
+    d.ellipse([x1, y1, x2, y2], outline=(255, 246, 190, 255), width=c.w(0.022))
+
+
+def _acc_cowboy(c):
+    c.poly([(-0.56, -0.86), (-0.52, -1.55), (-0.30, -1.66), (0, -1.46), (0.30, -1.66), (0.52, -1.55), (0.56, -0.86)],
+           (190, 134, 74, 255), (126, 80, 38, 255), outline=(70, 40, 18, 255), ow=0.03)
+    c.shape("ellipse", -1.22, -1.04, 1.22, -0.62, (206, 152, 88, 255), (118, 74, 34, 255), outline=(70, 40, 18, 255), ow=0.03)
+    c.poly([(-0.56, -0.86), (-0.55, -1.12), (0.55, -1.12), (0.56, -0.86)], (96, 58, 28, 255), (58, 32, 14, 255))
+    c.shape("rrect", -0.12, -1.10, 0.12, -0.88, (255, 226, 120, 255), (190, 130, 14, 255), outline=GOLD_X, ow=0.015, rad=0.02)
+    c.line([(0, -1.46), (0, -1.14)], (70, 40, 18, 160), 0.03)
+    c.line([(-1.18, -0.86), (-1.0, -1.0)], (70, 40, 18, 200), 0.03)
+    c.line([(1.18, -0.86), (1.0, -1.0)], (70, 40, 18, 200), 0.03)
+
+
+def _acc_wizard(c):
+    c.shape("ellipse", -1.02, -1.0, 1.02, -0.70, (96, 56, 160, 255), (48, 24, 96, 255), outline=(30, 14, 64, 255))
+    c.poly([(-0.64, -0.86), (-0.14, -1.60), (0.44, -1.94), (0.22, -1.52), (0.64, -0.86)],
+           (140, 92, 214, 255), (60, 30, 122, 255), outline=(30, 14, 64, 255), ow=0.03)
+    c.shape("rrect", -0.64, -1.04, 0.64, -0.86, (255, 226, 120, 255), (190, 130, 14, 255), outline=GOLD_X, ow=0.015, rad=0.02)
+    for (u, v, R) in ((-0.05, -1.26, 0.10), (0.20, -1.55, 0.075), (0.30, -1.14, 0.06)):
+        c.poly(_star_pts(u, v, R), (255, 240, 150, 255), (240, 190, 40, 255))
+
+
+def _acc_chef(c):
+    w1, w2, ol = (255, 255, 255, 255), (214, 220, 230, 255), (176, 184, 198, 255)
+    for (u, v, R) in ((-0.48, -1.42, 0.38), (0.48, -1.42, 0.38), (0, -1.66, 0.46), (-0.2, -1.3, 0.44), (0.2, -1.3, 0.44)):
+        c.circ(u, v, R, w1, w2, outline=ol, ow=0.015)
+    c.shape("rrect", -0.62, -1.14, 0.62, -0.78, w1, w2, outline=ol, ow=0.02, rad=0.05)
+    for u in (-0.3, 0, 0.3):
+        c.line([(u, -1.1), (u, -0.82)], (190, 196, 210, 255), 0.015)
+
+
+def _acc_viking(c):
+    for sgn in (-1, 1):
+        pts = [(sgn * u, v) for u, v in [(0.70, -0.92), (1.02, -0.98), (1.25, -1.18), (1.28, -1.45),
+                                          (1.15, -1.52), (1.12, -1.30), (0.95, -1.15), (0.74, -1.16)]]
+        c.poly(pts, (252, 246, 228, 255), (176, 158, 124, 255), outline=(92, 78, 54, 255), ow=0.025)
+    c.shape("pie", -0.84, -1.52, 0.84, -0.46, (206, 214, 224, 255), (92, 100, 114, 255), outline=(50, 56, 66, 255),
+            start=180, end=360)
+    c.shape("rrect", -0.84, -1.02, 0.84, -0.88, (130, 138, 150, 255), (70, 76, 88, 255), outline=(50, 56, 66, 255), ow=0.02, rad=0.03)
+    for u in (-0.6, -0.3, 0, 0.3, 0.6):
+        c.circ(u, -0.95, 0.03, (240, 244, 250, 255), (150, 156, 168, 255))
+    c.shine(-0.5, -1.4, -0.2, -1.22, 120)
+
+
+def _acc_horns(c):
+    for sgn in (-1, 1):
+        pts = [(sgn * u, v) for u, v in [(0.80, -0.85), (0.52, -0.92), (0.40, -1.25), (0.30, -1.70), (0.62, -1.45), (0.82, -1.15)]]
+        c.poly(pts, (240, 70, 70, 255), (112, 8, 18, 255), outline=(60, 0, 8, 255), ow=0.025)
+        c.line([(sgn * 0.62, -1.0), (sgn * 0.46, -1.45)], (255, 190, 190, 120), 0.025)
+
+
+def _acc_santa(c):
+    c.poly([(-0.76, -0.88), (-0.72, -1.34), (-0.34, -1.72), (0.50, -1.78), (0.96, -1.46), (0.80, -1.20), (0.72, -0.88)],
+           (240, 60, 70, 255), (146, 12, 24, 255), outline=(96, 6, 14, 255), ow=0.03)
+    c.circ(0.92, -1.40, 0.17, (255, 255, 255, 255), (214, 220, 230, 255), outline=(176, 184, 198, 255), ow=0.015)
+    c.shape("rrect", -0.84, -1.10, 0.84, -0.78, (255, 255, 255, 255), (214, 220, 230, 255), outline=(176, 184, 198, 255), ow=0.02, rad=0.14)
+    for u in (-0.6, -0.2, 0.2, 0.6):
+        c.circ(u, -0.94, 0.07, (255, 255, 255, 255), (222, 228, 238, 255))
+
+
+def _acc_beret(c):
+    c.shape("ellipse", -0.96, -1.46, 0.86, -0.80, (176, 30, 48, 255), (88, 8, 20, 255), outline=(60, 4, 12, 255), ow=0.03)
+    c.shape("ellipse", -0.60, -1.40, -0.1, -1.18, (210, 70, 86, 255), (150, 24, 40, 255))
+    c.shape("rrect", -0.04, -1.58, 0.1, -1.42, (96, 8, 20, 255), (60, 4, 12, 255), rad=0.03)
+
+
+def _acc_ghutra(c):
+    c.shape("chord", -1.14, -1.14, 1.14, 1.14, (255, 255, 255, 255), (222, 226, 234, 255),
+            outline=(170, 176, 190, 255), ow=0.03, start=205, end=335)
+    # مربعات الغترة الحمراء
+    (x1, y1), (x2, y2) = c.P(-1.14, -1.14), c.P(1.14, 1.14)
+    chord = Image.new("L", (c.size, c.size), 0)
+    ImageDraw.Draw(chord).chord([x1, y1, x2, y2], 205, 335, fill=255)
+    lines = Image.new("L", (c.size, c.size), 0)
+    ld = ImageDraw.Draw(lines)
+    step, wd = int(0.17 * c.r * c.k), c.w(0.035)
+    for i in range(0, c.size, step):
+        ld.line([(i, 0), (i, c.size)], fill=255, width=wd)
+        ld.line([(0, i), (c.size, i)], fill=255, width=wd)
+    solid = Image.new("RGBA", (c.size, c.size), (200, 30, 40, 255))
+    solid.putalpha(ImageChops.multiply(chord, lines))
+    c.img.alpha_composite(solid)
+    d = c.draw()
+    for off, wd2 in ((0, 0.10), (0.13, 0.08)):
+        (a1, b1), (a2, b2) = c.P(-0.94, -1.12 + off), c.P(0.94, -0.72 + off)
+        d.ellipse([a1, b1, a2, b2], outline=(18, 18, 20, 255), width=c.w(wd2))
+
+
+def _acc_glasses(c):
+    for (u1, u2) in ((-0.90, -0.06), (0.06, 0.90)):
+        c.shape("rrect", u1, -0.30, u2, 0.20, (52, 58, 70, 255), (8, 10, 14, 255), outline=(14, 14, 18, 255), ow=0.05, rad=0.14)
+    c.line([(-0.06, -0.12), (0.06, -0.12)], (14, 14, 18, 255), 0.06)
+    c.line([(-0.90, -0.15), (-1.02, -0.2)], (14, 14, 18, 255), 0.05)
+    c.line([(0.90, -0.15), (1.02, -0.2)], (14, 14, 18, 255), 0.05)
+    c.line([(-0.74, -0.2), (-0.5, -0.2)], (255, 255, 255, 120), 0.03)
+    c.line([(0.22, -0.2), (0.46, -0.2)], (255, 255, 255, 120), 0.03)
+
+
+def _acc_aviator(c):
+    for (u1, u2) in ((-0.92, -0.06), (0.06, 0.92)):
+        c.shape("ellipse", u1, -0.28, u2, 0.34, (120, 96, 40, 255), (14, 12, 8, 255), outline=(222, 176, 52, 255), ow=0.045)
+    c.line([(-0.06, -0.14), (0.06, -0.14)], (222, 176, 52, 255), 0.05)
+    c.line([(-0.92, -0.14), (-1.04, -0.2)], (222, 176, 52, 255), 0.04)
+    c.line([(0.92, -0.14), (1.04, -0.2)], (222, 176, 52, 255), 0.04)
+    c.shine(-0.74, -0.16, -0.5, -0.06, 110)
+    c.shine(0.22, -0.16, 0.46, -0.06, 110)
+
+
+def _acc_hearts(c):
+    for cx in (-0.48, 0.48):
+        cy = -0.10
+        for sg in (-1, 1):
+            c.circ(cx + sg * 0.2, cy - 0.06, 0.23, (255, 130, 170, 255), (200, 20, 70, 255))
+        c.poly([(cx - 0.42, cy), (cx + 0.42, cy), (cx, cy + 0.46)], (240, 70, 120, 255), (190, 14, 60, 255))
+        c.shine(cx - 0.34, cy - 0.20, cx - 0.12, cy - 0.10, 150)
+    c.line([(-0.08, -0.14), (0.08, -0.14)], (150, 10, 50, 255), 0.05)
+
+
+def _acc_mustache(c):
+    for sgn in (-1, 1):
+        pts = [(sgn * u, v) for u, v in [(0, 0.40), (0.18, 0.33), (0.45, 0.35), (0.72, 0.50), (0.64, 0.60),
+                                          (0.42, 0.52), (0.18, 0.52), (0, 0.54)]]
+        c.poly(pts, (74, 44, 24, 255), (20, 10, 4, 255), outline=(12, 6, 2, 255), ow=0.015)
+
+
+_ACC_DRAWERS = {
+    "crown": _acc_crown, "tophat": _acc_tophat, "cap": _acc_cap, "halo": _acc_halo, "cowboy": _acc_cowboy,
+    "wizard": _acc_wizard, "chef": _acc_chef, "viking": _acc_viking, "horns": _acc_horns, "santa": _acc_santa,
+    "beret": _acc_beret, "ghutra": _acc_ghutra, "glasses": _acc_glasses, "aviator": _acc_aviator,
+    "hearts": _acc_hearts, "mustache": _acc_mustache,
+}
+
+
+def _custom_item_layer(path: str, info: dict, c: _Canvas):
+    """لو حاط صورة PNG واقعية للزينة بمجلد profile_items نستخدمها بدل الرسم الجاهز."""
+    img = Image.open(path).convert("RGBA")
+    w = max(8, int(info.get("img_w", 1.6) * c.r))
+    h = max(8, int(img.height * w / img.width))
+    img = img.resize((w, h), Image.LANCZOS)
+    layer = Image.new("RGBA", (c.side, c.side), (0, 0, 0, 0))
+    x = max(0, c.half - w // 2)
+    y = max(0, int(c.half + info.get("img_y", -1.2) * c.r - h // 2))
+    layer.alpha_composite(img.crop((0, 0, min(w, c.side - x), min(h, c.side - y))), (x, y))
+    return layer
+
+
 def _accessory_layer(kind: str, r: int):
-    """يرسم زينة (تاج/قبعة/كاب/نظارة/هالة) على طبقة شفافة. الإحداثيات بوحدة نصف قطر الصورة (u,v)."""
-    k = 3  # تكبير للرسم عشان الحواف تطلع ناعمة
-    half = int(r * 2.0)
-    side = half * 2
-    layer = Image.new("RGBA", (side * k, side * k), (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    center = side * k / 2
-
-    def P(u, v):
-        return (center + u * r * k, center + v * r * k)
-
-    def box(u1, v1, u2, v2):
-        x1, y1 = P(u1, v1)
-        x2, y2 = P(u2, v2)
-        return [x1, y1, x2, y2]
-
-    def circ(u, v, rad, fill):
-        d.ellipse(box(u - rad, v - rad, u + rad, v + rad), fill=fill)
-
-    line_w = max(2, int(0.035 * r * k))
-
-    if kind == "تاج":
-        gold, dark_gold = (245, 197, 24, 255), (176, 124, 10, 255)
-        pts = [P(-0.62, -0.8), P(-0.70, -1.55), P(-0.32, -1.2), P(0, -1.72),
-               P(0.32, -1.2), P(0.70, -1.55), P(0.62, -0.8)]
-        d.polygon(pts, fill=gold)
-        d.line(pts + [pts[0]], fill=dark_gold, width=line_w, joint="curve")
-        d.rounded_rectangle(box(-0.64, -0.98, 0.64, -0.8), radius=int(0.05 * r * k), fill=(214, 160, 20, 255),
-                            outline=dark_gold, width=line_w // 2)
-        circ(-0.70, -1.55, 0.07, (220, 40, 60, 255))
-        circ(0, -1.72, 0.08, (60, 120, 230, 255))
-        circ(0.70, -1.55, 0.07, (220, 40, 60, 255))
-        for u in (-0.3, 0, 0.3):
-            circ(u, -0.89, 0.04, (255, 255, 255, 255))
-
-    elif kind == "قبعة":
-        d.ellipse(box(-0.95, -1.02, 0.95, -0.66), fill=(25, 25, 28, 255))
-        d.rectangle(box(-0.52, -1.75, 0.52, -0.84), fill=(38, 38, 44, 255))
-        d.ellipse(box(-0.52, -1.83, 0.52, -1.67), fill=(62, 62, 70, 255))
-        d.rectangle(box(-0.52, -1.12, 0.52, -0.9), fill=(170, 30, 40, 255))
-        d.line([P(-0.4, -1.6), P(-0.4, -1.2)], fill=(255, 255, 255, 50), width=line_w)
-
-    elif kind == "كاب":
-        blue, dark_blue = (41, 128, 185, 255), (28, 90, 135, 255)
-        d.pieslice(box(-0.85, -1.45, 0.85, -0.45), 180, 360, fill=blue)
-        d.line([P(0, -1.45), P(0, -0.95)], fill=dark_blue, width=line_w // 2)
-        d.rectangle(box(-0.85, -1.0, 0.85, -0.92), fill=dark_blue)
-        d.ellipse(box(0.1, -1.04, 1.28, -0.8), fill=dark_blue)
-        circ(0, -1.45, 0.06, dark_blue)
-
-    elif kind == "هالة":
-        d.ellipse(box(-0.6, -1.76, 0.6, -1.34), outline=(255, 223, 90, 90), width=int(0.16 * r * k))
-        d.ellipse(box(-0.55, -1.7, 0.55, -1.4), outline=(255, 225, 100, 255), width=int(0.07 * r * k))
-
-    elif kind == "نظارة":
-        dark = (15, 15, 18, 235)
-        rad = int(0.15 * r * k)
-        d.rounded_rectangle(box(-0.88, -0.28, -0.06, 0.2), radius=rad, fill=dark)
-        d.rounded_rectangle(box(0.06, -0.28, 0.88, 0.2), radius=rad, fill=dark)
-        d.rectangle(box(-0.1, -0.16, 0.1, -0.08), fill=dark)
-        d.line([P(-0.72, -0.17), P(-0.5, -0.17)], fill=(255, 255, 255, 120), width=line_w)
-        d.line([P(0.2, -0.17), P(0.42, -0.17)], fill=(255, 255, 255, 120), width=line_w)
-
-    return layer.resize((side, side), Image.LANCZOS), half
+    """يرجع (طبقة الزينة مايلة, نصف حجمها). الطبقة مركزها = مركز الصورة فتتدور حول الراس."""
+    info = PROFILE_ITEMS[kind]
+    c = _Canvas(r)
+    layer = None
+    custom = os.path.join(PROFILE_ITEMS_DIR, f"{info['id']}.png")
+    if os.path.exists(custom):
+        try:
+            layer = _custom_item_layer(custom, info, c)
+        except Exception as e:
+            print(f"[Profile] تعذّر تحميل صورة الزينة {custom}: {e}")
+    if layer is None:
+        _ACC_DRAWERS[info["id"]](c)
+        layer = c.finish()
+    tilt = info.get("tilt", 0)
+    if tilt:
+        layer = layer.rotate(tilt, resample=Image.BICUBIC)
+    return layer, c.half
 
 
 def render_profile_card(avatar_bytes: bytes, display_name: str, handle: str,
-                        bank_money: int, points: int, head: str | None, face: str | None) -> BytesIO:
+                        bank_money: int, points: int, head: str | None, face: str | None,
+                        mouth: str | None = None) -> BytesIO:
     base = Image.open(PROFILE_BG_PATH).convert("RGBA")
     draw = ImageDraw.Draw(base)
     cx, cy = PROFILE_CIRCLE_CENTER
@@ -1985,7 +2304,7 @@ def render_profile_card(avatar_bytes: bytes, display_name: str, handle: str,
     base.paste(avatar, (cx - inner // 2, cy - inner // 2), avatar)
 
     # الزينة (الوجه أول ثم الراس)
-    for kind in (face, head):
+    for kind in (mouth, face, head):
         if kind in PROFILE_ITEMS:
             layer, half = _accessory_layer(kind, int(r * 0.95))
             base.paste(layer, (cx - half, cy - half), layer)
@@ -2141,7 +2460,7 @@ async def info_profile(message: discord.Message, member: discord.Member):
             points = get_balance(message.guild.id, member.id)
             buf = await asyncio.to_thread(
                 render_profile_card, avatar_bytes, member.display_name, f"@{member.name}",
-                bank_money, points, entry.get("head"), entry.get("face"))
+                bank_money, points, entry.get("head"), entry.get("face"), entry.get("mouth"))
         except Exception as e:
             print(f"[Profile] خطأ برسم البطاقة: {e}")
             await message.channel.send("❌ صار خطأ وأنا أرسم البطاقة.")
@@ -2705,9 +3024,13 @@ async def on_member_join(member: discord.Member):
 
 @bot.event
 async def on_member_remove(member: discord.Member):
-    embed = discord.Embed(title="📤 عضو خرج من السيرفر", color=discord.Color.red(),
+    kicker = await get_audit_executor(member.guild, discord.AuditLogAction.kick, member.id, max_age=10)
+    title = "👢 تم طرد عضو من السيرفر" if kicker else "📤 عضو خرج من السيرفر"
+    embed = discord.Embed(title=title, color=discord.Color.red(),
                            timestamp=datetime.now(timezone.utc))
     embed.add_field(name="العضو", value=f"{member} ({member.mention})", inline=True)
+    if kicker:
+        embed.add_field(name="اللي طرده", value=kicker.mention, inline=True)
     if member.joined_at:
         embed.add_field(name="انضم بتاريخ", value=discord.utils.format_dt(member.joined_at, "R"), inline=True)
     embed.set_thumbnail(url=member.display_avatar.url)
@@ -2748,7 +3071,7 @@ async def on_member_unban(guild: discord.Guild, user):
                 break
     except discord.Forbidden:
         pass
-    embed = discord.Embed(title="✅ تم فك حظر عن عضو", color=discord.Color.green(),
+    embed = discord.Embed(title="✅ تم فك الحظر عن عضو", color=discord.Color.green(),
                            timestamp=datetime.now(timezone.utc))
     embed.add_field(name="العضو", value=str(user), inline=True)
     if moderator:
@@ -2760,28 +3083,57 @@ async def on_member_unban(guild: discord.Guild, user):
 # ---------- لوقات الرتب ----------
 @bot.event
 async def on_member_update(before: discord.Member, after: discord.Member):
-    if before.roles == after.roles:
-        return
+    guild = after.guild
+
+    # ---- الرتب ----
     added = [r for r in after.roles if r not in before.roles]
     removed = [r for r in before.roles if r not in after.roles]
-    if not added and not removed:
-        return
+    if added or removed:
+        executor = await get_audit_executor(guild, discord.AuditLogAction.member_role_update, after.id)
+        embed = discord.Embed(title="🎭 تعديل رتب عضو", color=discord.Color.blurple(),
+                               timestamp=datetime.now(timezone.utc))
+        embed.add_field(name="العضو", value=after.mention, inline=False)
+        if added:
+            embed.add_field(name="➕ أضيفت", value="، ".join(r.mention for r in added), inline=False)
+            embed.add_field(name="🎁 اللي أعطى الرتبة", value=executor.mention if executor else "غير معروف",
+                            inline=True)
+        if removed:
+            embed.add_field(name="➖ أزيلت", value="، ".join(r.mention for r in removed), inline=False)
+            embed.add_field(name="📤 اللي سحب الرتبة", value=executor.mention if executor else "غير معروف",
+                            inline=True)
+        embed.set_footer(text=f"معرف العضو: {after.id}")
+        await send_log(guild, "role", embed)
 
-    executor = await get_audit_executor(after.guild, discord.AuditLogAction.member_role_update, after.id)
+    # ---- اللقب ----
+    if before.nick != after.nick:
+        executor = await get_audit_executor(guild, discord.AuditLogAction.member_update, after.id)
+        if executor is None or executor.id == after.id:
+            who = "العضو نفسه"
+        else:
+            who = executor.mention
+        embed = discord.Embed(title="📝 تغيير لقب عضو", color=discord.Color.blurple(),
+                               timestamp=datetime.now(timezone.utc))
+        embed.add_field(name="العضو", value=after.mention, inline=True)
+        embed.add_field(name="اللي غيّره", value=who, inline=True)
+        embed.add_field(name="قبل", value=before.nick or "(بدون لقب)", inline=False)
+        embed.add_field(name="بعد", value=after.nick or "(بدون لقب)", inline=False)
+        embed.set_footer(text=f"معرف العضو: {after.id}")
+        await send_log(guild, "member", embed)
 
-    embed = discord.Embed(title="🎭 تعديل رتب عضو", color=discord.Color.blurple(),
-                           timestamp=datetime.now(timezone.utc))
-    embed.add_field(name="العضو", value=after.mention, inline=False)
-    if added:
-        embed.add_field(name="➕ أضيفت", value="، ".join(r.mention for r in added), inline=False)
-        embed.add_field(name="🎁 اللي أعطى الرتبة", value=executor.mention if executor else "غير معروف",
-                        inline=True)
-    if removed:
-        embed.add_field(name="➖ أزيلت", value="، ".join(r.mention for r in removed), inline=False)
-        embed.add_field(name="📤 اللي سحب الرتبة", value=executor.mention if executor else "غير معروف",
-                        inline=True)
-    embed.set_footer(text=f"معرف العضو: {after.id}")
-    await send_log(after.guild, "role", embed)
+    # ---- التايم أوت ----
+    if before.timed_out_until != after.timed_out_until:
+        executor = await get_audit_executor(guild, discord.AuditLogAction.member_update, after.id)
+        if after.timed_out_until:
+            title, color = "⏱️ تم إعطاء عضو تايم", discord.Color.orange()
+        else:
+            title, color = "✅ تم فك التايم عن عضو", discord.Color.green()
+        embed = discord.Embed(title=title, color=color, timestamp=datetime.now(timezone.utc))
+        embed.add_field(name="العضو", value=after.mention, inline=True)
+        embed.add_field(name="بواسطة", value=executor.mention if executor else "غير معروف", inline=True)
+        if after.timed_out_until:
+            embed.add_field(name="ينتهي", value=discord.utils.format_dt(after.timed_out_until, "R"), inline=True)
+        embed.set_footer(text=f"معرف العضو: {after.id}")
+        await send_log(guild, "mod", embed)
 
 
 @bot.event
@@ -2813,6 +3165,9 @@ async def on_guild_channel_create(channel):
     embed = discord.Embed(title="➕ تم إنشاء روم", color=discord.Color.green(),
                            timestamp=datetime.now(timezone.utc))
     embed.add_field(name="الروم", value=getattr(channel, "mention", f"#{channel.name}"), inline=True)
+    embed.add_field(name="اللي أنشأه",
+                    value=await audit_who(channel.guild, discord.AuditLogAction.channel_create, channel.id),
+                    inline=True)
     embed.set_footer(text=f"معرف الروم: {channel.id}")
     await send_log(channel.guild, "channel", embed)
 
@@ -2822,6 +3177,9 @@ async def on_guild_channel_delete(channel):
     embed = discord.Embed(title="🗑️ تم حذف روم", color=discord.Color.red(),
                            timestamp=datetime.now(timezone.utc))
     embed.add_field(name="الروم", value=f"#{channel.name}", inline=True)
+    embed.add_field(name="اللي حذفه",
+                    value=await audit_who(channel.guild, discord.AuditLogAction.channel_delete, channel.id),
+                    inline=True)
     embed.set_footer(text=f"معرف الروم: {channel.id}")
     await send_log(channel.guild, "channel", embed)
 
@@ -2842,6 +3200,9 @@ async def on_guild_channel_update(before, after):
                            timestamp=datetime.now(timezone.utc))
     embed.add_field(name="الروم", value=getattr(after, "mention", f"#{after.name}"), inline=False)
     embed.add_field(name="التغييرات", value="\n".join(changes), inline=False)
+    embed.add_field(name="اللي عدّله",
+                    value=await audit_who(after.guild, discord.AuditLogAction.channel_update, after.id),
+                    inline=True)
     embed.set_footer(text=f"معرف الروم: {after.id}")
     await send_log(after.guild, "channel", embed)
 
@@ -2850,6 +3211,21 @@ async def on_guild_channel_update(before, after):
 @bot.event
 async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
     if before.channel == after.channel:
+        # كتم/صمم سيرفر من إداري (مو من العضو نفسه)
+        changes = []
+        if before.mute != after.mute:
+            changes.append("تم كتمه صوتيًا" if after.mute else "تم فك كتمه الصوتي")
+        if before.deaf != after.deaf:
+            changes.append("تم تصميمه (ما يسمع)" if after.deaf else "تم فك تصميمه")
+        if changes and after.channel is not None:
+            executor = await get_audit_executor(member.guild, discord.AuditLogAction.member_update, member.id)
+            embed = discord.Embed(title="🎙️ تعديل حالة صوتية", color=discord.Color.orange(),
+                                   timestamp=datetime.now(timezone.utc))
+            embed.add_field(name="العضو", value=member.mention, inline=True)
+            embed.add_field(name="اللي سواها", value=executor.mention if executor else "غير معروف", inline=True)
+            embed.add_field(name="الحالة", value="، ".join(changes), inline=False)
+            embed.set_footer(text=f"معرف العضو: {member.id}")
+            await send_log(member.guild, "voice", embed)
         return
     embed = discord.Embed(color=discord.Color.blurple(), timestamp=datetime.now(timezone.utc))
     embed.set_footer(text=f"معرف العضو: {member.id}")
@@ -2907,14 +3283,28 @@ async def on_guild_update(before: discord.Guild, after: discord.Guild):
     embed = discord.Embed(title="⚙️ تعديل إعدادات السيرفر", color=discord.Color.gold(),
                            timestamp=datetime.now(timezone.utc))
     embed.add_field(name="التغييرات", value="\n".join(changes), inline=False)
+    embed.add_field(name="اللي عدّل",
+                    value=await audit_who(after, discord.AuditLogAction.guild_update, after.id),
+                    inline=True)
     await send_log(after, "server", embed)
 
 
 @bot.event
 async def on_guild_emojis_update(guild, before, after):
-    embed = discord.Embed(title="😀 تحديث إيموجيات السيرفر", color=discord.Color.gold(),
+    before_ids, after_ids = {e.id for e in before}, {e.id for e in after}
+    added = [e for e in after if e.id not in before_ids]
+    removed = [e for e in before if e.id not in after_ids]
+    embed = discord.Embed(title="😀 تحديث إيموجي السيرفر", color=discord.Color.gold(),
                            timestamp=datetime.now(timezone.utc))
-    embed.add_field(name="عدد الإيموجيات", value=f"{len(before)} ← {len(after)}")
+    embed.add_field(name="عدد الإيموجي", value=f"{len(before)} ← {len(after)}", inline=False)
+    if added:
+        embed.add_field(name="➕ أضيف", value="، ".join(f"`{e.name}`" for e in added)[:1000], inline=True)
+        embed.add_field(name="اللي أضافه",
+                        value=await audit_who(guild, discord.AuditLogAction.emoji_create, added[0].id), inline=True)
+    if removed:
+        embed.add_field(name="➖ انحذف", value="، ".join(f"`{e.name}`" for e in removed)[:1000], inline=True)
+        embed.add_field(name="اللي حذفه",
+                        value=await audit_who(guild, discord.AuditLogAction.emoji_delete, removed[0].id), inline=True)
     await send_log(guild, "server", embed)
 
 
