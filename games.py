@@ -686,7 +686,7 @@ async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 
                        allowed_ids: set | None = None, timeout: int = 45, reveal: str = "",
                        game_key: str = "", starter=None, hint: str = "",
                        react: bool = False, file: discord.File | None = None,
-                       image_url: str | None = None):
+                       image_url: str | None = None, show_time: bool = False):
     """يبدأ جولة سؤال/جواب بالروم. أول رسالة تطابق checker تفوز.
     react: يحط ✅/❌ على إجابات اللاعبين. file/image_url: صورة خاصة بالسؤال (مثل العلم) بدل صورة اللعبة."""
     if channel.id in active_rounds or is_channel_busy(channel.id):
@@ -697,6 +697,7 @@ async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 
     active_rounds[channel.id] = {
         "checker": checker, "reward": reward,
         "allowed_ids": allowed_ids, "token": token, "reveal": reveal, "react": react,
+        "show_time": show_time,
     }
     mark_busy(channel.id, title)
     embed = discord.Embed(title=title, description=prompt, color=VIBE_COLOR)
@@ -714,6 +715,7 @@ async def start_round(channel, *, title: str, prompt: str, checker, reward=(20, 
     else:
         msg = await channel.send(embed=embed, view=stop_view)
     active_rounds[channel.id]["msg"] = msg
+    active_rounds[channel.id]["started"] = asyncio.get_running_loop().time()   # بداية العدّ لوقت الإجابة
     cancel_event = track_game_message(channel.id, msg)
 
     async def _timeout_watcher():
@@ -1224,7 +1226,8 @@ async def flags_cmd(ctx: commands.Context):
                        prompt="وش اسم هذي الدولة؟ اكتب اسمها بالشات.",
                        checker=lambda c: answer_matches(c, names, known=_ALL_FLAG_NAMES),
                        reward=info["reward"], reveal=names[0], timeout=60,
-                       hint=make_text_hint(names[0]), react=True, file=file, image_url=url)
+                       hint=make_text_hint(names[0]), react=True, file=file, image_url=url,
+                       show_time=True)
 
 
 @commands.command(name="ايموجي")
@@ -2238,7 +2241,7 @@ async def _get_avatar_circle(member: discord.Member, size: int = 160):
 
 
 def _wheel_geom(size: int = _WHEEL_SIZE):
-    """أبعاد العجلة: (هامش_السهم, مركز_x, مركز_y, نصف_القطر, نصف_قطر_الأقسام_داخل_الإطار, نصف_قطر_صورة_النص)."""
+    """أبعاد العجلة: (هامش_السهم, مركز_x, مركز_y, نصف_القطر, نصف_القطر_الأقسام_داخل_الإطار, نصف_قطر_صورة_النص)."""
     top = 28
     cx = size // 2
     cy = top + size // 2
@@ -3667,6 +3670,60 @@ def _replica_key(text: str, letter: str, category: str):
     return None
 
 
+REPLICA_VOTE_SECONDS = 10   # مدة التصويت على الإجابة المشكوك فيها
+
+
+class ReplicaVoteView(discord.ui.View):
+    """تصويت (صح / خطأ) على إجابة البوت مو متأكد منها. صاحب الإجابة ما يصوّت على نفسه."""
+
+    def __init__(self, player: discord.Member, seconds: int):
+        super().__init__(timeout=seconds + 10)
+        self.player = player
+        self.votes: dict[int, bool] = {}   # آيدي المصوّت -> True (صح) / False (خطأ)
+        yes_btn = discord.ui.Button(label=f"{UI_ICONS['accept']} صح", style=discord.ButtonStyle.secondary)
+        no_btn = discord.ui.Button(label=f"{UI_ICONS['decline']} خطأ", style=discord.ButtonStyle.secondary)
+        yes_btn.callback = self._make_cb(True)
+        no_btn.callback = self._make_cb(False)
+        self.add_item(yes_btn)
+        self.add_item(no_btn)
+
+    def _make_cb(self, value: bool):
+        async def cb(interaction: discord.Interaction):
+            if interaction.user.id == self.player.id:
+                await interaction.response.send_message("ما تقدر تصوّت على إجابتك.", ephemeral=True)
+                return
+            self.votes[interaction.user.id] = value
+            await interaction.response.send_message("تم تسجيل صوتك.", ephemeral=True)
+        return cb
+
+    def tally(self):
+        yes = sum(1 for v in self.votes.values() if v)
+        return yes, len(self.votes) - yes
+
+
+async def _replica_vote(channel, player, answer: str, category: str, letter: str,
+                         cancel_event: asyncio.Event) -> bool:
+    """يسوي تصويت على إجابة مو موجودة بالبنك. يرجع True لو الإجابة انقبلت (صح >= خطأ)."""
+    view = ReplicaVoteView(player, REPLICA_VOTE_SECONDS)
+    ends_at = discord.utils.utcnow() + timedelta(seconds=REPLICA_VOTE_SECONDS)
+    msg = await channel.send(
+        f"هل تعتبرون الإجابة ذي صحيحة؟\n"
+        f"**{answer}** ({category} يبدأ بحرف {letter}) — إجابة {player.display_name}\n"
+        f"ينتهي التصويت {discord.utils.format_dt(ends_at, 'R')}",
+        view=view, allowed_mentions=discord.AllowedMentions.none())
+    await _mafia_wait(None, cancel_event, REPLICA_VOTE_SECONDS)
+    view.stop()
+    yes, no = view.tally()
+    accepted = yes >= no
+    result = (f"{UI_ICONS['accept']} انقبلت الإجابة" if accepted else f"{UI_ICONS['decline']} انرفضت الإجابة")
+    try:
+        await msg.edit(content=f"{msg.content}\n\n**{result}** (صح: {yes} — خطأ: {no})", view=None,
+                       allowed_mentions=discord.AllowedMentions.none())
+    except (discord.NotFound, discord.HTTPException):
+        pass
+    return accepted
+
+
 async def _await_replica_answer(bot_obj, channel, player, letter: str, category: str, used: set, cancel_event: asyncio.Event):
     """ينتظر إجابة صحيحة من اللاعب المسؤول خلال TURN_TIMEOUT ثانية (الإجابة الغلط تاخذ ❌ ويقدر يعيد المحاولة).
     يرجع نص الإجابة أو None لو ما جاوب (أو انلغت اللعبة)."""
@@ -3693,6 +3750,11 @@ async def _await_replica_answer(bot_obj, channel, player, letter: str, category:
             return None
         key = _replica_key(m.content, letter, category)
         ok = key is not None and key not in used
+        # إجابة مو موجودة بالبنك (البوت مو متأكد منها): تصويت من الموجودين بالروم
+        if ok and key not in REPLICA_INDEX.get(category, {}).get(key[0], ()):
+            ok = await _replica_vote(channel, player, m.content.strip(), category, letter, cancel_event)
+            if cancel_event.is_set():
+                return None
         try:
             await m.add_reaction("✅" if ok else "❌")
         except discord.HTTPException:
@@ -4240,12 +4302,12 @@ async def _run_chairs(ctx: commands.Context):
 # ============================================================
 # مواقع العناصر كنسب من مقاس صورة الخلفية top.png (من 0 إلى 1).
 # لو ما انطبقت على صفوف صورتك، عدّل هالأرقام بس (أرسل لي الصورة وأحسبها لك).
-TOP_ROWS_CY = [0.335, 0.455, 0.575, 0.695, 0.815]   # مركز كل صف من فوق لتحت (نسبة من الارتفاع)
-TOP_ROW_H = 0.100                                     # ارتفاع الصف (نسبة من الارتفاع)
-TOP_ROW_X0, TOP_ROW_X1 = 0.20, 0.80                   # بداية ونهاية الصف (نسبة من العرض)
-TOP_RANK_X = 0.222                                    # مكان رقم الترتيب (نسبة من العرض)
-TOP_CIRCLE_CX = 0.265                                 # مركز دايرة الأفتار (نسبة من العرض)
-TOP_CIRCLE_R = 0.045                                  # نصف قطر الدايرة (نسبة من الارتفاع)
+TOP_ROWS_CY = [0.335, 0.461, 0.587, 0.712, 0.838]   # مركز كل صف من فوق لتحت (نسبة من الارتفاع)
+TOP_ROW_H = 0.105                                     # ارتفاع الصف (نسبة من الارتفاع)
+TOP_ROW_X0, TOP_ROW_X1 = 0.178, 0.822                 # بداية ونهاية الصف (نسبة من العرض)
+TOP_RANK_X = 0.192                                    # مكان رقم الترتيب (نسبة من العرض)
+TOP_CIRCLE_CX = 0.238                                 # مركز دايرة الأفتار (نسبة من العرض)
+TOP_CIRCLE_R = 0.058                                  # نصف قطر الدايرة (نسبة من الارتفاع)
 TOP_DEFAULT_SIZE = (1672, 941)                        # مقاس الصورة لو ما لقينا top.png
 
 
@@ -4591,12 +4653,16 @@ async def games_on_message(message: discord.Message):
                 record_game_result(message.guild.id, message.author.id, won=True)
                 reveal = round_info.get("reveal", "")
                 extra = f" الإجابة: **{reveal}**" if reveal else ""
+                timing = ""
+                if round_info.get("show_time") and round_info.get("started") is not None:
+                    elapsed = asyncio.get_running_loop().time() - round_info["started"]
+                    timing = f" في **{elapsed:.1f}** ثانية!"
                 capped = " (وصلت السقف اليومي)" if actual < pts else ""
                 # الدخلة (من المتجر): رسالة فوز خاصة بدل "جاوب صح!"
                 entrance = get_cosmetic(message.guild.id, message.author.id, "entrance")
                 win_text = entrance["text"] if entrance and entrance.get("text") else "جاوب صح!"
                 await message.channel.send(
-                    f"{message.author.mention} {win_text}{extra} (+{actual} نقطة{capped})",
+                    f"{message.author.mention} {win_text}{timing}{extra} (+{actual} نقطة{capped})",
                     allowed_mentions=discord.AllowedMentions(everyone=False, roles=False,
                                                              users=[message.author], replied_user=False))
                 await _remove_round_button(round_info.get("msg"))
