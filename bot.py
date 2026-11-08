@@ -9,7 +9,7 @@
   5) نظام الإدارة الكامل (أعضاء / رومات / صوت) — بدون بريفكس، حسب الرتب
   6) .العاب و .شرح <اسم اللعبة> و .اوامر
   7) أوامر u / s / r / a / p بدون بريفكس (p = بطاقة البروفايل)
-  8) زينة البروفايل بالمتجر (تاج / قبعة / كاب / نظارة / هالة)
+  8) زينة البروفايل بالمتجر (مثال: `.لبس سماعة راس`)
 
 ملاحظات مهمة قبل التشغيل:
   - أوامر الأعضاء (نقاط / ألعاب / متجر) تبدأ بعلامة "." (مثال: .نقاطي ، .متجر).
@@ -691,9 +691,9 @@ HELP_PUBLIC_SECTIONS = {
         "`.تحويل @عضو المبلغ` — تحول نقاط لعضو ثاني.",
         "`.توب` — لوحة الصدارة، أعلى 10 لاعبين بالنقاط.",
         "`.سجلي [@عضو]` — عدد مرات الفوز والخسارة بالألعاب.",
-        "`.متجر` — تشوف الأشياء المتوفرة بالمتجر.",
-        "`.شراء <العنصر>` — تشتري شي من المتجر بنقاطك.",
-        "`.لبس <العنصر>` — تلبس زينة اشتريتها على بطاقتك (تاج / قبعة / كاب / نظارة / هالة).",
+        "`.متجر` — يفتح المتجر بأزرار، تضغط على المنتج وتشتريه.",
+        "`.شراء <العنصر>` — بديل للأزرار، تشتري بالاسم (مثال: `.شراء قبعة كاوبوي`).",
+        "`.لبس <العنصر>` — تلبس زينة اشتريتها على بطاقتك (مثال: `.لبس سماعة راس`).",
         "`.خلع` — تخلع كل الزينة اللي لابسها.",
     ]),
     "games": ("🎮 الألعاب", [
@@ -1567,7 +1567,7 @@ SHOP_COLOR_PRICE = 250
 SHOP_WARN_CLEAR_PRICE = 500
 
 # ---------- زينة بطاقة البروفايل (أمر p) — تنشترى مرة وحدة وتبقى للأبد ----------
-# slot: head = فوق الراس (واحدة بس تنلبس) / face = نظارات / mouth = شنب
+# slot: head = فوق الراس (واحدة بس تنلبس) / ears = سماعات / face = نظارات وأقنعة / mouth = شنب ولحية
 # tilt: ميلان الزينة بالدرجات (موجب = لليسار، سالب = لليمين). id: اسم ملف الصورة الاختياري.
 # تقدر تحط صورة PNG شفافة واقعية بمجلد profile_items باسم <id>.png (مثال: profile_items/crown.png)
 # وبدل الرسم الجاهز يستخدمها البوت (img_w = عرضها بوحدة نصف قطر الصورة، img_y = ارتفاعها فوق/تحت المركز).
@@ -1592,13 +1592,64 @@ PROFILE_ITEMS = {
     "نظارة قلوب":   {"id": "hearts",   "price": 600,  "slot": "face",  "tilt": -5,  "img_w": 1.9, "img_y": -0.05},
     # ----- الفم -----
     "شنب":          {"id": "mustache", "price": 400,  "slot": "mouth", "tilt": 0,   "img_w": 1.5, "img_y": 0.45},
+    # ----- قبعات وتيجان إضافية -----
+    "قبعة قش":      {"id": "straw",    "price": 650,  "slot": "head",  "tilt": -13, "img_w": 2.6, "img_y": -1.15},
+    "قبعة حفلة":    {"id": "party",    "price": 500,  "slot": "head",  "tilt": -14, "img_w": 1.2, "img_y": -1.4},
+    "قبعة تخرج":    {"id": "grad",     "price": 1200, "slot": "head",  "tilt": -12, "img_w": 2.3, "img_y": -1.2},
+    "قبعة قراصنة":  {"id": "pirate",   "price": 1300, "slot": "head",  "tilt": -11, "img_w": 2.6, "img_y": -1.25},
+    "طاقية شتوية":  {"id": "beanie",   "price": 600,  "slot": "head",  "tilt": -10, "img_w": 1.9, "img_y": -1.2},
+    "اذنان قطة":    {"id": "cat",      "price": 1100, "slot": "head",  "tilt": -7,  "img_w": 1.9, "img_y": -1.2},
+    "اذنان ارنب":   {"id": "bunny",    "price": 1100, "slot": "head",  "tilt": -6,  "img_w": 1.2, "img_y": -1.5},
+    "اكليل ورد":    {"id": "flowers",  "price": 900,  "slot": "head",  "tilt": -5,  "img_w": 2.2, "img_y": -0.7},
+    "اكليل غار":    {"id": "laurel",   "price": 1500, "slot": "head",  "tilt": -4,  "img_w": 2.4, "img_y": -0.7},
+    "تاج ماسي":     {"id": "diamond",  "price": 3500, "slot": "head",  "tilt": -14, "img_w": 1.7, "img_y": -1.35},
+    # ----- سماعات الراس -----
+    "سماعة راس":    {"id": "phones",      "price": 900,  "slot": "ears", "tilt": -4, "img_w": 2.8, "img_y": -0.2},
+    "سماعة جيمنج":  {"id": "gaming",      "price": 1400, "slot": "ears", "tilt": -4, "img_w": 2.8, "img_y": -0.1},
+    "سماعة وردية":  {"id": "phonespink",  "price": 1000, "slot": "ears", "tilt": -4, "img_w": 2.8, "img_y": -0.2},
+    # ----- نظارات وأقنعة -----
+    "نظارة دائرية":    {"id": "round",       "price": 550,  "slot": "face", "tilt": -5, "img_w": 1.9, "img_y": -0.05},
+    "نظارة نجوم":      {"id": "starglasses", "price": 800,  "slot": "face", "tilt": -5, "img_w": 2.0, "img_y": -0.05},
+    "نظارة ثلاثية":    {"id": "glasses3d",   "price": 650,  "slot": "face", "tilt": -5, "img_w": 2.0, "img_y": -0.05},
+    "قناع بطل":        {"id": "mask",        "price": 900,  "slot": "face", "tilt": -4, "img_w": 2.1, "img_y": -0.05},
+    "عصبة قرصان":      {"id": "eyepatch",    "price": 700,  "slot": "face", "tilt": -5, "img_w": 2.0, "img_y": -0.3},
+    "نظارة مستقبلية":  {"id": "visor",       "price": 1600, "slot": "face", "tilt": -5, "img_w": 2.2, "img_y": -0.1},
+    # ----- الفم واللحية -----
+    "شنب مفتول":    {"id": "handlebar", "price": 700, "slot": "mouth", "tilt": 0,  "img_w": 2.2, "img_y": 0.45},
+    "لحية":         {"id": "beard",     "price": 800, "slot": "mouth", "tilt": 0,  "img_w": 1.9, "img_y": 0.65},
+    "ذقن":          {"id": "goatee",    "price": 450, "slot": "mouth", "tilt": 0,  "img_w": 0.9, "img_y": 0.85},
+    "احمر شفاه":    {"id": "lips",      "price": 500, "slot": "mouth", "tilt": 0,  "img_w": 0.9, "img_y": 0.65},
+    "وردة":         {"id": "rose",      "price": 600, "slot": "mouth", "tilt": -8, "img_w": 1.2, "img_y": 0.65},
+    "مصاصة":        {"id": "lollipop",  "price": 350, "slot": "mouth", "tilt": -6, "img_w": 1.2, "img_y": 0.9},
 }
+
+# أقسام المتجر (للأزرار): (مفتاح, اسم القسم, [أسماء العناصر بالترتيب])
+SHOP_CATEGORIES = [
+    ("hats",    "🎩 قبعات",           ["قبعة", "كاب", "قبعة كاوبوي", "قبعة ساحر", "قبعة طباخ", "قبعة سانتا", "بيريه", "غترة",
+                                     "قبعة قش", "قبعة حفلة", "قبعة تخرج", "قبعة قراصنة", "طاقية شتوية", "خوذة فايكنج"]),
+    ("crowns",  "👑 تيجان وزينة الراس", ["تاج", "تاج ماسي", "هالة", "قرون", "اذنان قطة", "اذنان ارنب", "اكليل ورد", "اكليل غار"]),
+    ("phones",  "🎧 سماعات",          ["سماعة راس", "سماعة جيمنج", "سماعة وردية"]),
+    ("glasses", "👓 نظارات وأقنعة",    ["نظارة", "نظارة شمسية", "نظارة قلوب", "نظارة دائرية", "نظارة نجوم", "نظارة ثلاثية",
+                                     "قناع بطل", "عصبة قرصان", "نظارة مستقبلية"]),
+    ("mouth",   "🧔 الفم واللحية",     ["شنب", "شنب مفتول", "لحية", "ذقن", "احمر شفاه", "وردة", "مصاصة"]),
+]
 PROFILE_ITEM_ALIASES = {
     "كاوبوي": "قبعة كاوبوي", "ساحر": "قبعة ساحر", "طباخ": "قبعة طباخ", "سانتا": "قبعة سانتا",
     "فايكنج": "خوذة فايكنج", "فايكنغ": "خوذة فايكنج", "خوذة": "خوذة فايكنج",
     "شماغ": "غترة", "شماق": "غترة", "عقال": "غترة", "قرن": "قرون", "قبعه": "قبعة", "قبوع": "قبعة",
     "نضارة": "نظارة", "نضاره": "نظارة", "شمسيه": "نظارة شمسية", "نظارة طيار": "نظارة شمسية",
     "قلوب": "نظارة قلوب", "طاقيه": "كاب", "طاقية": "كاب", "شوارب": "شنب", "شارب": "شنب",
+    "سماعة": "سماعة راس", "سماعات": "سماعة راس", "هيدفون": "سماعة راس", "هيدفونز": "سماعة راس",
+    "جيمنج": "سماعة جيمنج", "قيمنق": "سماعة جيمنج", "سماعة قيمنق": "سماعة جيمنج", "سماعة وردي": "سماعة وردية",
+    "قش": "قبعة قش", "حفلة": "قبعة حفلة", "حفله": "قبعة حفلة", "تخرج": "قبعة تخرج", "قراصنة": "قبعة قراصنة",
+    "قرصان": "عصبة قرصان", "بحار": "قبعة قراصنة", "بنيه": "طاقية شتوية", "بيني": "طاقية شتوية", "شتوية": "طاقية شتوية",
+    "قطة": "اذنان قطة", "قطه": "اذنان قطة", "ارنب": "اذنان ارنب", "أرنب": "اذنان ارنب", "أذنان قطة": "اذنان قطة",
+    "أذنان ارنب": "اذنان ارنب", "ورد": "اكليل ورد", "إكليل ورد": "اكليل ورد", "اكليل": "اكليل ورد",
+    "إكليل غار": "اكليل غار", "غار": "اكليل غار", "ماسي": "تاج ماسي", "تاج الماس": "تاج ماسي", "الماس": "تاج ماسي",
+    "دائرية": "نظارة دائرية", "نجوم": "نظارة نجوم", "ثلاثية": "نظارة ثلاثية", "3d": "نظارة ثلاثية",
+    "نظارة 3d": "نظارة ثلاثية", "قناع": "قناع بطل", "ماسك": "قناع بطل", "مستقبلية": "نظارة مستقبلية",
+    "مستقبل": "نظارة مستقبلية", "لحيه": "لحية", "لحى": "لحية", "ذقن": "ذقن", "مفتول": "شنب مفتول",
+    "شفاه": "احمر شفاه", "روج": "احمر شفاه", "احمر": "احمر شفاه", "ورده": "وردة", "مصاصه": "مصاصة", "لوليبوب": "مصاصة",
 }
 
 
@@ -1623,7 +1674,7 @@ def resolve_profile_item(text: str | None) -> str | None:
 
 # روم الأوامر (الثيرمنل) — حط آيدي الروم هنا عشان البوت يوجّه الناس له بعد الشراء.
 # لو خليته 0 يدور على روم اسمه فيه terminal / ثيرمنل / ترمنل.
-COMMANDS_CHANNEL_ID = 0
+COMMANDS_CHANNEL_ID = 1541668492871335987
 _COMMANDS_CHANNEL_HINTS = ("terminal", "ثيرمنل", "ترمنل", "تيرمنل", "ثرمنل")
 
 
@@ -1638,32 +1689,6 @@ def commands_channel_text(guild: discord.Guild) -> str:
     return ch.mention if ch is not None else "روم الأوامر"
 
 
-def _profile_items_text() -> str:
-    def fmt(slot):
-        return "\n".join(f"• **{n}** — {i['price']} نقطة" for n, i in PROFILE_ITEMS.items() if i["slot"] == slot)
-    return (
-        "**زينة بطاقة البروفايل (أمر `p`)** — شراء مرة وحدة وتبقى لك\n\n"
-        f"__فوق الراس__\n{fmt('head')}\n\n"
-        f"__النظارات__\n{fmt('face')}\n\n"
-        f"__الفم__\n{fmt('mouth')}\n\n"
-        "الشراء: `.شراء قبعة كاوبوي` ← يتلبس تلقائيًا (راس + نظارة + شنب تلبسهم مع بعض)\n"
-        "التبديل: `.لبس اسم_العنصر` — الخلع: `.خلع`"
-    )
-
-SHOP_ITEMS_TEXT = (
-    "🛍️ **المتجر**\n\n"
-    f"🎭 **لقب مؤقت** — {SHOP_TITLE_PRICE} نقطة ({SHOP_TITLE_DURATION_HOURS} ساعة)\n"
-    "الشراء: `.شراء لقب النص_اللي_تبيه`\n\n"
-    f"🎨 **لون رول مؤقت** — {SHOP_COLOR_PRICE} نقطة ({SHOP_COLOR_DURATION_HOURS} ساعة)\n"
-    f"الألوان المتوفرة: {'، '.join(SHOP_COLOR_ROLES)}\n"
-    "الشراء: `.شراء لون اسم_اللون`\n\n"
-    f"🧹 **حذف تنبيه** — {SHOP_WARN_CLEAR_PRICE} نقطة\n"
-    "يشيل أقدم تنبيه مسجل عليك.\n"
-    "الشراء: `.شراء تنظيف`\n\n"
-    + _profile_items_text()
-)
-
-
 def get_profile_items(guild_id: int, user_id: int) -> dict:
     data = load_json(PROFILE_ITEMS_FILE)
     entry = data.get(str(guild_id), {}).get(str(user_id), {})
@@ -1672,6 +1697,7 @@ def get_profile_items(guild_id: int, user_id: int) -> dict:
         "head": entry.get("head"),
         "face": entry.get("face"),
         "mouth": entry.get("mouth"),
+        "ears": entry.get("ears"),
     }
 
 
@@ -1679,11 +1705,6 @@ def save_profile_items(guild_id: int, user_id: int, entry: dict) -> None:
     data = load_json(PROFILE_ITEMS_FILE)
     data.setdefault(str(guild_id), {})[str(user_id)] = entry
     save_json(PROFILE_ITEMS_FILE, data)
-
-
-@bot.command(name="متجر")
-async def shop_cmd(ctx: commands.Context):
-    await ctx.send(SHOP_ITEMS_TEXT)
 
 
 def _shop_set_active(guild_id: int, user_id: int, item_type: str, hours: int, extra: dict) -> None:
@@ -1704,105 +1725,315 @@ def _shop_clear_active(guild_id: int, user_id: int) -> dict | None:
     return entry
 
 
+# ---------- منطق الشراء (يستخدمه أمر .شراء وأزرار المتجر) ----------
+async def purchase_title(guild: discord.Guild, author: discord.Member, title_text: str) -> tuple[bool, str]:
+    title_text = (title_text or "").strip()
+    if not title_text:
+        return False, "⚠️ اكتب اللقب اللي تبيه."
+    price = SHOP_TITLE_PRICE
+    if get_balance(guild.id, author.id) < price:
+        return False, f"❌ رصيدك ما يكفي (تحتاج {price} نقطة)."
+    old_entry = _shop_clear_active(guild.id, author.id)
+    original_nick = (old_entry.get("original_nick")
+                     if (old_entry and old_entry.get("type") == "title") else author.nick)
+    new_nick = f"{original_nick or author.name} | {title_text}"[:32]
+    try:
+        await author.edit(nick=new_nick, reason="شراء لقب مؤقت من المتجر")
+    except discord.Forbidden:
+        return False, "❌ ما أقدر أغيّر لقبك (رتبتك أعلى من رتبتي أو ينقصني صلاحية)."
+    add_balance(guild.id, author.id, -price)
+    _shop_set_active(guild.id, author.id, "title", SHOP_TITLE_DURATION_HOURS, {"original_nick": original_nick})
+    return True, f"✅ تم! لقبك الحين **{new_nick}** لمدة {SHOP_TITLE_DURATION_HOURS} ساعة."
+
+
+async def purchase_color(guild: discord.Guild, author: discord.Member, color_name: str) -> tuple[bool, str]:
+    if color_name not in SHOP_COLOR_ROLES:
+        return False, "⚠️ اللون غير متوفر، الألوان: " + "، ".join(SHOP_COLOR_ROLES)
+    price = SHOP_COLOR_PRICE
+    if get_balance(guild.id, author.id) < price:
+        return False, f"❌ رصيدك ما يكفي (تحتاج {price} نقطة)."
+    for name in SHOP_COLOR_ROLES:
+        old_role = discord.utils.get(guild.roles, name=f"🎨 {name}")
+        if old_role and old_role in author.roles:
+            await author.remove_roles(old_role, reason="تبديل لون المتجر")
+    role_name = f"🎨 {color_name}"
+    role = discord.utils.get(guild.roles, name=role_name)
+    if role is None:
+        role = await guild.create_role(name=role_name, color=discord.Color(SHOP_COLOR_ROLES[color_name]),
+                                       reason="رتبة لون من المتجر - إنشاء تلقائي")
+    try:
+        await author.add_roles(role, reason="شراء لون من المتجر")
+    except discord.Forbidden:
+        return False, "❌ ما أقدر أعطيك هذي الرتبة (رتبتها أعلى من رتبة البوت — رتّبها بإعدادات السيرفر)."
+    add_balance(guild.id, author.id, -price)
+    _shop_set_active(guild.id, author.id, "color", SHOP_COLOR_DURATION_HOURS, {"role_id": role.id})
+    return True, f"✅ تم! صار لونك **{color_name}** لمدة {SHOP_COLOR_DURATION_HOURS} ساعة."
+
+
+def purchase_warn_clear(guild: discord.Guild, author: discord.Member) -> tuple[bool, str]:
+    price = SHOP_WARN_CLEAR_PRICE
+    warns_data = load_json(WARNS_FILE)
+    gid, uid = str(guild.id), str(author.id)
+    user_warns = warns_data.get(gid, {}).get(uid, [])
+    if not user_warns:
+        return False, "⚠️ ما عندك أي تنبيه تحذفه."
+    if get_balance(guild.id, author.id) < price:
+        return False, f"❌ رصيدك ما يكفي (تحتاج {price} نقطة)."
+    user_warns.pop(0)
+    warns_data[gid][uid] = user_warns
+    save_json(WARNS_FILE, warns_data)
+    add_balance(guild.id, author.id, -price)
+    return True, f"✅ تم حذف أقدم تنبيه عندك. باقي عندك **{len(user_warns)}** تنبيه."
+
+
+def purchase_profile_item(guild: discord.Guild, author: discord.Member, item: str) -> tuple[bool, str]:
+    info = PROFILE_ITEMS[item]
+    entry = get_profile_items(guild.id, author.id)
+    if item in entry["owned"]:
+        return False, f"⚠️ تملك **{item}** مسبقًا، البسه بـ `.لبس {item}`"
+    if get_balance(guild.id, author.id) < info["price"]:
+        return False, f"❌ رصيدك ما يكفي (تحتاج {info['price']} نقطة)."
+    add_balance(guild.id, author.id, -info["price"])
+    entry["owned"].append(item)
+    entry[info["slot"]] = item
+    save_profile_items(guild.id, author.id, entry)
+    return True, f"✅ اشتريت **{item}** وانلبست على بطاقتك! جرّب اكتب `p` في {commands_channel_text(guild)}"
+
+
+def toggle_profile_item(guild: discord.Guild, author: discord.Member, item: str) -> str:
+    """يلبس أو يخلع زينة تملكها (يستخدمها زر المتجر لما تضغط على شي مشتريه)."""
+    info = PROFILE_ITEMS[item]
+    entry = get_profile_items(guild.id, author.id)
+    if entry.get(info["slot"]) == item:
+        entry[info["slot"]] = None
+        save_profile_items(guild.id, author.id, entry)
+        return f"✅ خلعت **{item}**."
+    entry[info["slot"]] = item
+    save_profile_items(guild.id, author.id, entry)
+    return f"✅ لبست **{item}** — جرّب اكتب `p` في {commands_channel_text(guild)}"
+
+
+# ---------- واجهة المتجر بالأزرار ----------
+SHOP_PAGE_SIZE = 4
+SHOP_EMBED_COLOR = 0x2ECC71
+SHOP_SERVICE_KEY = "services"
+SHOP_COLOR_EMOJI = {"احمر": "🔴", "ازرق": "🔵", "اخضر": "🟢", "بنفسجي": "🟣", "ذهبي": "🟡"}
+
+
+def _shop_cat_items(key: str) -> list[str]:
+    for k, _, names in SHOP_CATEGORIES:
+        if k == key:
+            return names
+    return []
+
+
+class ShopModal(discord.ui.Modal, title="🎭 لقب مؤقت"):
+    title_input = discord.ui.TextInput(label="اكتب اللقب اللي تبيه", max_length=20, placeholder="مثال: الملك")
+
+    def __init__(self, shop_view: "ShopView"):
+        super().__init__()
+        self.shop_view = shop_view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        ok, msg = await purchase_title(interaction.guild, interaction.user, str(self.title_input.value))
+        await interaction.response.send_message(msg, ephemeral=True)
+        await self.shop_view.refresh_message()
+
+
+class ShopView(discord.ui.View):
+    def __init__(self, member: discord.Member, mode: str = "home", cat: str | None = None, page: int = 0):
+        super().__init__(timeout=180)
+        self.member, self.mode, self.cat, self.page = member, mode, cat, page
+        self.message: discord.Message | None = None
+        self.build()
+
+    # ----- شكل الرسالة -----
+    def embed(self) -> discord.Embed:
+        g = self.member.guild
+        bal = get_balance(g.id, self.member.id)
+        e = discord.Embed(color=SHOP_EMBED_COLOR)
+        e.set_author(name=f"متجر {g.name}", icon_url=g.icon.url if g.icon else None)
+        if self.mode == "home":
+            e.title = "🛍️ المتجر"
+            e.description = (f"💰 رصيدك: **{bal}** نقطة\n\nاختر القسم، وبعدها اضغط على المنتج اللي تبيه يتشرى مباشرة.\n"
+                             "الزينة تشتريها مرة وحدة وتبقى لك، وتنلبس على بطاقتك (أمر `p`).")
+        elif self.mode == "services":
+            e.title = "🎭 خدمات مؤقتة"
+            e.description = (f"💰 رصيدك: **{bal}** نقطة\n\n"
+                             f"• **لقب مؤقت** يضاف لاسمك ({SHOP_TITLE_DURATION_HOURS} ساعة)\n"
+                             f"• **لون رول** ({SHOP_COLOR_DURATION_HOURS} ساعة)\n"
+                             "• **حذف تنبيه** يشيل أقدم تنبيه مسجل عليك")
+        elif self.mode == "colors":
+            e.title = "🎨 اختر لونك"
+            e.description = f"💰 رصيدك: **{bal}** نقطة\nالسعر: **{SHOP_COLOR_PRICE}** نقطة لمدة {SHOP_COLOR_DURATION_HOURS} ساعة."
+        else:
+            names = _shop_cat_items(self.cat)
+            title = next((t for k, t, _ in SHOP_CATEGORIES if k == self.cat), "المتجر")
+            pages = max(1, math.ceil(len(names) / SHOP_PAGE_SIZE))
+            e.title = title
+            e.description = (f"💰 رصيدك: **{bal}** نقطة\n\nاضغط على المنتج عشان تشتريه.\n"
+                             "✅ = تملكه — اضغط عليه يلبسه أو يخلعه.")
+            e.set_footer(text=f"صفحة {self.page + 1} / {pages}")
+        return e
+
+    def _item_button(self, name: str, row: int) -> discord.ui.Button:
+        info = PROFILE_ITEMS[name]
+        entry = get_profile_items(self.member.guild.id, self.member.id)
+        bal = get_balance(self.member.guild.id, self.member.id)
+        if name in entry["owned"]:
+            worn = entry.get(info["slot"]) == name
+            label = f"{name} — {'ملبوس (اضغط للخلع)' if worn else 'تملكه (اضغط للبس)'}"
+            style = discord.ButtonStyle.success
+            emoji = "✅"
+        else:
+            label = f"{name} — {info['price']} نقطة"
+            style = discord.ButtonStyle.primary if bal >= info["price"] else discord.ButtonStyle.secondary
+            emoji = None
+        btn = discord.ui.Button(label=label[:80], style=style, row=row, emoji=emoji)
+
+        async def cb(interaction: discord.Interaction, _n=name):
+            await self.on_item(interaction, _n)
+        btn.callback = cb
+        return btn
+
+    def _btn(self, label, style, row, cb, emoji=None, disabled=False):
+        b = discord.ui.Button(label=label, style=style, row=row, emoji=emoji, disabled=disabled)
+        b.callback = cb
+        self.add_item(b)
+
+    def build(self):
+        self.clear_items()
+        S = discord.ButtonStyle
+        if self.mode == "home":
+            cats = [(k, t) for k, t, _ in SHOP_CATEGORIES] + [(SHOP_SERVICE_KEY, "🎭 خدمات مؤقتة")]
+            for i, (k, t) in enumerate(cats):
+                async def cb(interaction, _k=k):
+                    await self.go(interaction, "services" if _k == SHOP_SERVICE_KEY else "cat", _k, 0)
+                self._btn(t, S.primary, i // 3, cb)
+        elif self.mode == "services":
+            async def title_cb(interaction):
+                await interaction.response.send_modal(ShopModal(self))
+
+            async def color_cb(interaction):
+                await self.go(interaction, "colors")
+
+            async def clear_cb(interaction):
+                ok, msg = purchase_warn_clear(interaction.guild, interaction.user)
+                await interaction.response.edit_message(embed=self.embed(), view=self.rebuilt())
+                await interaction.followup.send(msg, ephemeral=True)
+            self._btn(f"لقب مؤقت — {SHOP_TITLE_PRICE} نقطة", S.primary, 0, title_cb, "🎭")
+            self._btn(f"لون رول — {SHOP_COLOR_PRICE} نقطة", S.primary, 1, color_cb, "🎨")
+            self._btn(f"حذف تنبيه — {SHOP_WARN_CLEAR_PRICE} نقطة", S.primary, 2, clear_cb, "🧹")
+            self._btn("القائمة الرئيسية", S.secondary, 4, self._home_cb, "🏠")
+        elif self.mode == "colors":
+            for i, name in enumerate(SHOP_COLOR_ROLES):
+                async def cb(interaction, _n=name):
+                    ok, msg = await purchase_color(interaction.guild, interaction.user, _n)
+                    await interaction.response.edit_message(embed=self.embed(), view=self.rebuilt())
+                    await interaction.followup.send(msg, ephemeral=True)
+                self._btn(f"{name} — {SHOP_COLOR_PRICE} نقطة", S.secondary, i // 3, cb, SHOP_COLOR_EMOJI.get(name))
+            async def back(interaction):
+                await self.go(interaction, "services")
+            self._btn("رجوع", S.secondary, 4, back, "◀️")
+        else:
+            names = _shop_cat_items(self.cat)
+            pages = max(1, math.ceil(len(names) / SHOP_PAGE_SIZE))
+            self.page = max(0, min(self.page, pages - 1))
+            chunk = names[self.page * SHOP_PAGE_SIZE:(self.page + 1) * SHOP_PAGE_SIZE]
+            for i, n in enumerate(chunk):
+                self.add_item(self._item_button(n, i))
+
+            async def prev_cb(interaction):
+                await self.go(interaction, "cat", self.cat, self.page - 1)
+
+            async def next_cb(interaction):
+                await self.go(interaction, "cat", self.cat, self.page + 1)
+            self._btn("السابق", S.secondary, 4, prev_cb, "◀️", disabled=self.page <= 0)
+            self._btn("القائمة", S.secondary, 4, self._home_cb, "🏠")
+            self._btn("التالي", S.secondary, 4, next_cb, "▶️", disabled=self.page >= pages - 1)
+
+    # ----- تنقل وتحديث -----
+    def rebuilt(self) -> "ShopView":
+        self.build()
+        return self
+
+    async def go(self, interaction: discord.Interaction, mode: str, cat: str | None = None, page: int = 0):
+        self.mode, self.page = mode, page
+        if cat is not None:
+            self.cat = cat
+        self.build()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+
+    async def _home_cb(self, interaction: discord.Interaction):
+        await self.go(interaction, "home")
+
+    async def refresh_message(self):
+        if self.message is not None:
+            self.build()
+            try:
+                await self.message.edit(embed=self.embed(), view=self)
+            except discord.HTTPException:
+                pass
+
+    async def on_item(self, interaction: discord.Interaction, name: str):
+        entry = get_profile_items(interaction.guild.id, interaction.user.id)
+        if name in entry["owned"]:
+            msg = toggle_profile_item(interaction.guild, interaction.user, name)
+        else:
+            _, msg = purchase_profile_item(interaction.guild, interaction.user, name)
+        self.build()
+        await interaction.response.edit_message(embed=self.embed(), view=self)
+        await interaction.followup.send(msg, ephemeral=True)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.member.id:
+            await interaction.response.send_message("هذا المتجر مو لك، اكتب `.متجر` تفتح متجرك.", ephemeral=True)
+            return False
+        return True
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
+
+
+@bot.command(name="متجر")
+async def shop_cmd(ctx: commands.Context):
+    view = ShopView(ctx.author)
+    view.message = await ctx.send(embed=view.embed(), view=view)
+
+
 @bot.command(name="شراء")
 async def buy_cmd(ctx: commands.Context, item: str = None, *, extra_text: str = None):
     if not item:
-        await ctx.send("⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.شراء تاج`\nواكتب `.متجر` عشان تشوف الأشياء المتوفرة.")
+        await ctx.send("⚠️ اكتب `.متجر` وتشتري بالأزرار، أو استخدم مثال:\n`.شراء تاج`")
         return
     item = item.strip()
-    profile_key = None
-    if item not in ("لقب", "لون", "تنظيف"):
-        profile_key = resolve_profile_item(f"{item} {extra_text or ''}")
     author = ctx.author
-    balance = get_balance(ctx.guild.id, author.id)
-
     if item == "لقب":
-        price = SHOP_TITLE_PRICE
         if not extra_text or not extra_text.strip():
             await ctx.send("⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.شراء لقب النص_اللي_تبيه`")
             return
-        title_text = extra_text.strip()
-        if balance < price:
-            await ctx.send(f"❌ رصيدك ما يكفي (تحتاج {price} نقطة).")
-            return
-        old_entry = _shop_clear_active(ctx.guild.id, author.id)
-        original_nick = (old_entry.get("original_nick")
-                         if (old_entry and old_entry.get("type") == "title") else author.nick)
-        new_nick = f"{original_nick or author.name} | {title_text}"[:32]
-        try:
-            await author.edit(nick=new_nick, reason="شراء لقب مؤقت من المتجر")
-        except discord.Forbidden:
-            await ctx.send("❌ ما أقدر أغيّر لقبك (رتبتك أعلى من رتبتي أو ينقصني صلاحية).")
-            return
-        add_balance(ctx.guild.id, author.id, -price)
-        _shop_set_active(ctx.guild.id, author.id, "title", SHOP_TITLE_DURATION_HOURS,
-                          {"original_nick": original_nick})
-        await ctx.send(f"✅ تم! لقبك الحين **{new_nick}** لمدة {SHOP_TITLE_DURATION_HOURS} ساعة.")
-
+        _, msg = await purchase_title(ctx.guild, author, extra_text)
     elif item == "لون":
-        price = SHOP_COLOR_PRICE
         color_name = (extra_text or "").strip()
         if color_name not in SHOP_COLOR_ROLES:
-            options = "، ".join(SHOP_COLOR_ROLES)
-            await ctx.send(f"⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.شراء لون احمر`\nالألوان المتوفرة: {options}")
+            await ctx.send("⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.شراء لون احمر`\nالألوان المتوفرة: " + "، ".join(SHOP_COLOR_ROLES))
             return
-        if balance < price:
-            await ctx.send(f"❌ رصيدك ما يكفي (تحتاج {price} نقطة).")
-            return
-        for name in SHOP_COLOR_ROLES:
-            old_role = discord.utils.get(ctx.guild.roles, name=f"🎨 {name}")
-            if old_role and old_role in author.roles:
-                await author.remove_roles(old_role, reason="تبديل لون المتجر")
-        role_name = f"🎨 {color_name}"
-        role = discord.utils.get(ctx.guild.roles, name=role_name)
-        if role is None:
-            role = await ctx.guild.create_role(
-                name=role_name, color=discord.Color(SHOP_COLOR_ROLES[color_name]),
-                reason="رتبة لون من المتجر - إنشاء تلقائي")
-        try:
-            await author.add_roles(role, reason="شراء لون من المتجر")
-        except discord.Forbidden:
-            await ctx.send("❌ ما أقدر أعطيك هذي الرتبة (رتبتها أعلى من رتبة البوت — رتّبها بإعدادات السيرفر).")
-            return
-        add_balance(ctx.guild.id, author.id, -price)
-        _shop_set_active(ctx.guild.id, author.id, "color", SHOP_COLOR_DURATION_HOURS, {"role_id": role.id})
-        await ctx.send(f"✅ تم! صار لونك **{color_name}** لمدة {SHOP_COLOR_DURATION_HOURS} ساعة.")
-
+        _, msg = await purchase_color(ctx.guild, author, color_name)
     elif item == "تنظيف":
-        price = SHOP_WARN_CLEAR_PRICE
-        warns_data = load_json(WARNS_FILE)
-        gid, uid = str(ctx.guild.id), str(author.id)
-        user_warns = warns_data.get(gid, {}).get(uid, [])
-        if not user_warns:
-            await ctx.send("⚠️ ما عندك أي تنبيه تحذفه.")
-            return
-        if balance < price:
-            await ctx.send(f"❌ رصيدك ما يكفي (تحتاج {price} نقطة).")
-            return
-        user_warns.pop(0)
-        warns_data[gid][uid] = user_warns
-        save_json(WARNS_FILE, warns_data)
-        add_balance(ctx.guild.id, author.id, -price)
-        await ctx.send(f"✅ تم حذف أقدم تنبيه عندك. باقي عندك **{len(user_warns)}** تنبيه.")
-
-    elif profile_key:
-        item = profile_key
-        info = PROFILE_ITEMS[item]
-        entry = get_profile_items(ctx.guild.id, author.id)
-        if item in entry["owned"]:
-            await ctx.send(f"⚠️ تملك **{item}** مسبقًا، البسه بـ `.لبس {item}`")
-            return
-        if balance < info["price"]:
-            await ctx.send(f"❌ رصيدك ما يكفي (تحتاج {info['price']} نقطة).")
-            return
-        add_balance(ctx.guild.id, author.id, -info["price"])
-        entry["owned"].append(item)
-        entry[info["slot"]] = item
-        save_profile_items(ctx.guild.id, author.id, entry)
-        await ctx.send(f"✅ اشتريت **{item}** وانلبست على بطاقتك! جرّب اكتب `p` في {commands_channel_text(ctx.guild)}")
-
+        _, msg = purchase_warn_clear(ctx.guild, author)
     else:
-        await ctx.send("⚠️ ما لقيت هذا العنصر، اكتب `.متجر` عشان تشوف الأشياء المتوفرة.")
+        key = resolve_profile_item(f"{item} {extra_text or ''}")
+        if key is None:
+            await ctx.send("⚠️ ما لقيت هذا العنصر، اكتب `.متجر` عشان تشوف الأشياء المتوفرة.")
+            return
+        _, msg = purchase_profile_item(ctx.guild, author, key)
+    await ctx.send(msg)
 
 
 @bot.command(name="لبس")
@@ -1830,6 +2061,7 @@ async def unwear_cmd(ctx: commands.Context):
     entry["head"] = None
     entry["face"] = None
     entry["mouth"] = None
+    entry["ears"] = None
     save_profile_items(ctx.guild.id, ctx.author.id, entry)
     await ctx.send("✅ خلعت كل الزينة (تقدر تلبسها مرة ثانية بـ `.لبس`).")
 
@@ -2249,11 +2481,326 @@ def _acc_mustache(c):
         c.poly(pts, (74, 44, 24, 255), (20, 10, 4, 255), outline=(12, 6, 2, 255), ow=0.015)
 
 
+# ---------- زينة إضافية ----------
+def _ell_pts(cx, cy, a, b, ang=0.0, n=48):
+    """نقاط بيضاوي مايل (للأوراق والآذان)."""
+    ca, sa = math.cos(math.radians(ang)), math.sin(math.radians(ang))
+    pts = []
+    for i in range(n):
+        t = 2 * math.pi * i / n
+        x, y = a * math.cos(t), b * math.sin(t)
+        pts.append((cx + x * ca - y * sa, cy + x * sa + y * ca))
+    return pts
+
+
+def _hole(c, u1, v1, u2, v2):
+    """يفرّغ بيضاوي من الرسم (شفاف) — مثل فتحات العيون بالقناع."""
+    (x1, y1), (x2, y2) = c.P(u1, v1), c.P(u2, v2)
+    ImageDraw.Draw(c.img).ellipse([x1, y1, x2, y2], fill=(0, 0, 0, 0))
+
+
+def _acc_straw(c):
+    s1, s2, sx = (246, 218, 136, 255), (184, 142, 66, 255), (110, 78, 28, 255)
+    c.shape("ellipse", -1.32, -1.06, 1.32, -0.58, s1, s2, outline=sx, ow=0.03)
+    c.shape("pie", -0.64, -1.62, 0.64, -0.02, s1, s2, outline=sx, ow=0.03, start=180, end=360)
+    for v in (-1.46, -1.32, -1.18):
+        c.line([(-0.5, v), (0.5, v)], (110, 78, 28, 60), 0.015)
+    c.shape("rrect", -0.64, -0.98, 0.64, -0.80, (214, 52, 64, 255), (140, 18, 30, 255), rad=0.02)
+    c.line([(-1.0, -0.82), (-0.6, -0.72)], (110, 78, 28, 70), 0.02)
+    c.line([(1.0, -0.82), (0.6, -0.72)], (110, 78, 28, 70), 0.02)
+
+
+def _acc_party(c):
+    c.poly([(-0.54, -0.84), (0.0, -1.86), (0.54, -0.84)], (255, 110, 190, 255), (96, 60, 224, 255),
+           outline=(60, 30, 140, 255), ow=0.03, horizontal=True)
+    for v in (-1.0, -1.28, -1.56):
+        hw = 0.54 * (v + 1.86) / 1.02
+        c.line([(-hw, v), (hw, v - 0.09)], (255, 232, 90, 255), 0.05)
+    for (u, v) in ((-0.1, -1.15), (0.12, -1.42), (-0.05, -1.7), (0.25, -0.98)):
+        c.circ(u, v, 0.03, (255, 255, 255, 255))
+    c.shape("rrect", -0.58, -0.94, 0.58, -0.78, (255, 226, 120, 255), (200, 140, 20, 255), outline=GOLD_X, ow=0.012, rad=0.05)
+    c.circ(0, -1.9, 0.1, (255, 240, 130, 255), (240, 170, 20, 255), outline=GOLD_X, ow=0.012)
+
+
+def _acc_grad(c):
+    c.shape("rrect", -0.56, -1.22, 0.56, -0.74, (50, 54, 72, 255), (14, 16, 26, 255), outline=(6, 6, 12, 255), ow=0.025, rad=0.1)
+    c.poly([(-1.12, -1.18), (0.0, -1.58), (1.12, -1.18), (0.0, -0.84)], (74, 80, 104, 255), (16, 18, 28, 255),
+           outline=(6, 6, 12, 255), ow=0.03)
+    c.poly([(-0.9, -1.18), (0.0, -1.48), (0.9, -1.18), (0.0, -0.96)], (120, 128, 160, 70), (30, 34, 50, 40))
+    c.line([(0, -1.2), (0.84, -1.1), (0.88, -0.66)], (236, 190, 60, 255), 0.035)
+    for du in (-0.035, 0, 0.035):
+        c.line([(0.88 + du, -0.72), (0.88 + du * 1.6, -0.46)], (230, 180, 40, 255), 0.022)
+    c.shape("rrect", 0.82, -0.76, 0.94, -0.64, GOLD_L, GOLD_D, outline=GOLD_X, ow=0.012, rad=0.03)
+    c.circ(0, -1.2, 0.07, GOLD_L, GOLD_D, outline=GOLD_X, ow=0.012)
+
+
+def _acc_pirate(c):
+    c.line([(-0.30, -0.88), (0.30, -1.18)], (235, 235, 240, 255), 0.05)
+    c.line([(0.30, -0.88), (-0.30, -1.18)], (235, 235, 240, 255), 0.05)
+    c.poly([(-1.28, -0.76), (-1.02, -1.28), (-0.5, -1.50), (0, -1.32), (0.5, -1.50), (1.02, -1.28), (1.28, -0.76),
+            (0.72, -0.66), (0, -0.86), (-0.72, -0.66)], (70, 70, 84, 255), (10, 10, 14, 255),
+           outline=(214, 170, 50, 255), ow=0.04)
+    c.line([(-0.30, -0.88), (0.30, -1.18)], (235, 235, 240, 255), 0.05)
+    c.line([(0.30, -0.88), (-0.30, -1.18)], (235, 235, 240, 255), 0.05)
+    c.circ(0, -1.08, 0.17, (255, 255, 255, 255), (206, 212, 226, 255), outline=(110, 116, 130, 255), ow=0.012)
+    c.circ(-0.065, -1.10, 0.04, (20, 20, 24, 255))
+    c.circ(0.065, -1.10, 0.04, (20, 20, 24, 255))
+    c.shape("rrect", -0.07, -0.99, 0.07, -0.94, (20, 20, 24, 255), (20, 20, 24, 255), rad=0.01)
+    c.circ(0.98, -0.96, 0.06, GOLD_L, GOLD_D, outline=GOLD_X, ow=0.01)
+
+
+def _acc_beanie(c):
+    c.shape("pie", -0.86, -1.74, 0.86, -0.18, (230, 66, 66, 255), (118, 14, 26, 255), outline=(70, 8, 16, 255), ow=0.03,
+            start=180, end=360)
+    for u in (-0.6, -0.36, -0.12, 0.12, 0.36, 0.6):
+        c.line([(u, -1.04), (u * 0.5, -1.66)], (80, 6, 16, 90), 0.02)
+    c.shape("rrect", -0.92, -1.08, 0.92, -0.78, (250, 250, 252, 255), (196, 202, 218, 255), outline=(150, 156, 172, 255), ow=0.02, rad=0.08)
+    for u in (-0.75, -0.55, -0.35, -0.15, 0.05, 0.25, 0.45, 0.65, 0.82):
+        c.line([(u, -1.04), (u, -0.82)], (170, 176, 192, 255), 0.018)
+    c.circ(0, -1.76, 0.2, (255, 255, 255, 255), (206, 212, 226, 255), outline=(150, 156, 172, 255), ow=0.015)
+    for k in range(8):
+        a = k * math.pi / 4
+        c.circ(0.14 * math.cos(a), -1.76 + 0.14 * math.sin(a), 0.07, (255, 255, 255, 255), (226, 230, 240, 255))
+
+
+def _acc_cat(c):
+    for s in (-1, 1):
+        c.poly([(s * 0.84, -0.60), (s * 0.82, -1.64), (s * 0.20, -0.98)], (118, 118, 130, 255), (34, 34, 42, 255),
+               outline=(14, 14, 18, 255), ow=0.03)
+        c.poly([(s * 0.72, -0.86), (s * 0.70, -1.36), (s * 0.38, -1.02)], (255, 176, 196, 255), (222, 92, 134, 255))
+
+
+def _acc_bunny(c):
+    for s in (-1, 1):
+        c.poly(_ell_pts(s * 0.42, -1.5, 0.2, 0.52, s * 10), (255, 255, 255, 255), (222, 226, 238, 255),
+               outline=(168, 174, 190, 255), ow=0.025)
+        c.poly(_ell_pts(s * 0.42 + s * 0.01, -1.46, 0.1, 0.38, s * 10), (255, 196, 212, 255), (232, 120, 156, 255))
+
+
+def _acc_flowers(c):
+    for t in range(-82, 83, 7):
+        a = math.radians(t)
+        u, v = 1.02 * math.sin(a), -1.02 * math.cos(a)
+        c.poly(_ell_pts(u, v, 0.15, 0.06, t, 24), (120, 190, 70, 255), (40, 110, 36, 255))
+    pal = [((255, 160, 190, 255), (224, 70, 120, 255)), ((255, 255, 255, 255), (226, 230, 240, 255)),
+           ((200, 160, 250, 255), (130, 90, 204, 255)), ((255, 190, 100, 255), (232, 120, 30, 255))]
+    for i, t in enumerate(range(-68, 69, 23)):
+        a = math.radians(t)
+        u, v = 1.02 * math.sin(a), -1.02 * math.cos(a)
+        p1, p2 = pal[i % len(pal)]
+        for k in range(5):
+            ang = 2 * math.pi * k / 5 - math.pi / 2
+            c.circ(u + 0.11 * math.cos(ang), v + 0.11 * math.sin(ang), 0.1, p1, p2, outline=(0, 0, 0, 40), ow=0.008)
+        c.circ(u, v, 0.07, (255, 230, 90, 255), (230, 160, 20, 255))
+
+
+def _acc_laurel(c):
+    for t in range(-84, 85, 9):
+        if abs(t) < 5:
+            continue
+        sgn = -1 if t < 0 else 1
+        a = math.radians(t)
+        for off, rad in ((30, 1.12), (-30, 1.0)):
+            ang = t + sgn * off
+            u, v = rad * math.sin(a), -rad * math.cos(a)
+            c.poly(_ell_pts(u, v, 0.17, 0.065, ang, 24), (150, 210, 80, 255), (44, 116, 40, 255),
+                   outline=(30, 80, 26, 255), ow=0.008)
+    for t in (-82, 82):
+        a = math.radians(t)
+        c.circ(1.05 * math.sin(a), -1.05 * math.cos(a), 0.05, (230, 60, 60, 255), (150, 14, 20, 255))
+
+
+def _acc_diamond_crown(c):
+    L, D, X = (240, 250, 255, 255), (118, 160, 214, 255), (46, 76, 128, 255)
+    pts = [(-0.68, -0.78), (-0.80, -1.66), (-0.38, -1.22), (0, -1.88), (0.38, -1.22), (0.80, -1.66), (0.68, -0.78)]
+    c.poly(pts, L, D, outline=X, ow=0.03)
+    c.poly([(-0.30, -1.2), (0, -1.84), (0.30, -1.2), (0, -0.95)], (200, 240, 255, 255), (90, 170, 235, 255))
+    c.shape("rrect", -0.72, -1.04, 0.72, -0.76, L, D, outline=X, ow=0.03, rad=0.06)
+    for u in (-0.44, -0.15, 0.15, 0.44):
+        c.poly([(u - 0.07, -0.9), (u, -1.0), (u + 0.07, -0.9), (u, -0.8)], (210, 250, 255, 255), (40, 170, 230, 255),
+               outline=X, ow=0.008)
+    for (u, v) in ((-0.80, -1.66), (0.80, -1.66)):
+        c.poly([(u - 0.1, v), (u, v - 0.12), (u + 0.1, v), (u, v + 0.12)], (230, 255, 255, 255), (60, 190, 240, 255), outline=X, ow=0.01)
+    c.poly([(-0.14, -1.88), (0, -2.0), (0.14, -1.88), (0, -1.72)], (255, 255, 255, 255), (80, 200, 255, 255), outline=X, ow=0.01)
+    c.shine(-0.55, -1.0, -0.2, -0.93, 170)
+
+
+# ----- سماعات الراس -----
+def _phones_band(c, outer, hi, rad=1.1, w=0.13):
+    d = c.draw()
+    (x1, y1), (x2, y2) = c.P(-rad, -rad), c.P(rad, rad)
+    d.arc([x1, y1, x2, y2], 180, 360, fill=outer, width=c.w(w))
+    (a1, b1), (a2, b2) = c.P(-rad + 0.015, -rad + 0.015), c.P(rad - 0.015, rad - 0.015)
+    d.arc([a1, b1, a2, b2], 182, 358, fill=hi, width=c.w(0.03))
+
+
+def _acc_phones(c):
+    _phones_band(c, (26, 26, 32, 255), (110, 112, 126, 255))
+    for s in (-1, 1):
+        u1, u2 = sorted((s * 0.90, s * 1.34))
+        c.shape("rrect", u1, -0.46, u2, 0.46, (84, 86, 100, 255), (14, 14, 18, 255), outline=(4, 4, 6, 255), ow=0.03,
+                rad=0.17, horizontal=(s == -1))
+        ui1, ui2 = sorted((s * 0.86, s * 0.98))
+        c.shape("rrect", ui1, -0.34, ui2, 0.36, (52, 52, 60, 255), (20, 20, 26, 255), rad=0.05)
+        c.circ(s * 1.17, 0.0, 0.13, (240, 70, 80, 255), (140, 14, 26, 255), outline=(4, 4, 6, 255), ow=0.012)
+        c.shine(s * 1.18 - 0.05, -0.38, s * 1.18 + 0.05, -0.14, 100)
+
+
+def _acc_gaming(c):
+    _phones_band(c, (22, 24, 34, 255), (60, 220, 255, 255), w=0.14)
+    d = c.draw()
+    for s, col in ((-1, (60, 230, 255)), (1, (255, 70, 210))):
+        u1, u2 = sorted((s * 0.90, s * 1.36))
+        c.shape("rrect", u1, -0.5, u2, 0.5, (60, 64, 84, 255), (10, 12, 20, 255), outline=(2, 2, 6, 255), ow=0.03,
+                rad=0.16, horizontal=(s == -1))
+        ui1, ui2 = sorted((s * 0.86, s * 0.98))
+        c.shape("rrect", ui1, -0.36, ui2, 0.38, (46, 48, 62, 255), (18, 18, 26, 255), rad=0.05)
+        (x1, y1), (x2, y2) = c.P(s * 1.13 - 0.2, -0.2), c.P(s * 1.13 + 0.2, 0.2)
+        for wd, al in ((0.10, 50), (0.06, 110)):
+            d.ellipse([x1, y1, x2, y2], outline=col + (al,), width=c.w(wd))
+        d.ellipse([x1, y1, x2, y2], outline=col + (255,), width=c.w(0.03))
+        c.circ(s * 1.13, 0, 0.08, col + (255,), tuple(int(v * 0.5) for v in col) + (255,))
+    c.line([(-1.2, 0.46), (-1.12, 0.78), (-0.78, 0.94), (-0.46, 0.9)], (30, 32, 44, 255), 0.07)
+    c.line([(-1.2, 0.46), (-1.12, 0.78), (-0.78, 0.94), (-0.46, 0.9)], (120, 126, 150, 255), 0.02)
+    c.shape("ellipse", -0.58, 0.8, -0.34, 1.0, (60, 64, 84, 255), (10, 12, 20, 255), outline=(2, 2, 6, 255), ow=0.015)
+    c.circ(-0.46, 0.9, 0.04, (255, 70, 80, 255))
+
+
+def _acc_phones_pink(c):
+    _phones_band(c, (246, 140, 186, 255), (255, 224, 238, 255), w=0.12)
+    for s in (-1, 1):
+        u1, u2 = sorted((s * 0.88, s * 1.34))
+        c.shape("ellipse", u1, -0.52, u2, 0.52, (255, 200, 224, 255), (232, 108, 160, 255), outline=(176, 56, 110, 255),
+                ow=0.03, horizontal=(s == -1))
+        ui1, ui2 = sorted((s * 0.84, s * 0.96))
+        c.shape("ellipse", ui1, -0.4, ui2, 0.4, (255, 255, 255, 255), (232, 226, 236, 255))
+        c.circ(s * 1.12, 0.0, 0.2, (255, 230, 242, 255), (240, 140, 186, 255), outline=(176, 56, 110, 255), ow=0.015)
+        c.shine(s * 1.12 - 0.12, -0.34, s * 1.12 + 0.02, -0.18, 140)
+
+
+# ----- وجه / نظارات / أقنعة -----
+def _acc_round(c):
+    ink = (36, 28, 22, 255)
+    for cx in (-0.47, 0.47):
+        c.circ(cx, -0.06, 0.37, (170, 210, 236, 70), (90, 140, 180, 90), outline=ink, ow=0.05)
+        c.shine(cx - 0.24, -0.26, cx - 0.06, -0.14, 130)
+    c.line([(-0.12, -0.12), (0, -0.2), (0.12, -0.12)], ink, 0.045)
+    c.line([(-0.84, -0.12), (-1.04, -0.16)], ink, 0.04)
+    c.line([(0.84, -0.12), (1.04, -0.16)], ink, 0.04)
+
+
+def _acc_starglasses(c):
+    for cx in (-0.5, 0.5):
+        c.poly(_star_pts(cx, -0.04, 0.58), (255, 140, 200, 235), (200, 40, 130, 235), outline=(255, 255, 255, 255), ow=0.03)
+        c.shine(cx - 0.18, -0.14, cx - 0.04, -0.06, 150)
+    c.line([(-0.12, -0.06), (0.12, -0.06)], (255, 255, 255, 255), 0.04)
+
+
+def _acc_3d(c):
+    c.shape("rrect", -1.02, -0.32, 1.02, 0.24, (250, 250, 250, 255), (190, 190, 198, 255), outline=(20, 20, 26, 255), ow=0.035, rad=0.05)
+    c.shape("rrect", -0.88, -0.2, -0.1, 0.12, (255, 90, 90, 210), (190, 16, 16, 210), outline=(20, 20, 26, 255), ow=0.02, rad=0.04)
+    c.shape("rrect", 0.1, -0.2, 0.88, 0.12, (110, 230, 255, 210), (16, 150, 200, 210), outline=(20, 20, 26, 255), ow=0.02, rad=0.04)
+    c.line([(-1.02, -0.18), (-1.14, -0.2)], (20, 20, 26, 255), 0.04)
+    c.line([(1.02, -0.18), (1.14, -0.2)], (20, 20, 26, 255), 0.04)
+
+
+def _acc_mask(c):
+    c.poly([(-1.04, -0.30), (-0.56, -0.44), (0, -0.26), (0.56, -0.44), (1.04, -0.30), (0.96, 0.08), (0.64, 0.28),
+            (0.30, 0.12), (0, 0.04), (-0.30, 0.12), (-0.64, 0.28), (-0.96, 0.08)],
+           (232, 50, 62, 255), (112, 8, 20, 255), outline=(60, 4, 10, 255), ow=0.03)
+    _hole(c, -0.80, -0.2, -0.14, 0.12)
+    _hole(c, 0.14, -0.2, 0.80, 0.12)
+    d = c.draw()
+    for (a, b, e, f) in ((-0.80, -0.2, -0.14, 0.12), (0.14, -0.2, 0.80, 0.12)):
+        (x1, y1), (x2, y2) = c.P(a, b), c.P(e, f)
+        d.ellipse([x1, y1, x2, y2], outline=(60, 4, 10, 255), width=c.w(0.03))
+    c.shine(-0.9, -0.38, -0.5, -0.3, 100)
+
+
+def _acc_eyepatch(c):
+    k = (16, 16, 20, 255)
+    c.line([(0.46, -0.06), (-0.9, -0.9)], k, 0.05)
+    c.line([(0.46, -0.06), (1.02, -0.5)], k, 0.05)
+    c.shape("ellipse", 0.10, -0.36, 0.84, 0.26, (66, 66, 76, 255), (8, 8, 10, 255), outline=(0, 0, 0, 255), ow=0.03)
+    c.shine(0.22, -0.26, 0.46, -0.12, 90)
+
+
+def _acc_visor(c):
+    d = c.draw()
+    (x1, y1), (x2, y2) = c.P(-1.1, -0.38), c.P(1.1, 0.22)
+    for wd, al in ((0.14, 26), (0.09, 50), (0.05, 90)):
+        d.rounded_rectangle([x1, y1, x2, y2], radius=c.w(0.22), outline=(60, 220, 255, al), width=c.w(wd))
+    c.shape("rrect", -1.04, -0.34, 1.04, 0.18, (70, 240, 255, 140), (30, 90, 255, 190), outline=(210, 252, 255, 255),
+            ow=0.035, rad=0.22, horizontal=True)
+    c.line([(-0.72, 0.12), (-0.48, -0.26)], (255, 255, 255, 120), 0.05)
+    c.line([(-0.38, 0.12), (-0.22, -0.14)], (255, 255, 255, 90), 0.03)
+    c.line([(0.3, 0.12), (0.54, -0.26)], (255, 255, 255, 110), 0.05)
+
+
+# ----- الفم / اللحية -----
+def _acc_beard(c):
+    pts = [(-0.84, 0.24), (-0.90, 0.58), (-0.62, 1.0), (0, 1.16), (0.62, 1.0), (0.90, 0.58), (0.84, 0.24),
+           (0.62, 0.34), (0.32, 0.30), (0, 0.38), (-0.32, 0.30), (-0.62, 0.34)]
+    c.poly(pts, (98, 60, 32, 255), (28, 14, 6, 255), outline=(16, 8, 3, 255), ow=0.02)
+    for (u1, v1, u2, v2) in ((-0.62, 0.52, -0.5, 0.96), (-0.3, 0.6, -0.24, 1.08), (0.0, 0.62, 0.0, 1.1),
+                             (0.3, 0.6, 0.24, 1.08), (0.62, 0.52, 0.5, 0.96)):
+        c.line([(u1, v1), (u2, v2)], (170, 120, 80, 70), 0.025)
+
+
+def _acc_goatee(c):
+    c.poly([(-0.30, 0.58), (0.30, 0.58), (0.42, 0.84), (0.0, 1.16), (-0.42, 0.84)], (88, 54, 28, 255), (24, 12, 5, 255),
+           outline=(14, 7, 2, 255), ow=0.018)
+    c.line([(-0.18, 0.7), (-0.1, 1.0)], (170, 120, 80, 70), 0.02)
+    c.line([(0.18, 0.7), (0.1, 1.0)], (170, 120, 80, 70), 0.02)
+
+
+def _acc_handlebar(c):
+    for s in (-1, 1):
+        pts = [(s * u, v) for u, v in [(0.0, 0.40), (0.22, 0.34), (0.5, 0.38), (0.78, 0.5), (0.96, 0.44), (1.06, 0.28),
+                                        (1.14, 0.22), (1.14, 0.40), (1.02, 0.60), (0.78, 0.64), (0.5, 0.56),
+                                        (0.22, 0.56), (0.0, 0.56)]]
+        c.poly(pts, (46, 30, 20, 255), (6, 4, 2, 255), outline=(0, 0, 0, 255), ow=0.015)
+        c.line([(s * 0.12, 0.45), (s * 0.7, 0.52)], (200, 170, 140, 60), 0.02)
+
+
+def _acc_lips(c):
+    c.poly([(-0.44, 0.58), (-0.22, 0.46), (-0.06, 0.50), (0, 0.53), (0.06, 0.50), (0.22, 0.46), (0.44, 0.58), (0.0, 0.62)],
+           (242, 66, 96, 255), (170, 14, 50, 255), outline=(110, 6, 30, 255), ow=0.015)
+    c.poly([(-0.44, 0.58), (0.0, 0.62), (0.44, 0.58), (0.32, 0.77), (0.0, 0.86), (-0.32, 0.77)],
+           (252, 96, 126, 255), (190, 22, 62, 255), outline=(110, 6, 30, 255), ow=0.015)
+    c.shine(-0.2, 0.68, 0.08, 0.74, 140)
+
+
+def _acc_rose(c):
+    c.line([(0.0, 0.6), (-0.4, 0.74), (-0.84, 0.62)], (40, 120, 52, 255), 0.07)
+    c.poly(_ell_pts(-0.45, 0.88, 0.16, 0.07, -25, 24), (130, 200, 80, 255), (40, 120, 40, 255), outline=(26, 80, 28, 255), ow=0.01)
+    c.poly(_ell_pts(-0.25, 0.46, 0.14, 0.06, 20, 24), (130, 200, 80, 255), (40, 120, 40, 255), outline=(26, 80, 28, 255), ow=0.01)
+    c.circ(-0.86, 0.58, 0.24, (244, 66, 84, 255), (140, 8, 28, 255), outline=(80, 4, 16, 255), ow=0.02)
+    c.circ(-0.86, 0.58, 0.16, (252, 100, 116, 255), (170, 18, 40, 255), outline=(100, 6, 20, 255), ow=0.012)
+    c.circ(-0.86, 0.58, 0.08, (255, 130, 144, 255), (190, 24, 50, 255), outline=(100, 6, 20, 255), ow=0.01)
+
+
+def _acc_lollipop(c):
+    c.line([(-0.04, 0.62), (0.7, 0.92)], (240, 240, 244, 255), 0.07)
+    c.line([(-0.04, 0.62), (0.7, 0.92)], (190, 196, 210, 255), 0.02)
+    c.circ(0.84, 1.0, 0.32, (255, 130, 176, 255), (226, 46, 118, 255), outline=(150, 20, 80, 255), ow=0.02)
+    c.circ(0.84, 1.0, 0.23, (255, 255, 255, 255), (240, 232, 240, 255))
+    c.circ(0.84, 1.0, 0.15, (255, 130, 176, 255), (226, 46, 118, 255))
+    c.circ(0.84, 1.0, 0.07, (255, 255, 255, 255))
+    c.shine(0.62, 0.78, 0.74, 0.88, 150)
+
+
 _ACC_DRAWERS = {
     "crown": _acc_crown, "tophat": _acc_tophat, "cap": _acc_cap, "halo": _acc_halo, "cowboy": _acc_cowboy,
     "wizard": _acc_wizard, "chef": _acc_chef, "viking": _acc_viking, "horns": _acc_horns, "santa": _acc_santa,
     "beret": _acc_beret, "ghutra": _acc_ghutra, "glasses": _acc_glasses, "aviator": _acc_aviator,
     "hearts": _acc_hearts, "mustache": _acc_mustache,
+    "straw": _acc_straw, "party": _acc_party, "grad": _acc_grad, "pirate": _acc_pirate, "beanie": _acc_beanie,
+    "cat": _acc_cat, "bunny": _acc_bunny, "flowers": _acc_flowers, "laurel": _acc_laurel,
+    "diamond": _acc_diamond_crown, "phones": _acc_phones, "gaming": _acc_gaming, "phonespink": _acc_phones_pink,
+    "round": _acc_round, "starglasses": _acc_starglasses, "glasses3d": _acc_3d, "mask": _acc_mask,
+    "eyepatch": _acc_eyepatch, "visor": _acc_visor, "beard": _acc_beard, "goatee": _acc_goatee,
+    "handlebar": _acc_handlebar, "lips": _acc_lips, "rose": _acc_rose, "lollipop": _acc_lollipop,
 }
 
 
@@ -2292,7 +2839,7 @@ def _accessory_layer(kind: str, r: int):
 
 def render_profile_card(avatar_bytes: bytes, display_name: str, handle: str,
                         bank_money: int, points: int, head: str | None, face: str | None,
-                        mouth: str | None = None) -> BytesIO:
+                        mouth: str | None = None, ears: str | None = None) -> BytesIO:
     base = Image.open(PROFILE_BG_PATH).convert("RGBA")
     draw = ImageDraw.Draw(base)
     cx, cy = PROFILE_CIRCLE_CENTER
@@ -2304,7 +2851,7 @@ def render_profile_card(avatar_bytes: bytes, display_name: str, handle: str,
     base.paste(avatar, (cx - inner // 2, cy - inner // 2), avatar)
 
     # الزينة (الوجه أول ثم الراس)
-    for kind in (mouth, face, head):
+    for kind in (mouth, face, ears, head):
         if kind in PROFILE_ITEMS:
             layer, half = _accessory_layer(kind, int(r * 0.95))
             base.paste(layer, (cx - half, cy - half), layer)
@@ -2460,7 +3007,7 @@ async def info_profile(message: discord.Message, member: discord.Member):
             points = get_balance(message.guild.id, member.id)
             buf = await asyncio.to_thread(
                 render_profile_card, avatar_bytes, member.display_name, f"@{member.name}",
-                bank_money, points, entry.get("head"), entry.get("face"), entry.get("mouth"))
+                bank_money, points, entry.get("head"), entry.get("face"), entry.get("mouth"), entry.get("ears"))
         except Exception as e:
             print(f"[Profile] خطأ برسم البطاقة: {e}")
             await message.channel.send("❌ صار خطأ وأنا أرسم البطاقة.")
