@@ -8,6 +8,12 @@ tickets.py — نظام تكتات كامل.
   - روم لوق التكتات (ticket-logs) — بالآيدي (TICKET_LOG_CHANNEL_ID) — يرسل له
     الترانسكريبت وقت الإغلاق.
 
+قفل الاستلام:
+  أول ما أحد من الدعم يستلم التكت، الكتابة تنقفل على باقي الدعم والإداريين، وما يكتب
+  إلا: المستلم + صاحب التكت + رول الفاوندر (FOUNDER_ROLE_ID) + أي عضو انضاف للتكت من "خيارات".
+  القفل يشتغل بطبقتين: صلاحيات الروم، وحذف رسائل الإداريين اللي صلاحيتهم Administrator
+  (لأن هذي الصلاحية تتجاوز قفل الروم، فما ينفع معها غير الحذف).
+
 طريقة الربط ببوتك (بدون أي تعديل على باقي bot.py):
   بعد تعريف `bot = commands.Bot(...)` بأي مكان قبل `bot.run(...)`، ضيف سطرين بس:
 
@@ -33,6 +39,15 @@ TICKETS_CATEGORY_ID = 1548143239914070026   # كاتيقوري التكتات (�
 TICKET_LOG_CHANNEL_ID = 1538327225907281990  # روم لوق التكتات (بالآيدي)
 TICKET_LOG_CHANNEL_HINT = "ticket-logs"     # احتياط بالاسم لو الآيدي ما انلقى
 TICKET_CHANNEL_PREFIX = "ticket"            # الرومات تطلع ticket-0001, ticket-0002...
+
+# رول الفاوندر: يكتب بأي تكت مستلم حتى لو مو هو المستلم.
+# حط الآيدي هنا (أدق). لو تركته 0 يدوّر البوت على رول اسمه فيه "founder".
+FOUNDER_ROLE_ID = 1557117850508992552
+FOUNDER_ROLE_NAME_HINT = "founder"
+
+# يحذف رسائل الإداريين (صلاحية Administrator) اللي يكتبون بتكت مستلم وهم مو مستلمينه.
+# لو تبي القفل بصلاحيات الروم بس بدون حذف، خلّها False.
+ENFORCE_CLAIM_LOCK = True
 
 TICKET_PANEL_IMAGE = "panel.png"
 
@@ -63,6 +78,18 @@ def _support_role(guild: discord.Guild) -> discord.Role | None:
     return guild.get_role(SUPPORT_ROLE_ID)
 
 
+def _founder_role(guild: discord.Guild) -> discord.Role | None:
+    """رول الفاوندر: بالآيدي لو محدد، وإلا أول رول اسمه فيه founder."""
+    if FOUNDER_ROLE_ID:
+        role = guild.get_role(FOUNDER_ROLE_ID)
+        if role is not None:
+            return role
+    for role in guild.roles:
+        if FOUNDER_ROLE_NAME_HINT in role.name.lower():
+            return role
+    return None
+
+
 def _tickets_category(guild: discord.Guild) -> discord.CategoryChannel | None:
     cat = guild.get_channel(TICKETS_CATEGORY_ID)
     return cat if isinstance(cat, discord.CategoryChannel) else None
@@ -73,16 +100,29 @@ def _is_support(member: discord.Member) -> bool:
     return role is not None and role in member.roles
 
 
+def _is_founder(member: discord.Member) -> bool:
+    """الفاوندر = معه رول الفاوندر، أو هو أونر السيرفر."""
+    if member.id == member.guild.owner_id:
+        return True
+    role = _founder_role(member.guild)
+    return role is not None and role in member.roles
+
+
 async def _lock_to_claimer(channel: discord.TextChannel, claimer: discord.Member,
                            previous_id: int | None = None) -> None:
-    """يقفل الكتابة على رتبة الدعم ويخلي المستلم وحده (مع صاحب التكت) يكتب.
+    """يقفل الكتابة على رتبة الدعم ويخلي المستلم وحده (مع صاحب التكت والفاوندر) يكتب.
     لو فيه مستلم قديم (تحويل) ينسحب منه الاستثناء فيرجع تابع للرتبة (قراءة بس)."""
     guild = channel.guild
     role = _support_role(guild)
+    founder = _founder_role(guild)
     try:
         if role is not None:
             await channel.set_permissions(
                 role, view_channel=True, send_messages=False, read_message_history=True)
+        # الفاوندر يكتب دايمًا (استثناء الرول يغلب قفل رتبة الدعم لو معه الرتبتين)
+        if founder is not None and (role is None or founder.id != role.id):
+            await channel.set_permissions(
+                founder, view_channel=True, send_messages=True, read_message_history=True)
         if previous_id is not None and previous_id != claimer.id:
             previous = guild.get_member(previous_id)
             if previous is not None:
@@ -193,7 +233,7 @@ class TicketControlView(discord.ui.View):
         button.label = f"✅ مستلم: {interaction.user.display_name}"[:80]
         button.disabled = True
         await interaction.response.edit_message(view=self)
-        # قفل الكتابة على باقي الدعم — المستلم وحده يكتب
+        # قفل الكتابة على باقي الدعم — المستلم وحده (مع صاحب التكت والفاوندر) يكتب
         await _lock_to_claimer(interaction.channel, interaction.user)
         await interaction.channel.send(f"📥 {interaction.user.mention} استلم التكت.")
 
@@ -450,6 +490,43 @@ class RenameModal(discord.ui.Modal, title="تغيير اسم روم التكت")
 
 
 # ============================================================
+# قفل الاستلام — طبقة الحذف (للإداريين اللي صلاحيتهم Administrator)
+# ============================================================
+async def _enforce_claim_lock(message: discord.Message):
+    """بتكت مستلم: أي رسالة من غير المستلم / صاحب التكت / الفاوندر / عضو مضاف للتكت تنحذف.
+    صلاحيات الروم ما تمنع اللي معه Administrator، فهذي الطبقة هي اللي توقفه."""
+    if not ENFORCE_CLAIM_LOCK or message.author.bot or message.guild is None:
+        return
+    channel = message.channel
+    if not isinstance(channel, discord.TextChannel) or channel.category_id != TICKETS_CATEGORY_ID:
+        return
+    member = message.author
+    if not isinstance(member, discord.Member):
+        return
+
+    ticket = _db.get_ticket(channel.id)
+    if ticket is None or not ticket.get("claimed_by"):
+        return   # التكت مو مستلم لسا: كل الدعم يكتبون عادي
+
+    if str(member.id) in (str(ticket["claimed_by"]), str(ticket["opener_id"])):
+        return
+    if _is_founder(member):
+        return
+    if channel.overwrites_for(member).send_messages is True:
+        return   # عضو انضاف للتكت من "خيارات" (له استثناء كتابة صريح)
+
+    try:
+        await message.delete()
+    except (discord.Forbidden, discord.NotFound):
+        return
+    try:
+        await channel.send(
+            f"{member.mention} ⚠️ التكت مستلم، ما يكتب فيه إلا المستلم والفاوندر.", delete_after=5)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+
+# ============================================================
 # الربط بالبوت
 # ============================================================
 def setup_tickets(bot: commands.Bot) -> None:
@@ -481,3 +558,4 @@ def setup_tickets(bot: commands.Bot) -> None:
         bot.add_view(TicketControlView())
 
     bot.add_listener(_on_ready_tickets, "on_ready")
+    bot.add_listener(_enforce_claim_lock, "on_message")
