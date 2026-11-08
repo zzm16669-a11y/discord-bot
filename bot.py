@@ -196,6 +196,7 @@ import games
 games.setup_games(bot)
 import colors
 colors.setup_colors(bot)
+import card_backgrounds
 # ============================================================
 # فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
 # ============================================================
@@ -1905,9 +1906,12 @@ class ShopView(discord.ui.View):
         self.clear_items()
         S = discord.ButtonStyle
         if self.mode == "home":
-            cats = [(k, t) for k, t, _ in SHOP_CATEGORIES] + [(SHOP_SERVICE_KEY, "🎭 خدمات مؤقتة")]
+            cats = [(k, t) for k, t, _ in SHOP_CATEGORIES] + [(SHOP_SERVICE_KEY, "🎭 خدمات مؤقتة"), ("bg", "🖼️ خلفية")]
             for i, (k, t) in enumerate(cats):
                 async def cb(interaction, _k=k):
+                    if _k == "bg":
+                        await card_backgrounds.open_backgrounds(interaction, self.member)
+                        return
                     await self.go(interaction, "services" if _k == SHOP_SERVICE_KEY else "cat", _k, 0)
                 self._btn(t, S.primary, i // 3, cb)
         elif self.mode == "services":
@@ -2839,8 +2843,10 @@ def _accessory_layer(kind: str, r: int):
 
 def render_profile_card(avatar_bytes: bytes, display_name: str, handle: str,
                         bank_money: int, points: int, head: str | None, face: str | None,
-                        mouth: str | None = None, ears: str | None = None) -> BytesIO:
+                        mouth: str | None = None, ears: str | None = None,
+                        bg_num: int | None = None) -> BytesIO:
     base = Image.open(PROFILE_BG_PATH).convert("RGBA")
+    base = card_backgrounds.apply_background(base, bg_num)
     draw = ImageDraw.Draw(base)
     cx, cy = PROFILE_CIRCLE_CENTER
     r = PROFILE_CIRCLE_RADIUS
@@ -3007,12 +3013,28 @@ async def info_profile(message: discord.Message, member: discord.Member):
             points = get_balance(message.guild.id, member.id)
             buf = await asyncio.to_thread(
                 render_profile_card, avatar_bytes, member.display_name, f"@{member.name}",
-                bank_money, points, entry.get("head"), entry.get("face"), entry.get("mouth"), entry.get("ears"))
+                bank_money, points, entry.get("head"), entry.get("face"), entry.get("mouth"), entry.get("ears"),
+                card_backgrounds.get_active(message.guild.id, member.id))
         except Exception as e:
             print(f"[Profile] خطأ برسم البطاقة: {e}")
             await message.channel.send("❌ صار خطأ وأنا أرسم البطاقة.")
             return
     await message.channel.send(file=discord.File(buf, filename="profile.png"))
+
+
+async def render_member_card(guild: discord.Guild, member: discord.Member, bg_num):
+    """يرسم بطاقة العضو (بالنقاط والبنك والزينة) على خلفية معينة — تستخدمها معاينة المتجر."""
+    avatar_bytes = await member.display_avatar.replace(size=256, format="png").read()
+    entry = get_profile_items(guild.id, member.id)
+    bank_money = get_bank_money(guild.id, member.id)
+    points = get_balance(guild.id, member.id)
+    return await asyncio.to_thread(
+        render_profile_card, avatar_bytes, member.display_name, f"@{member.name}",
+        bank_money, points, entry.get("head"), entry.get("face"), entry.get("mouth"), entry.get("ears"), bg_num)
+
+
+card_backgrounds.set_renderer(render_member_card)
+card_backgrounds.set_shop_factory(lambda m: ShopView(m))
 
 
 INFO_COMMAND_KEYS = {"u", "s", "r", "a", "p"}
