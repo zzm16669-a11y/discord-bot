@@ -3532,6 +3532,9 @@ async def on_message(message: discord.Message):
 @bot.event
 async def on_ready():
     print(f"✅ تم تسجيل الدخول باسم {bot.user}")
+    if bot.get_cog("AntiSwear") is None:
+        from anti_swear import AntiSwear
+        await bot.add_cog(AntiSwear(bot))
     if not shop_expiry_task.is_running():
         shop_expiry_task.start()
     for guild in bot.guilds:
