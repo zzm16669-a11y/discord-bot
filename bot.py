@@ -800,6 +800,13 @@ async def say_cmd(ctx: commands.Context, *, text: str = None):
     await ctx.send(text, allowed_mentions=discord.AllowedMentions.none())
 
 
+# ---------- .تست: يتأكد إن البوت شغال ----------
+@bot.command(name="تست")
+async def test_cmd(ctx: commands.Context):
+    ms = round(bot.latency * 1000)
+    await ctx.send(f"✅ البوت شغال — سرعة الاتصال: **{ms}ms**")
+
+
 # ============================================================
 # 11) نظام الإدارة الكامل — بدون بريفكس، حسب الرتب
 # ============================================================
@@ -3496,6 +3503,14 @@ async def on_message(message: discord.Message):
             await message.reply(SALAM_REPLY, mention_author=False)
         except (discord.Forbidden, discord.HTTPException):
             pass
+
+    # لو أحد كتب نقطة "." لحالها يرد عليه البوت "يمرحبا"
+    if message.content.strip() == ".":
+        try:
+            await message.channel.send("يمرحبا")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+        return
 
     if WARN_COMMAND_PATTERN.match(message.content.strip()):
         await handle_warn_command(message)
