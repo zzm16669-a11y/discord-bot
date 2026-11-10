@@ -1,4 +1,4 @@
-discord.py>=2.3
+discord.py>=2.5.2
 aiohttp
 python-dotenv
 google-generativeai
