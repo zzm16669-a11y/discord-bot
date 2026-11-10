@@ -4300,15 +4300,23 @@ async def _run_chairs(ctx: commands.Context):
 # ============================================================
 # أمر .توب — متصدرين النقاط (صورة) + الإطار والتاج من المتجر
 # ============================================================
-# مواقع العناصر كنسب من مقاس صورة الخلفية top.png (من 0 إلى 1).
-# لو ما انطبقت على صفوف صورتك، عدّل هالأرقام بس (أرسل لي الصورة وأحسبها لك).
-TOP_ROWS_CY = [0.335, 0.461, 0.587, 0.712, 0.838]   # مركز كل صف من فوق لتحت (نسبة من الارتفاع)
-TOP_ROW_H = 0.105                                     # ارتفاع الصف (نسبة من الارتفاع)
-TOP_ROW_X0, TOP_ROW_X1 = 0.178, 0.822                 # بداية ونهاية الصف (نسبة من العرض)
-TOP_RANK_X = 0.192                                    # مكان رقم الترتيب (نسبة من العرض)
-TOP_CIRCLE_CX = 0.238                                 # مركز دايرة الأفتار (نسبة من العرض)
-TOP_CIRCLE_R = 0.058                                  # نصف قطر الدايرة (نسبة من الارتفاع)
-TOP_DEFAULT_SIZE = (1672, 941)                        # مقاس الصورة لو ما لقينا top.png
+# إحداثيات صورة top.png بالبكسل على مقاسها الأصلي 1672×941
+# (تتحول تلقائيًا لو مقاس صورتك اختلف). لو بغيت تزبط شي، عدّل الأرقام هنا بس.
+TOP_BASE_W, TOP_BASE_H = 1672, 941
+TOP_DEFAULT_SIZE = (TOP_BASE_W, TOP_BASE_H)
+# كل صف: (مركز الدايرة x, مركز الدايرة y, نصف قطر الدايرة)
+TOP_CIRCLES = [
+    (394, 296, 56),
+    (394, 424, 56),
+    (394, 550, 56),
+    (394, 673, 53),
+    (394, 793, 52),
+]
+TOP_ROW_HALF_H = [56, 55, 55, 52, 52]   # نص ارتفاع كل شريط (للخلفية البديلة بس)
+TOP_ROW_END_X = 1332                    # نهاية الشريط من اليمين
+TOP_RANK_X = 317                        # مكان رقم الترتيب (بين حافة اللوحة والدايرة)
+TOP_NAME_GAP = 22                       # المسافة بين الدايرة وبداية الاسم
+TOP_RIGHT_PAD = 34                      # المسافة بين النقاط وحافة الشريط اليمين
 
 
 def _hex_rgb(hex_color, default=(159, 196, 224)):
@@ -4323,11 +4331,18 @@ def _hex_rgb(hex_color, default=(159, 196, 224)):
 
 
 def _top_text(draw, x, cy, text, font, fill, align="left"):
-    """يكتب النص بنص الصف عموديًا، ومحاذاته يسار / يمين / وسط."""
+    """يكتب النص بنص الصف عموديًا (بقياس خط ثابت عشان كل النصوص تجي على نفس الخط)،
+    ومحاذاته يسار / يمين / وسط."""
     l, t, r, b = draw.textbbox((0, 0), text, font=font)
-    w, h = r - l, b - t
+    w = r - l
     px = x if align == "left" else x - w if align == "right" else x - w / 2
-    draw.text((px - l, cy - h / 2 - t), text, font=font, fill=fill)
+    try:
+        asc, desc = font.getmetrics()
+        py = cy - (asc + desc) / 2 + getattr(font, "size", 0) * 0.06
+        draw.text((px - l, py), text, font=font, fill=fill)
+    except AttributeError:
+        h = b - t
+        draw.text((px - l, cy - h / 2 - t), text, font=font, fill=fill)
 
 
 def _top_fit(draw, text: str, font, max_w: float) -> str:
@@ -4361,6 +4376,7 @@ async def build_top_image(guild: discord.Guild, rows: list) -> bytes:
     else:
         img = Image.new("RGBA", TOP_DEFAULT_SIZE, (31, 46, 48, 255))
     W, H = img.size
+    sx, sy = W / TOP_BASE_W, H / TOP_BASE_H
     draw = ImageDraw.Draw(img)
 
     members = []
@@ -4376,27 +4392,26 @@ async def build_top_image(guild: discord.Guild, rows: list) -> bytes:
                                      for m in members))
 
     name_font = _replica_font(max(14, int(H * 0.036)))
-    pts_font = _replica_font(max(14, int(H * 0.032)))
-    rank_font = _replica_font(max(14, int(H * 0.048)))
-    r = int(H * TOP_CIRCLE_R)
-    av_r = r - 3
-    cx = int(W * TOP_CIRCLE_CX)
-    x0, x1 = int(W * TOP_ROW_X0), int(W * TOP_ROW_X1)
-    half = int(H * TOP_ROW_H / 2)
+    pts_font = _replica_font(max(14, int(H * 0.031)))
+    rank_font = _replica_font(max(14, int(H * 0.034)))
     rank_colors = [(255, 215, 0, 255), (192, 192, 192, 255), (205, 127, 50, 255)]
+    row_end = TOP_ROW_END_X * sx
 
-    for i, (uid, pts) in enumerate(rows):
-        cy = int(H * TOP_ROWS_CY[i])
+    for i, (uid, pts) in enumerate(rows[:len(TOP_CIRCLES)]):
+        bcx, bcy, br = TOP_CIRCLES[i]
+        cx, cy, r = int(bcx * sx), int(bcy * sy), int(br * sx)
+        av_r = r - 5                      # الأفتار يجلس داخل حلقة الدايرة بدون ما يغطيها
         member = members[i]
 
         if not has_bg:   # بدون صورة خلفية: نرسم الصف والدايرة بنفسنا
-            draw.rounded_rectangle((x0, cy - half, x1, cy + half), radius=half // 2,
+            half = int(TOP_ROW_HALF_H[i] * sy)
+            draw.rounded_rectangle((cx, cy - half, row_end, cy + half), radius=half // 2,
                                    fill=(57, 70, 74, 255), outline=(169, 194, 196, 255), width=2)
             draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(31, 46, 48, 255),
                          outline=(169, 194, 196, 255), width=2)
 
-        # رقم الترتيب
-        _top_text(draw, int(W * TOP_RANK_X), cy, str(i + 1), rank_font,
+        # رقم الترتيب (بالفراغ اللي بين حافة اللوحة والدايرة)
+        _top_text(draw, TOP_RANK_X * sx, cy, str(i + 1), rank_font,
                   rank_colors[i] if i < 3 else (255, 255, 255, 255), "center")
 
         # الأفتار داخل الدايرة
@@ -4407,25 +4422,25 @@ async def build_top_image(guild: discord.Guild, rows: list) -> bytes:
         else:
             draw.ellipse((cx - av_r, cy - av_r, cx + av_r, cy + av_r), fill=(86, 100, 113, 255))
 
-        # الإطار (من المتجر): حلقة بلون اللاعب حول الأفتار
+        # الإطار (من المتجر): حلقة بلون اللاعب فوق حلقة الدايرة
         frame = get_cosmetic(guild.id, uid, "frame")
         if frame:
             color = _hex_rgb(frame.get("color")) + (255,)
-            draw.ellipse((cx - r - 2, cy - r - 2, cx + r + 2, cy + r + 2),
-                         outline=color, width=max(4, r // 8))
+            draw.ellipse((cx - r - 1, cy - r - 1, cx + r + 1, cy + r + 1),
+                         outline=color, width=5)
 
         # التاج (من المتجر): فوق يسار الأفتار
         if get_cosmetic(guild.id, uid, "crown"):
-            _draw_crown(draw, cx - r * 0.55, cy - r * 0.55, r * 0.9, r * 0.6,
-                        fill=(169, 194, 196, 255), outline=(31, 46, 48, 255))
+            _draw_crown(draw, cx - r * 0.62, cy - r * 0.62, r * 0.75, r * 0.5,
+                        fill=(230, 184, 74, 255), outline=(31, 46, 48, 255))
 
-        # الاسم والنقاط
+        # الاسم (يسار) والنقاط (يمين) — كلهم داخل الشريط
         name = member.display_name if member is not None else "غير معروف"
         pts_text = _ar_text(f"{pts:,} نقطة")
         pts_w = draw.textlength(pts_text, font=pts_font)
-        right = x1 - 30
-        name_x = cx + r + 24
-        max_name_w = (right - pts_w - 24) - name_x
+        right = row_end - TOP_RIGHT_PAD * sx
+        name_x = cx + r + TOP_NAME_GAP * sx
+        max_name_w = (right - pts_w - 24 * sx) - name_x
         _top_text(draw, name_x, cy, _top_fit(draw, name, name_font, max_name_w),
                   name_font, (255, 255, 255, 255), "left")
         _top_text(draw, right, cy, pts_text, pts_font, (169, 194, 196, 255), "right")
