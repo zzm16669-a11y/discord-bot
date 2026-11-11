@@ -59,6 +59,14 @@ DAILY_GAME_POINTS_CAP = 500
 # (روليت: اللاعب المختار يطيح — XO: اللي دوره يخسر — حجرة ورقة مقص: اللي ما اختار يخسر).
 TURN_TIMEOUT = 15
 
+# أقصى عدد لاعبين باللوبي (كل الألعاب الجماعية)
+LOBBY_MAX_PLAYERS = 1000
+# الروليت: عدد أزرار أسماء اللاعبين بالصفحة الوحدة (ديسكورد يسمح بـ 25 زر بالرسالة:
+# 20 أسماء لاعبين بـ 4 صفوف + صف أزرار التحكم: عشوائي / انسحاب / قنبلة / السابق / التالي)
+ROULETTE_PAGE_SIZE = 20
+# الكراسي: أقصى عدد كراسي (أزرار) بالجولة الوحدة — لو اللاعبين أكثر، اللي ما لقى كرسي يطيح كلهم
+CHAIRS_MAX = 25
+
 # ---------- إعدادات المتجر ----------
 # القنبلة: كم لاعب تطلّع بالعشوائي (من الحد الأدنى للأقصى) — الحماية تنقذ اللي تصيبه
 BOMB_MIN_KILLS = 2
@@ -192,6 +200,97 @@ def record_game_result(guild_id: int, user_id: int, won: bool) -> None:
     data[gid].setdefault(uid, {"wins": 0, "losses": 0})
     data[gid][uid]["wins" if won else "losses"] += 1
     save_json(GAME_STATS_FILE, data)
+
+
+def record_game_results_bulk(guild_id: int, user_ids, won: bool) -> None:
+    """نفس record_game_result بس لعدد كبير من اللاعبين دفعة وحدة (قراءة وحفظ مرة وحدة بدل مرة لكل لاعب)."""
+    ids = list(user_ids)
+    if not ids:
+        return
+    data = load_json(GAME_STATS_FILE)
+    gid = str(guild_id)
+    data.setdefault(gid, {})
+    key = "wins" if won else "losses"
+    for user_id in ids:
+        uid = str(user_id)
+        data[gid].setdefault(uid, {"wins": 0, "losses": 0})
+        data[gid][uid][key] += 1
+    save_json(GAME_STATS_FILE, data)
+
+
+def add_game_rewards_bulk(guild_id: int, amounts: dict) -> dict:
+    """نفس add_game_reward (نفس السقف اليومي) بس لعدد كبير من اللاعبين دفعة وحدة.
+    amounts: {آيدي اللاعب: المبلغ}. يرجع {آيدي اللاعب: المبلغ اللي انضاف فعليًا}."""
+    result = {}
+    if not amounts:
+        return result
+    data = load_json(ECONOMY_FILE)
+    gid = str(guild_id)
+    data.setdefault(gid, {})
+    now = datetime.now(timezone.utc)
+    for user_id, amount in amounts.items():
+        if amount <= 0:
+            result[user_id] = 0
+            continue
+        uid = str(user_id)
+        start_key, earned_key = f"{uid}_daily_game_start", f"{uid}_daily_game_earned"
+        start_str = data[gid].get(start_key)
+        earned_so_far = data[gid].get(earned_key, 0)
+        if not start_str or (now - datetime.fromisoformat(start_str)).total_seconds() >= 86400:
+            start_str = now.isoformat()
+            earned_so_far = 0
+        actual = max(0, min(amount, DAILY_GAME_POINTS_CAP - earned_so_far))
+        data[gid][start_key] = start_str
+        data[gid][earned_key] = earned_so_far + actual
+        if actual > 0:
+            data[gid][uid] = data[gid].get(uid, 0) + actual
+        result[user_id] = actual
+    save_json(ECONOMY_FILE, data)
+    return result
+
+
+def mentions_text(members, limit: int = 1500) -> str:
+    """منشنات اللاعبين مفصولة بـ "،" — لو كثيرة تنقص عند الحد وتكمل بـ "و N آخرين" (عشان حد ديسكورد للنص)."""
+    members = list(members)
+    parts, total = [], 0
+    for i, m in enumerate(members):
+        piece = m.mention
+        extra = len(piece) + (2 if parts else 0)
+        if total + extra > limit:
+            return "، ".join(parts) + f" و **{len(members) - i}** آخرين"
+        parts.append(piece)
+        total += extra
+    return "، ".join(parts) if parts else "لا أحد"
+
+
+def winners_names_text(winners) -> str:
+    """أسماء الفائزين: لو 10 أو أقل نفس الصيغة القديمة، ولو أكثر تنقص."""
+    if len(winners) <= 10:
+        return " و ".join(w.mention for w in winners)
+    return mentions_text(winners, 900)
+
+
+def winners_reward_text(winners, amounts) -> str:
+    """نص النقاط للفائزين (يتحمل عدد كبير من الفائزين)."""
+    if len(set(amounts)) == 1:
+        return f"(+{amounts[0]} نقطة{' لكل واحد' if len(winners) > 1 else ''})"
+    if len(winners) <= 10:
+        return "(" + "، ".join(f"{w.mention}: +{a}" for w, a in zip(winners, amounts)) + ")"
+    return "(تم توزيع النقاط على الفائزين، لكل واحد حسب سقفه اليومي)"
+
+
+def chunk_text_lines(header: str, lines: list, limit: int = 1900) -> list:
+    """يقسم نص طويل (سطور) إلى رسائل كل وحدة أقل من حد ديسكورد."""
+    chunks, current = [], header
+    for line in lines:
+        if len(current) + 1 + len(line) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = f"{current}\n{line}" if current else line
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 # ============================================================
@@ -1451,7 +1550,7 @@ async def _run_button_game(ctx: commands.Context, players: list):
     while len(alive) > 1:
         n = max(1, min(target, len(alive) - 1))
         view = ElimButtonView(alive, n)
-        names = "، ".join(p.mention for p in alive)
+        names = mentions_text(alive, 1000)
         msg = await ctx.send(
             f"**الجولة {round_num}** — {len(alive)} لاعبين و **{n}** أزرار بس!\n{names}\n"
             f"استعدوا... لما تصير خضراء اضغطوا زر (كل واحد ياخذ زر واحد). اللي ما يلحق زر يطيح!",
@@ -1496,19 +1595,17 @@ async def _run_button_game(ctx: commands.Context, players: list):
         alive = [p for p in alive if p not in out]
         target = max(1, n - 1)
         if out:
-            await ctx.send(f"طاح: {'، '.join(p.mention for p in out)}")
+            await ctx.send(f"طاح: {mentions_text(out, 1000)}")
         if saved:
-            await ctx.send(f"نجا بالحماية: {'، '.join(p.mention for p in saved)}")
+            await ctx.send(f"نجا بالحماية: {mentions_text(saved, 1000)}")
         if len(alive) > 1:
-            await ctx.send(f"الباقين ({len(alive)}): {'، '.join(p.mention for p in alive)}")
+            await ctx.send(f"الباقين ({len(alive)}): {mentions_text(alive, 1000)}")
         round_num += 1
 
     winner = alive[0]
     actual = add_game_reward(ctx.guild.id, winner.id, 100)
     record_game_result(ctx.guild.id, winner.id, won=True)
-    for p in players:
-        if p != winner:
-            record_game_result(ctx.guild.id, p.id, won=False)
+    record_game_results_bulk(ctx.guild.id, [p.id for p in players if p != winner], False)
     await ctx.send(f"فاز {winner.mention} بلعبة الأزرار! (+{actual} نقطة)")
 
 
@@ -1519,7 +1616,7 @@ async def button_game_cmd(ctx: commands.Context):
         return
     mark_busy(ctx.channel.id, "زر (آخر ناجي)")
     try:
-        players = await run_lobby(ctx, "لعبة الأزرار (آخر ناجي)", min_players=2, max_players=20, countdown=30, game_key="زر")
+        players = await run_lobby(ctx, "لعبة الأزرار (آخر ناجي)", min_players=2, max_players=LOBBY_MAX_PLAYERS, countdown=30, game_key="زر")
         if not players:
             return
         await _run_button_game(ctx, players)
@@ -2011,7 +2108,7 @@ async def rps_cmd(ctx: commands.Context, opponent: discord.Member):
 
 
 # ============================================================
-# 8) نظام اللوبي العام (للألعاب الجماعية — دخول/خروج/بدء، 30 ثانية، حتى 20 لاعب)
+# 8) نظام اللوبي العام (للألعاب الجماعية — دخول/خروج/بدء، 30 ثانية، حتى 1000 لاعب)
 # ============================================================
 class GameLobby(discord.ui.LayoutView):
     """لوبي الانضمام لكل الألعاب الجماعية (بما فيها الروليت): كل شي داخل إطار واحد —
@@ -2019,7 +2116,7 @@ class GameLobby(discord.ui.LayoutView):
     (يحتاج discord.py 2.6 أو أحدث)"""
 
     def __init__(self, host: discord.Member, game_title: str, min_players: int = 3,
-                 max_players: int = 20, countdown: int = 30, game_key: str = ""):
+                 max_players: int = LOBBY_MAX_PLAYERS, countdown: int = 30, game_key: str = ""):
         super().__init__(timeout=countdown + 30)
         self.host = host
         self.game_title = game_title
@@ -2069,7 +2166,7 @@ class GameLobby(discord.ui.LayoutView):
         else:
             self.info_text.content = (f"**ستبدأ اللعبة خلال:** {discord.utils.format_dt(self.ends_at, 'R')}\n"
                                       f"{count_line}")
-        players = "، ".join(m.mention for m in self.players) if self.players else "لا أحد"
+        players = mentions_text(self.players, 1500)
         self.players_text.content = f"**اللاعبون**\n{players}"
         self.footer_text.content = f"-# الحد الأدنى {self.min_players} لاعبين  |  المضيف: {self.host.display_name}"
 
@@ -2118,7 +2215,7 @@ class GameLobby(discord.ui.LayoutView):
 
 
 async def run_lobby(ctx: commands.Context, game_title: str, min_players: int = 3,
-                     max_players: int = 20, countdown: int = 30, game_key: str = ""):
+                     max_players: int = LOBBY_MAX_PLAYERS, countdown: int = 30, game_key: str = ""):
     """يفتح لوبي جماعي، ويرجع قائمة اللاعبين إذا اكتمل العدد الأدنى، وإلا يرجع None."""
     if ctx.author.bot:
         return None
@@ -2526,34 +2623,66 @@ class RouletteView(discord.ui.View):
         self.current_msg: discord.Message | None = None   # رسالة الأزرار الحالية
         self.turn_token = 0
         self._turn_task: asyncio.Task | None = None
+        self.page = 0                       # صفحة أزرار أسماء اللاعبين الحالية
+        self._page_owner = None             # صاحب الدور اللي الصفحة محسوبة له (عشان نرجع للصفحة الأولى بكل دور جديد)
         self._build_buttons()
 
     def _build_buttons(self):
         self.clear_items()
-        for member in self.remaining:
-            if member == self.chosen:
-                continue
-            btn = discord.ui.Button(label=member.display_name, style=discord.ButtonStyle.secondary)
+        # أسماء اللاعبين على صفحات (20 بالصفحة)، والصفحة الأولى هي الافتراضية لكل دور جديد
+        candidates = [m for m in self.remaining if m != self.chosen]
+        pages = max(1, math.ceil(len(candidates) / ROULETTE_PAGE_SIZE))
+        if self._page_owner != self.chosen:
+            self._page_owner = self.chosen
+            self.page = 0
+        self.page = max(0, min(self.page, pages - 1))
+        start = self.page * ROULETTE_PAGE_SIZE
+        for i, member in enumerate(candidates[start:start + ROULETTE_PAGE_SIZE]):
+            btn = discord.ui.Button(label=member.display_name, style=discord.ButtonStyle.secondary, row=i // 5)
             btn.callback = self._make_callback(member)
             self.add_item(btn)
+        # صف أزرار التحكم (الصف الخامس)
         # زر الطرد العشوائي
         random_btn = discord.ui.Button(label="اختيار عشوائي" if len(self.remaining) == 2 else "طرد عشوائي",
-                                      style=discord.ButtonStyle.secondary)
+                                      style=discord.ButtonStyle.secondary, row=4)
         random_btn.callback = self._random_callback
         self.add_item(random_btn)
         # زر الانسحاب (أي لاعب باقي يقدر ينسحب من اللعبة)
-        withdraw_btn = discord.ui.Button(label="انسحاب", style=discord.ButtonStyle.secondary)
+        withdraw_btn = discord.ui.Button(label="انسحاب", style=discord.ButtonStyle.secondary, row=4)
         withdraw_btn.callback = self._withdraw_callback
         self.add_item(withdraw_btn)
         # زر القنبلة (ميزة من المتجر): بس اللاعب المختار اللي معه قنبلة يقدر يفجرها
         if len(self.remaining) > 2:
-            bomb_btn = discord.ui.Button(label=f"{UI_ICONS['bomb']} قنبلة", style=discord.ButtonStyle.secondary)
+            bomb_btn = discord.ui.Button(label=f"{UI_ICONS['bomb']} قنبلة", style=discord.ButtonStyle.secondary, row=4)
             bomb_btn.callback = self._bomb_callback
             self.add_item(bomb_btn)
+        # أزرار التنقل بين الصفحات (تطلع بس لو فيه أكثر من صفحة)
+        if pages > 1:
+            prev_btn = discord.ui.Button(label="◀", style=discord.ButtonStyle.secondary, row=4,
+                                         disabled=(self.page == 0))
+            prev_btn.callback = self._page_callback(-1)
+            self.add_item(prev_btn)
+            next_btn = discord.ui.Button(label="▶", style=discord.ButtonStyle.secondary, row=4,
+                                         disabled=(self.page >= pages - 1))
+            next_btn.callback = self._page_callback(1)
+            self.add_item(next_btn)
+
+    def _page_callback(self, delta: int):
+        async def callback(interaction: discord.Interaction):
+            if self.spinning:
+                await interaction.response.send_message("العجلة تدور، انتظر...", ephemeral=True)
+                return
+            if interaction.user != self.chosen:
+                await interaction.response.send_message("مو دورك!", ephemeral=True)
+                return
+            self.page += delta
+            self._build_buttons()
+            await interaction.response.edit_message(content=self._turn_text(), view=self)
+        return callback
 
     def _turn_text(self, header: str = "") -> str:
         """نص رسالة الدور الحالي (اللاعبين الباقين + مين دوره)."""
-        names = "، ".join(m.mention for m in self.remaining)
+        names = mentions_text(self.remaining, 1200)
         body = (f"اللاعبون: {names}\n\n"
                 f"دور {self.chosen.mention} {'يختار مين يفوز!' if len(self.remaining) == 2 else 'يختار وحد يطلعه!'}\n"
                 f"عندك {TURN_TIMEOUT} ثانية وإلا تطلع من اللعبة!")
@@ -2612,9 +2741,7 @@ class RouletteView(discord.ui.View):
     async def _announce_winner(self, winner: discord.Member):
         actual = add_game_reward(self.guild.id, winner.id, 100)
         record_game_result(self.guild.id, winner.id, won=True)
-        for p in self.all_players:
-            if p != winner:
-                record_game_result(self.guild.id, p.id, won=False)
+        record_game_results_bulk(self.guild.id, [p.id for p in self.all_players if p != winner], False)
         await self.channel.send(f"الفايز: {winner.mention}! (+{actual} نقطة)")
         self.stop()
 
@@ -2797,7 +2924,7 @@ async def roulette_cmd(ctx: commands.Context):
     mark_busy(ctx.channel.id, "روليت")
     view = None
     try:
-        players = await run_lobby(ctx, "الروليت الروسي", min_players=2, max_players=20, countdown=30, game_key="روليت")
+        players = await run_lobby(ctx, "الروليت الروسي", min_players=2, max_players=LOBBY_MAX_PLAYERS, countdown=30, game_key="روليت")
         if not players:
             return
         view = RouletteView(players, ctx.channel)
@@ -2841,6 +2968,19 @@ class DiceRollView(discord.ui.View):
         self.all_rolled = asyncio.Event()
 
     def status_text(self, final: bool = False) -> str:
+        if len(self.players) > 20:
+            # عدد كبير: ما نعرض كل اللاعبين (حد ديسكورد للنص)، نعرض الملخص وأعلى الأرقام
+            header = "**انتهى الوقت!**" if final else \
+                f"**النرد** — اضغط الزر وارمِ النرد بنفسك! عندكم {self.seconds} ثواني"
+            by_id = {p.id: p for p in self.players}
+            top = sorted(self.rolls.items(), key=lambda kv: -kv[1])[:10]
+            big = [f"رمى **{len(self.rolls)}** من **{len(self.players)}** لاعب"]
+            if top:
+                big.append("\n**الأعلى حاليًا:**")
+                for uid, val in top:
+                    tag = " (تلقائي)" if uid in self.auto_ids else ""
+                    big.append(f"{by_id[uid].mention}: **{val}**{tag}")
+            return header + "\n\n" + "\n".join(big)
         lines = []
         for p in self.players:
             if p.id in self.rolls:
@@ -2900,7 +3040,7 @@ async def dice_cmd(ctx: commands.Context):
         return
     mark_busy(ctx.channel.id, "نرد")
     try:
-        players = await run_lobby(ctx, "لعبة النرد", min_players=2, max_players=20, countdown=30, game_key="نرد")
+        players = await run_lobby(ctx, "لعبة النرد", min_players=2, max_players=LOBBY_MAX_PLAYERS, countdown=30, game_key="نرد")
         if not players:
             return
         view = DiceRollView(players, seconds=10)
@@ -2931,20 +3071,21 @@ async def dice_cmd(ctx: commands.Context):
         rolls = {p: view.rolls[p.id] for p in players}
         top = max(rolls.values())
         winners = [p for p in players if rolls[p] == top]
-        lines = "\n".join(
-            f"{p.mention}: {rolls[p]}{' (تلقائي)' if p.id in view.auto_ids else ''}" for p in players)
-        actual_amounts = []
-        for w in winners:
-            actual_amounts.append(add_game_reward(ctx.guild.id, w.id, 60))
-            record_game_result(ctx.guild.id, w.id, won=True)
-        for p in players:
-            if p not in winners:
-                record_game_result(ctx.guild.id, p.id, won=False)
-        winners_text = " و ".join(w.mention for w in winners)
-        if len(set(actual_amounts)) == 1:
-            reward_text = f"(+{actual_amounts[0]} نقطة{' لكل واحد' if len(winners) > 1 else ''})"
+        if len(players) > 20:
+            top_players = sorted(players, key=lambda p: -rolls[p])[:10]
+            lines = "\n".join(
+                f"{p.mention}: {rolls[p]}{' (تلقائي)' if p.id in view.auto_ids else ''}" for p in top_players)
+            lines += f"\n... و **{len(players) - 10}** لاعب آخر"
         else:
-            reward_text = "(" + "، ".join(f"{w.mention}: +{a}" for w, a in zip(winners, actual_amounts)) + ")"
+            lines = "\n".join(
+                f"{p.mention}: {rolls[p]}{' (تلقائي)' if p.id in view.auto_ids else ''}" for p in players)
+        paid = add_game_rewards_bulk(ctx.guild.id, {w.id: 60 for w in winners})
+        actual_amounts = [paid[w.id] for w in winners]
+        winner_ids = {w.id for w in winners}
+        record_game_results_bulk(ctx.guild.id, [w.id for w in winners], True)
+        record_game_results_bulk(ctx.guild.id, [p.id for p in players if p.id not in winner_ids], False)
+        winners_text = winners_names_text(winners)
+        reward_text = winners_reward_text(winners, actual_amounts)
         await ctx.send(f"**نتائج الرمي:**\n{lines}\n\nالفائز: {winners_text} {reward_text}")
     finally:
         unmark_busy(ctx.channel.id)
@@ -2958,7 +3099,7 @@ async def wheel_cmd(ctx: commands.Context):
         return
     mark_busy(ctx.channel.id, "عجلة الحظ")
     try:
-        players = await run_lobby(ctx, "عجلة الحظ", min_players=2, max_players=20, countdown=30, game_key="عجلة")
+        players = await run_lobby(ctx, "عجلة الحظ", min_players=2, max_players=LOBBY_MAX_PLAYERS, countdown=30, game_key="عجلة")
         if not players:
             return
         msg = await ctx.send("**العجلة تدور تختار الفايز...**")
@@ -2969,9 +3110,7 @@ async def wheel_cmd(ctx: commands.Context):
             return
         actual = add_game_reward(ctx.guild.id, winner.id, pts)
         record_game_result(ctx.guild.id, winner.id, won=True)
-        for p in players:
-            if p != winner:
-                record_game_result(ctx.guild.id, p.id, won=False)
+        record_game_results_bulk(ctx.guild.id, [p.id for p in players if p != winner], False)
         await ctx.send(f"الفايز: {winner.mention}! (+{actual} نقطة)")
     finally:
         unmark_busy(ctx.channel.id)
@@ -3001,7 +3140,7 @@ class HideSpotButton(discord.ui.Button):
             await interaction.response.send_message("أنت مو باللعبة.", ephemeral=True)
             return
         owner = view.owner_of(self.number)
-        if owner is not None and owner != user.id:
+        if not view.shared and owner is not None and owner != user.id:
             await interaction.response.send_message("هذا المكان محجوز، اختر مكان ثاني.", ephemeral=True)
             return
         view.choices[user.id] = self.number
@@ -3021,6 +3160,8 @@ class HideSeekHideView(discord.ui.View):
         self.hiders = hiders
         self.hider_ids = {h.id for h in hiders}
         self.spot_count = spot_count
+        # لو المختبئين أكثر من الأماكن (لوبي كبير) يسمح أكثر من مختبئ بنفس المكان
+        self.shared = len(hiders) > spot_count
         self.seconds = seconds
         self.choices: dict[int, int] = {}   # آيدي المختبئ -> رقم المكان
         self.all_chosen = asyncio.Event()
@@ -3035,21 +3176,28 @@ class HideSeekHideView(discord.ui.View):
         return None
 
     def text(self) -> str:
-        return (f"{self.seeker.mention} هو الباحث! الباقين يختارون مكان يختبئون فيه.\n"
+        text = (f"{self.seeker.mention} هو الباحث! الباقين يختارون مكان يختبئون فيه.\n"
                 f"المختبئين: اضغطوا رقم المكان اللي تبون تختبئون فيه (ينتهي الوقت {discord.utils.format_dt(self.ends_at, 'R')})\n"
                 f"فيه **{self.spot_count}** مكان.")
+        if self.shared:
+            text += "\nالمختبئين كثير، فممكن أكثر من واحد يختبئ بنفس المكان."
+        return text
 
     def build_spots(self) -> dict:
         """يرجع {رقم المكان: المختبئ}، واللي ما اختار خلال المهلة ينحط له مكان فاضي عشوائي."""
-        spots: dict[int, discord.Member | None] = {n: None for n in range(1, self.spot_count + 1)}
+        spots: dict[int, list] = {n: [] for n in range(1, self.spot_count + 1)}
         by_id = {h.id: h for h in self.hiders}
         for uid, num in self.choices.items():
-            spots[num] = by_id[uid]
-        free = [n for n, m in spots.items() if m is None]
-        random.shuffle(free)
-        for h in self.hiders:
-            if h.id not in self.choices:
-                spots[free.pop()] = h
+            spots[num].append(by_id[uid])
+        unchosen = [h for h in self.hiders if h.id not in self.choices]
+        if self.shared:
+            for h in unchosen:
+                spots[random.randint(1, self.spot_count)].append(h)
+        else:
+            free = [n for n, m in spots.items() if not m]
+            random.shuffle(free)
+            for h in unchosen:
+                spots[free.pop()].append(h)
         return spots
 
 
@@ -3070,18 +3218,23 @@ class HideSeekButton(discord.ui.Button):
             await interaction.response.send_message("خلصت محاولاتك.", ephemeral=True)
             return
 
-        occupant = view.spots.get(self.number)
+        occupants = view.spots.get(self.number) or []
         self.disabled = True
         view.attempts_used += 1
         remaining_attempts = view.max_attempts - view.attempts_used
 
-        if occupant is not None:
-            self.label = occupant.display_name[:12]
+        if occupants:
+            self.label = occupants[0].display_name[:12] if len(occupants) == 1 else f"{len(occupants)} لاعبين"
             self.style = discord.ButtonStyle.secondary
-            view.found.add(occupant.id)
-            add_game_reward(interaction.guild.id, view.seeker.id, 20)
+            for occupant in occupants:
+                view.found.add(occupant.id)
+            add_game_reward(interaction.guild.id, view.seeker.id, 20 * len(occupants))
             await interaction.response.edit_message(content=view.status_text(remaining_attempts), view=view)
-            await interaction.channel.send(f"لقيت {occupant.mention}!")
+            if len(occupants) == 1:
+                await interaction.channel.send(f"لقيت {occupants[0].mention}!")
+            else:
+                await interaction.channel.send(
+                    f"لقيت **{len(occupants)}** لاعبين: {mentions_text(occupants, 1200)}")
         else:
             self.label = "فاضي"
             self.style = discord.ButtonStyle.secondary
@@ -3156,7 +3309,7 @@ async def hideseek_cmd(ctx: commands.Context):
 
 
 async def _run_hideseek(ctx: commands.Context):
-    players = await run_lobby(ctx, "غميضة", min_players=2, max_players=20, countdown=30, game_key="غميضة")
+    players = await run_lobby(ctx, "غميضة", min_players=2, max_players=LOBBY_MAX_PLAYERS, countdown=30, game_key="غميضة")
     if not players:
         return
     seeker = random.choice(players)
@@ -3204,9 +3357,7 @@ async def _run_hideseek(ctx: commands.Context):
             await ctx.send("خلص وقت البحث!")
     except discord.NotFound:
         pass
-    for p in hiders:
-        if p.id not in view.found:
-            add_game_reward(ctx.guild.id, p.id, 40)
+    add_game_rewards_bulk(ctx.guild.id, {p.id: 40 for p in hiders if p.id not in view.found})
     remaining = len(hiders) - len(view.found)
     await ctx.send(f"{seeker.mention} لقى **{len(view.found)}** وبقي **{remaining}** ما لقاهم.")
 
@@ -3777,7 +3928,7 @@ async def replica_cmd(ctx: commands.Context):
 
 
 async def _run_replica(ctx: commands.Context):
-    players = await run_lobby(ctx, "ريبلكا", min_players=2, max_players=20, countdown=30, game_key="ريبلكا")
+    players = await run_lobby(ctx, "ريبلكا", min_players=2, max_players=LOBBY_MAX_PLAYERS, countdown=30, game_key="ريبلكا")
     if not players:
         return
     scores = {p.id: 0 for p in players}
@@ -3825,7 +3976,8 @@ async def _run_replica(ctx: commands.Context):
                 pngs = await asyncio.to_thread(_build_replica_stats_images, title, results)
                 files = [discord.File(BytesIO(b), filename=f"replica_stats_{round_num}_{i + 1}.png")
                          for i, b in enumerate(pngs)]
-                await ctx.send(files=files)
+                for i in range(0, len(files), 10):   # ديسكورد يسمح 10 ملفات بالرسالة
+                    await ctx.send(files=files[i:i + 10])
                 sent = True
             except FileNotFoundError:
                 print(f"[ريبلكا] قالب الإحصائية مو موجود: {os.path.join(GAME_IMAGES_DIR, REPLICA_STATS_IMAGE)}")
@@ -3834,31 +3986,29 @@ async def _run_replica(ctx: commands.Context):
         if not sent:
             lines = [f"{'✅' if r['ok'] else '❌'} {r['name']} — {r['category']}"
                      + (f": {r['answer']}" if r["ok"] else "") for r in results]
-            await ctx.send(f"**{title}**\n" + "\n".join(lines))
+            for chunk in chunk_text_lines(f"**{title}**", lines):
+                await ctx.send(chunk)
 
         if round_num < len(letters):
             await asyncio.sleep(3)
 
     # ---------- النتيجة النهائية: الأكثر إجابات صحيحة يفوز (والتعادل يتشارك الفوز) ----------
     top = max(scores.values())
-    board = "\n".join(f"{p.mention}: **{scores[p.id]}**"
-                      for p in sorted(players, key=lambda x: -scores[x.id]))
+    ranked = sorted(players, key=lambda x: -scores[x.id])
+    board = "\n".join(f"{p.mention}: **{scores[p.id]}**" for p in ranked[:15])
+    if len(ranked) > 15:
+        board += f"\n... و **{len(ranked) - 15}** لاعب آخر"
     if top == 0:
         await ctx.send(f"**انتهت ريبلكا!** ما جاوب أحد ولا مرة.\n\n{board}")
         return
     winners = [p for p in players if scores[p.id] == top]
-    amounts = []
-    for w in winners:
-        amounts.append(add_game_reward(ctx.guild.id, w.id, random.randint(60, 100)))
-        record_game_result(ctx.guild.id, w.id, won=True)
-    for p in players:
-        if p not in winners:
-            record_game_result(ctx.guild.id, p.id, won=False)
-    winners_text = " و ".join(w.mention for w in winners)
-    if len(set(amounts)) == 1:
-        reward_text = f"(+{amounts[0]} نقطة{' لكل واحد' if len(winners) > 1 else ''})"
-    else:
-        reward_text = "(" + "، ".join(f"{w.mention}: +{a}" for w, a in zip(winners, amounts)) + ")"
+    paid = add_game_rewards_bulk(ctx.guild.id, {w.id: random.randint(60, 100) for w in winners})
+    amounts = [paid[w.id] for w in winners]
+    winner_ids = {w.id for w in winners}
+    record_game_results_bulk(ctx.guild.id, [w.id for w in winners], True)
+    record_game_results_bulk(ctx.guild.id, [p.id for p in players if p.id not in winner_ids], False)
+    winners_text = winners_names_text(winners)
+    reward_text = winners_reward_text(winners, amounts)
     await ctx.send(f"**انتهت ريبلكا!**\n{board}\n\nالفائز: {winners_text} {reward_text}")
 
 
@@ -3904,7 +4054,7 @@ class MafiaRoleView(discord.ui.View):
             text = "أنت **مافيا**! هدفك تضلل الكل وتفلت، وكل ليلة تختارون ضحية تغتالونها."
             allies = [m for m in self.mafia_members if m.id != interaction.user.id]
             if allies:
-                text += "\nخوياك المافيا: " + "، ".join(m.mention for m in allies)
+                text += "\nخوياك المافيا: " + mentions_text(allies, 900)
             else:
                 text += "\nأنت المافيا الوحيد بهذي اللعبة."
         elif role == "doctor":
@@ -3958,6 +4108,28 @@ class MafiaNightSelect(discord.ui.Select):
             night.done.set()
 
 
+class MafiaNightUserSelect(discord.ui.UserSelect):
+    """بديل قائمة الاختيار للألعاب الكبيرة (أكثر من 25 هدف): قائمة ديسكورد اللي تبحث عن العضو بالاسم."""
+
+    def __init__(self, night: "MafiaNightView"):
+        super().__init__(placeholder=night.placeholder, min_values=1, max_values=1)
+        self.night = night
+
+    async def callback(self, interaction: discord.Interaction):
+        night = self.night
+        if night.closed:
+            await interaction.response.edit_message(content="انتهى الوقت.", view=None)
+            return
+        picked = self.values[0]
+        if picked.id not in night.target_ids:
+            await interaction.response.send_message("اختر لاعب من اللي ينفع تختاره (باقي باللعبة).", ephemeral=True)
+            return
+        night.choices[interaction.user.id] = picked.id
+        await interaction.response.edit_message(content=f"اخترت: **{picked.display_name}**", view=None)
+        if len(night.choices) >= len(night.allowed_ids):
+            night.done.set()
+
+
 class MafiaNightView(discord.ui.View):
     """زر الليل: يضغطه بس اللي دوره (المافيا أو الطبيب) وتطلع له قائمة اختيار خفية.
     لو allowed_ids فاضية (الطبيب مات) يبقى الزر شكلي عشان ما ينكشف إن الطبيب مات."""
@@ -3967,6 +4139,7 @@ class MafiaNightView(discord.ui.View):
         super().__init__(timeout=timeout + 30)
         self.allowed_ids = allowed_ids
         self.targets = targets
+        self.target_ids = {t.id for t in targets}
         self.placeholder = placeholder
         self.choices: dict[int, int] = {}   # آيدي اللاعب -> آيدي اللي اختاره
         self.done = asyncio.Event()
@@ -3983,7 +4156,10 @@ class MafiaNightView(discord.ui.View):
             await interaction.response.send_message("انتهى الوقت.", ephemeral=True)
             return
         pick_view = discord.ui.View(timeout=60)
-        pick_view.add_item(MafiaNightSelect(self))
+        if len(self.targets) <= 25:
+            pick_view.add_item(MafiaNightSelect(self))
+        else:
+            pick_view.add_item(MafiaNightUserSelect(self))
         await interaction.response.send_message("اختر من القائمة:", view=pick_view, ephemeral=True)
 
     def top_choice(self):
@@ -3997,6 +4173,28 @@ class MafiaNightView(discord.ui.View):
         return random.choice([t for t, c in counts.items() if c == best])
 
 
+class MafiaVoteUserSelect(discord.ui.UserSelect):
+    """تصويت بقائمة بحث ديسكورد للألعاب الكبيرة (أكثر من 25 لاعب باقي)."""
+
+    def __init__(self, vote_view: "MafiaVoteView"):
+        super().__init__(placeholder="اختر اللي تشك فيه", min_values=1, max_values=1)
+        self.vote_view = vote_view
+
+    async def callback(self, interaction: discord.Interaction):
+        view = self.vote_view
+        if interaction.user.id not in view.player_ids:
+            await interaction.response.send_message("أنت مو باللعبة.", ephemeral=True)
+            return
+        target = self.values[0]
+        if target.id not in view.player_ids:
+            await interaction.response.send_message("هذا اللاعب مو باللعبة (أو انطرد).", ephemeral=True)
+            return
+        view.votes[interaction.user.id] = target.id
+        await interaction.response.send_message(f"صوّتَّ ضد {target.mention}", ephemeral=True)
+        if len(view.votes) >= len(view.players):
+            view.done.set()
+
+
 class MafiaVoteView(discord.ui.View):
     """أزرار تصويت — زر لكل لاعب باقي بالجولة، يضغط عليه اللي يشك فيه (يقدر يغيّر صوته)."""
 
@@ -4005,10 +4203,15 @@ class MafiaVoteView(discord.ui.View):
         self.players = players
         self.votes: dict[int, int] = {}  # voter_id -> target_id
         self.done = asyncio.Event()
-        for p in players:
-            btn = discord.ui.Button(label=p.display_name[:20], style=discord.ButtonStyle.secondary)
-            btn.callback = self._make_cb(p)
-            self.add_item(btn)
+        self.player_ids = {p.id for p in players}
+        if len(players) <= 25:
+            for p in players:
+                btn = discord.ui.Button(label=p.display_name[:20], style=discord.ButtonStyle.secondary)
+                btn.callback = self._make_cb(p)
+                self.add_item(btn)
+        else:
+            # أكثر من 25 زر مو مسموح بالرسالة، فنستخدم قائمة بحث
+            self.add_item(MafiaVoteUserSelect(self))
 
     def _make_cb(self, target: discord.Member):
         async def cb(interaction: discord.Interaction):
@@ -4051,7 +4254,7 @@ def _mafia_winner(alive: list, roles: dict):
 
 
 async def _run_mafia(ctx: commands.Context):
-    players = await run_lobby(ctx, "مافيا", min_players=4, max_players=20, countdown=30, game_key="مافيا")
+    players = await run_lobby(ctx, "مافيا", min_players=4, max_players=LOBBY_MAX_PLAYERS, countdown=30, game_key="مافيا")
     if not players:
         return
 
@@ -4146,7 +4349,7 @@ async def _run_mafia(ctx: commands.Context):
 
         # ================= النهار: تحقق ثم تصويت =================
         end_time = discord.utils.utcnow() + timedelta(seconds=MAFIA_DISCUSS_SECONDS)
-        alive_names = "، ".join(p.mention for p in alive)
+        alive_names = mentions_text(alive, 1200)
         discuss_msg = await ctx.send(
             f"🔍 | لديكم **{MAFIA_DISCUSS_SECONDS} ثانية** للتحقق بين اللاعبين ومعرفة المافيا "
             f"للتصويت على طرده من اللعبة {discord.utils.format_dt(end_time, 'R')}\n"
@@ -4194,13 +4397,11 @@ async def _run_mafia(ctx: commands.Context):
         winners = mafia_team
         result = "سيطرت المافيا على المدينة! فازت المافيا"
 
-    for w in winners:
-        add_game_reward(ctx.guild.id, w.id, 50)
-        record_game_result(ctx.guild.id, w.id, won=True)
-    for p in players:
-        if p not in winners:
-            record_game_result(ctx.guild.id, p.id, won=False)
-    mafia_names = "، ".join(m.mention for m in mafia_team)
+    add_game_rewards_bulk(ctx.guild.id, {w.id: 50 for w in winners})
+    winner_ids = {w.id for w in winners}
+    record_game_results_bulk(ctx.guild.id, [w.id for w in winners], True)
+    record_game_results_bulk(ctx.guild.id, [p.id for p in players if p.id not in winner_ids], False)
+    mafia_names = mentions_text(mafia_team, 1200)
     doctor_member = next(p for p in players if roles[p.id] == "doctor")
     await ctx.send(f"{result}\n\nالمافيا كانوا: {mafia_names}\nالطبيب كان: {doctor_member.mention}")
 
@@ -4210,9 +4411,12 @@ class ChairsView(discord.ui.View):
     def __init__(self, players: list[discord.Member]):
         super().__init__(timeout=15)
         self.remaining = players.copy()
+        self._ids = {p.id for p in players}
         self.taken: set[int] = set()
         self.done = asyncio.Event()
-        self.chairs = max(1, len(players) - 1)
+        self.chairs = max(1, min(len(players) - 1, CHAIRS_MAX))
+        # لو اللاعبين أكثر من (الكراسي + 1) يطيح كل اللي ما لقى كرسي مو واحد بس
+        self.capped = (len(players) - 1) > CHAIRS_MAX
         for i in range(self.chairs):
             btn = discord.ui.Button(label=f"كرسي {i + 1}", style=discord.ButtonStyle.secondary)
             btn.callback = self._make_cb(btn)
@@ -4220,7 +4424,7 @@ class ChairsView(discord.ui.View):
 
     def _make_cb(self, btn: discord.ui.Button):
         async def cb(interaction: discord.Interaction):
-            if interaction.user not in self.remaining:
+            if interaction.user.id not in self._ids:
                 await interaction.response.send_message("أنت مو باللعبة.", ephemeral=True)
                 return
             if interaction.user.id in self.taken:
@@ -4252,7 +4456,7 @@ async def chairs_cmd(ctx: commands.Context):
 
 
 async def _run_chairs(ctx: commands.Context):
-    players = await run_lobby(ctx, "الكراسي الموسيقية", min_players=2, max_players=20, countdown=30, game_key="كراسي")
+    players = await run_lobby(ctx, "الكراسي الموسيقية", min_players=2, max_players=LOBBY_MAX_PLAYERS, countdown=30, game_key="كراسي")
     if not players:
         return
     all_players = players.copy()
@@ -4260,7 +4464,7 @@ async def _run_chairs(ctx: commands.Context):
     while len(players) > 1:
         view = ChairsView(players)
         msg = await ctx.send(
-            f"**الجولة {round_num}**: {len(players)} لاعبين و {max(1, len(players) - 1)} كرسي! بسرعة اقعدوا",
+            f"**الجولة {round_num}**: {len(players)} لاعبين و {view.chairs} كرسي! بسرعة اقعدوا",
             view=view)
         cancel_event = track_game_message(ctx.channel.id, msg)
         done, pending = await asyncio.wait(
@@ -4277,6 +4481,24 @@ async def _run_chairs(ctx: commands.Context):
         except discord.NotFound:
             pass
         out = [p for p in players if p.id not in view.taken]
+        if view.capped:
+            # لوبي كبير: كل اللي ما لقى كرسي يطيح (اللي معه حماية ينجو)
+            if len(out) >= len(players):
+                keep = random.choice(players)
+                out = [p for p in out if p != keep]
+            saved = [p for p in out if consume_item(ctx.guild.id, p.id, "protect")]
+            saved_ids = {p.id for p in saved}
+            dead = [p for p in out if p.id not in saved_ids]
+            dead_ids = {p.id for p in dead}
+            players = [p for p in players if p.id not in dead_ids]
+            if dead:
+                await ctx.send(f"طاح ({len(dead)}): {mentions_text(dead, 700)}")
+            if saved:
+                await ctx.send(f"نجا بالحماية: {mentions_text(saved, 700)}")
+            if len(players) > 1:
+                await ctx.send(f"الباقين ({len(players)}): {mentions_text(players, 900)}")
+            round_num += 1
+            continue
         eliminated = random.choice(out) if out else random.choice(players)
         # الحماية (من المتجر): لو اللي بيطيح معه حماية ينجو وننتقل للجولة اللي بعدها
         if consume_item(ctx.guild.id, eliminated.id, "protect"):
@@ -4291,9 +4513,7 @@ async def _run_chairs(ctx: commands.Context):
         winner = players[0]
         actual = add_game_reward(ctx.guild.id, winner.id, 100)
         record_game_result(ctx.guild.id, winner.id, won=True)
-        for p in all_players:
-            if p != winner:
-                record_game_result(ctx.guild.id, p.id, won=False)
+        record_game_results_bulk(ctx.guild.id, [p.id for p in all_players if p != winner], False)
         await ctx.send(f"فاز {winner.mention} بلعبة الكراسي! (+{actual} نقطة)")
 
 
