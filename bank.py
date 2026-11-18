@@ -2,7 +2,7 @@
 bank.py — نظام البنك (وحدة داخل بوت الكنترول bot.py)
 ====================================================
 كل شي بالأزرار: اكتب "بنك" في روم البنك وتطلع لك لوحة الأزرار (حساب، إيداع/سحب/حوالة/فائدة، الذهب،
-الوظائف والعمل، يومي بستريك، جريمة، سرقة، المتجر، الأغنياء).
+الوظائف والعمل، يومي بستريك، جريمة، سرقة، المتجر، الأغنياء، توب حرامية، استثمار).
 واكتب "بنك @عضو" تشوف حساب أي عضو.
 
 الربط داخل bot.py (نفس طريقة tickets / protection / ajr):
@@ -20,19 +20,42 @@ bank.py — نظام البنك (وحدة داخل بوت الكنترول bot.p
       * نجح الأمر       ← رياكشن ✅
       * كتبه غلط        ← رد "استخدم الأمر بطريقة صحيحة" مع مثال
   - bank.get_bank_balance(guild_id, user_id) ← يستخدمها أمر p بالبوت الأساسي (بطاقة البروفايل).
-  - صور اختيارية من مجلد bank_images (لو الملف موجود يطلع، ولو لا يطلع بدونه):
-      work.png / crime_win.png / crime_fail.png / rob_win.png / rob_fail.png
+  - ردود البنك صور (Pillow): الخلفيات من مجلد assets والخط من مجلد fonts:
+      assets/account.png  ← حسابي (+ بنك @عضو)
+      assets/receipt.png  ← إيداع / سحب / حوالة / فائدة
+      assets/market.png   ← سوق الذهب
+      assets/trade.png    ← شراء وبيع الذهب
+      assets/result.png   ← عمل / سرقة / جريمة / يومي / استقالة / توظيف / شراء وبيع الأسهم
+      assets/leaderboard.png ← الأغنياء / توب حرامية / الوظائف / سوق الأسهم / محفظتي
+      fonts/Tajawal-Regular.ttf و fonts/Tajawal-Bold.ttf
+    لو أي صورة أو الخط أو المكتبات ناقصة أو فشل الرسم: البنك يرد بالنص (embed) زي أول وما يتعطل الأمر.
   - مستقلة بالكامل: ما تستورد شي من bot.py (ما فيه استيراد دائري).
 """
 
+import asyncio
+import io
 import json
 import os
 import random
 import re
 from datetime import datetime, timezone, timedelta
+from functools import lru_cache
 
 import discord
 from discord.ext import commands
+
+# مكتبات رسم الصور — لو ناقصة البنك يكمل بالنص القديم بدل ما يتعطل
+try:
+    from PIL import Image, ImageDraw, ImageFilter, ImageFont
+    import arabic_reshaper
+    try:
+        from bidi import get_display
+    except ImportError:
+        from bidi.algorithm import get_display
+    _IMAGES_AVAILABLE = True
+except ImportError as _import_error:
+    _IMAGES_AVAILABLE = False
+    print(f"[بنك] ⚠️ مكتبات الصور ناقصة ({_import_error}) — البنك بيرد بالنص")
 
 
 # ============================================================
@@ -178,7 +201,8 @@ async def log_mod_action(guild: discord.Guild, title: str, moderator: discord.Me
 # نظام البنك — منفصل تمامًا عن النقاط (ملف bank.json وعملة اسمها "ريال")
 # ============================================================
 # كل البنك يشتغل بس داخل روم البنك (بالآيدي، ولو ما لقيناه نبحث باسم فيه "bank").
-# الأقسام: حساب + بنك (إيداع/سحب/حوالة/فائدة) + ذهب (سعر متغير) + وظائف + يومي + جريمة + سرقة + متجر + أغنياء.
+# الأقسام: حساب + بنك (إيداع/سحب/حوالة/فائدة) + ذهب (سعر متغير) + وظائف + يومي + جريمة + سرقة + متجر + أغنياء
+#          + توب حرامية + استثمار (أسهم شركات عالمية بأسعار داخل البوت).
 BANK_FILE = "bank.json"
 BANK_CHANNEL_ID = 1539151569826877450
 BANK_CHANNEL_NAMES = ["bank"]
@@ -187,8 +211,11 @@ CURRENCY = "ريال"
 # لون الـ embed (نفس لون هوية السيرفر #394047) — كل رسائل البنك بنفس اللون
 BANK_COLOR = discord.Color.from_rgb(57, 64, 71)
 
-# مجلد صور البنك (اختياري — لو الصورة مو موجودة تطلع الرسالة بدونها)
-BANK_IMAGES_DIR = "bank_images"
+# مجلدات صور البنك: الخلفيات + الخط (لو ناقصة يرد بالنص القديم)
+BANK_ASSETS_DIR = "assets"
+BANK_FONTS_DIR = "fonts"
+BANK_FONT_REGULAR = "Tajawal-Regular.ttf"
+BANK_FONT_BOLD = "Tajawal-Bold.ttf"
 
 BANK_START_CASH = 1000            # كاش البداية لأي حساب جديد
 BANK_TRANSFER_FEE = 0.02          # رسوم الحوالة (2%)
@@ -229,6 +256,25 @@ GOLD_MAX_STEPS = 48               # أقصى عدد تغييرات تتجمع ل
 GOLD_VOLATILITY = 0.06            # أقصى تغير بالخطوة (±6%)
 GOLD_SELL_FEE = 0.02              # عمولة البيع 2%
 GOLD_HISTORY_SIZE = 24
+
+# الاستثمار: شركات عالمية، الأسعار داخل البوت (مو الأسعار الحقيقية) وتتحرك مثل الذهب
+STOCK_STEP_SECONDS = 1800         # السعر يتغير كل 30 دقيقة
+STOCK_MAX_STEPS = 48              # أقصى عدد تغييرات تتجمع لو البوت كان واقف
+STOCK_SELL_FEE = 0.01             # عمولة البيع 1%
+STOCK_HISTORY_SIZE = 24
+# الرمز -> (الاسم, السعر المتوسط, أقصى تغير بالخطوة)
+STOCKS = {
+    "AAPL": ("أبل", 190, 0.05),
+    "MSFT": ("مايكروسوفت", 320, 0.045),
+    "NVDA": ("إنفيديا", 600, 0.08),
+    "TSLA": ("تسلا", 250, 0.09),
+    "AMZN": ("أمازون", 180, 0.055),
+    "GOOGL": ("جوجل", 170, 0.05),
+    "META": ("ميتا", 400, 0.065),
+    "NFLX": ("نتفليكس", 450, 0.07),
+    "2222": ("أرامكو", 30, 0.03),
+    "KO": ("كوكاكولا", 60, 0.025),
+}
 
 # (الاسم, أقل مستوى, أقل راتب, أعلى راتب, ايموجي)
 BANK_JOBS = [
@@ -324,10 +370,52 @@ def _gold_advance(data: dict) -> bool:
     return True
 
 
+def _stocks_advance(data: dict) -> bool:
+    """يحدّث أسعار أسهم الشركات حسب الوقت اللي مر (نفس فكرة الذهب). يرجع True لو تغير شي."""
+    now = datetime.now(timezone.utc)
+    stocks = data.get("_stocks")
+    if not isinstance(stocks, dict) or not isinstance(stocks.get("prices"), dict):
+        data["_stocks"] = {"updated": now.isoformat(),
+                           "prices": {sym: info[1] for sym, info in STOCKS.items()},
+                           "history": {sym: [info[1]] for sym, info in STOCKS.items()}}
+        return True
+    changed = False
+    prices = stocks["prices"]
+    history = stocks.setdefault("history", {})
+    for sym, (_name, base, _vol) in STOCKS.items():
+        if sym not in prices:
+            prices[sym] = base
+            history[sym] = [base]
+            changed = True
+    try:
+        updated = datetime.fromisoformat(stocks["updated"])
+    except (KeyError, ValueError, TypeError):
+        stocks["updated"] = now.isoformat()
+        return True
+    steps = int((now - updated).total_seconds() // STOCK_STEP_SECONDS)
+    if steps <= 0:
+        return changed
+    for sym, (_name, base, vol) in STOCKS.items():
+        price = prices[sym]
+        hist = history.setdefault(sym, [price])
+        for _ in range(min(steps, STOCK_MAX_STEPS)):
+            drift = (base - price) * 0.02  # يرجّع السعر تدريجيًا للمتوسط
+            price = price * (1 + random.uniform(-vol, vol)) + drift
+            price = int(max(max(1, base * 0.3), min(base * 3, round(price))))
+            hist.append(price)
+        prices[sym] = price
+        history[sym] = hist[-STOCK_HISTORY_SIZE:]
+    stocks["updated"] = (updated + timedelta(seconds=STOCK_STEP_SECONDS * steps)).isoformat()
+    return True
+
+
 def bank_load() -> dict:
-    """يقرأ ملف البنك ويحدّث سعر الذهب (ويحفظه فورًا لو تغير، عشان الكل يشوف نفس السعر)."""
+    """يقرأ ملف البنك ويحدّث سعر الذهب والأسهم (ويحفظه فورًا لو تغير، عشان الكل يشوف نفس السعر)."""
     data = load_json(BANK_FILE)
-    if _gold_advance(data):
+    changed = _gold_advance(data)
+    if _stocks_advance(data):
+        changed = True
+    if changed:
         save_json(BANK_FILE, data)
     return data
 
@@ -347,8 +435,12 @@ def bank_acct(data: dict, guild_id: int, user_id: int) -> dict:
     acct.setdefault("last_crime", None)
     acct.setdefault("last_daily", None)
     acct.setdefault("streak", 0)
+    acct.setdefault("robs", 0)       # عدد السرقات الناجحة (لتوب حرامية)
+    acct.setdefault("stolen", 0)     # مجموع اللي سرقه (لتوب حرامية)
     if not isinstance(acct.get("items"), dict):
         acct["items"] = {}
+    if not isinstance(acct.get("stocks"), dict):
+        acct["stocks"] = {}          # الأسهم: {الرمز: {"shares": عدد, "cost": مجموع اللي دفعه}}
     return acct
 
 
@@ -366,8 +458,19 @@ def _level(acct: dict) -> int:
     return acct.get("works", 0) // WORK_PER_LEVEL + 1
 
 
-def _net_worth(acct: dict, gold_price: int) -> int:
-    return acct.get("cash", 0) + acct.get("bank", 0) + acct.get("gold", 0) * gold_price
+def _stock_value(acct: dict, stock_prices: dict) -> int:
+    total = 0
+    for sym, holding in acct.get("stocks", {}).items():
+        if isinstance(holding, dict):
+            total += holding.get("shares", 0) * stock_prices.get(sym, 0)
+    return total
+
+
+def _net_worth(acct: dict, gold_price: int, stock_prices: dict | None = None) -> int:
+    worth = acct.get("cash", 0) + acct.get("bank", 0) + acct.get("gold", 0) * gold_price
+    if stock_prices:
+        worth += _stock_value(acct, stock_prices)
+    return worth
 
 
 def _cooldown_left(last_iso: str | None, seconds: int) -> int:
@@ -412,15 +515,6 @@ def _bank_embed(title: str, description: str | None = None, color: discord.Color
     return discord.Embed(title=title, description=description, color=BANK_COLOR)
 
 
-def _banner(embed: discord.Embed, filename: str) -> discord.File | None:
-    """لو صورة البنر موجودة بمجلد bank_images تنحط بالـ embed. لو مو موجودة يرجع None وتطلع الرسالة بدونها."""
-    path = os.path.join(BANK_IMAGES_DIR, filename)
-    if not os.path.exists(path):
-        return None
-    embed.set_image(url=f"attachment://{filename}")
-    return discord.File(path, filename=filename)
-
-
 def _items_text(acct: dict) -> str:
     lines = []
     for key, (name, emoji, _price, _desc) in SHOP_ITEMS.items():
@@ -436,11 +530,346 @@ def _open_chest() -> int:
     return random.choices(amounts, weights=weights, k=1)[0]
 
 
+def _money(n, sign: str = "") -> str:
+    return f"{sign}{fmt(n)} {CURRENCY}"
+
+
+def _pct_change(history: list) -> float | None:
+    if len(history) < 2 or not history[-2]:
+        return None
+    return (history[-1] - history[-2]) / history[-2] * 100
+
+
+def _holdings(acct: dict, stock_prices: dict) -> list:
+    """أسهم العضو: [(الرمز, الاسم, العدد, التكلفة, القيمة الحالية, الربح/الخسارة)]."""
+    rows = []
+    for sym, holding in acct.get("stocks", {}).items():
+        if sym not in STOCKS or not isinstance(holding, dict) or holding.get("shares", 0) <= 0:
+            continue
+        shares, cost = holding["shares"], holding.get("cost", 0)
+        value = shares * stock_prices.get(sym, 0)
+        rows.append((sym, STOCKS[sym][0], shares, cost, value, value - cost))
+    return rows
+
+
 # ============================================================
-# الـ embeds
+# صور البنك (Pillow) — الخلفيات من assets والخط من fonts
+# ============================================================
+# الإحداثيات مقاسة على الخلفيات اللي ولّدتها، وتتحول تلقائيًا لو مقاس الصورة اختلف.
+_REF_WIDE = (1376, 768)    # حسابي / إيصال / سوق الذهب / بيع وشراء / نتيجة
+_REF_TALL = (896, 1200)    # القوائم
+
+C_TEXT = (238, 236, 230)
+C_MUTED = (176, 176, 170)
+C_GOLD = (212, 190, 140)
+C_GREEN = (92, 200, 140)
+C_RED = (226, 98, 98)
+
+_BOARD_ROWS_Y = [200, 302, 402, 521, 620, 714, 805, 894, 981, 1068]
+
+_EMOJI_PATTERN = re.compile("[\U00010000-\U0010FFFF\u2190-\u2BFF\uFE00-\uFE0F\u200b-\u200f\u202a-\u202e]")
+
+
+def _clean_name(name: str) -> str:
+    """يشيل الايموجي والرموز اللي الخط ما يدعمها (تطلع مربعات بالصورة)."""
+    cleaned = _EMOJI_PATTERN.sub("", name or "").strip()
+    return cleaned or "عضو"
+
+
+def _shape(text, ltr: bool = False) -> str:
+    """يوصّل الحروف العربية ويرتبها يمين لشمال عشان Pillow يرسمها صح."""
+    shaped = arabic_reshaper.reshape(str(text))
+    if ltr:
+        try:
+            return get_display(shaped, base_dir="L")
+        except TypeError:
+            return get_display(shaped)
+    return get_display(shaped)
+
+
+@lru_cache(maxsize=64)
+def _load_font(size: int, bold: bool):
+    bold_path = os.path.join(BANK_FONTS_DIR, BANK_FONT_BOLD)
+    regular_path = os.path.join(BANK_FONTS_DIR, BANK_FONT_REGULAR)
+    path = bold_path if bold else regular_path
+    if not os.path.exists(path):
+        path = bold_path if os.path.exists(bold_path) else regular_path
+    # BASIC لأن التشكيل والترتيب سويناهم بالكود (لو raqm اشتغل يعكس النص مرتين)
+    return ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.BASIC)
+
+
+class _Canvas:
+    """لوحة رسم فوق خلفية جاهزة. كل الإحداثيات بمقاس الخلفية الأصلي وتتحول تلقائيًا."""
+
+    def __init__(self, bg_name: str, ref: tuple):
+        self.img = Image.open(os.path.join(BANK_ASSETS_DIR, bg_name)).convert("RGBA")
+        width, height = self.img.size
+        self.sx, self.sy = width / ref[0], height / ref[1]
+        self.k = (self.sx + self.sy) / 2
+        self.draw = ImageDraw.Draw(self.img)
+
+    def pt(self, x, y):
+        return (x * self.sx, y * self.sy)
+
+    def font(self, size, bold=True):
+        return _load_font(max(8, int(round(size * self.k))), bold)
+
+    def text(self, x, y, text, size=34, fill=C_TEXT, bold=True, anchor="mm", max_w=None, ltr=False):
+        shaped = _shape(text, ltr)
+        current = size
+        font = self.font(current, bold)
+        if max_w:
+            limit = max_w * self.sx
+            while current > 14 and self.draw.textlength(shaped, font=font) > limit:
+                current -= 2
+                font = self.font(current, bold)
+        self.draw.text(self.pt(x, y), shaped, font=font, fill=fill, anchor=anchor)
+
+    def avatar(self, data, cx, cy, r, label="", label_size=None):
+        rad = max(4, int(round(r * self.k)))
+        size = rad * 2
+        px, py = self.pt(cx, cy)
+        tile = None
+        if data:
+            try:
+                tile = Image.open(io.BytesIO(data)).convert("RGBA").resize((size, size), Image.Resampling.LANCZOS)
+            except Exception:
+                tile = None
+        if tile is None:
+            tile = Image.new("RGBA", (size, size), (44, 47, 52, 255))
+            if label:
+                fsize = label_size or r * (0.95 if len(label) <= 2 else 0.5)
+                font = _load_font(max(8, int(round(fsize * self.k))), True)
+                ImageDraw.Draw(tile).text((rad, rad), _shape(label, True), font=font, fill=C_MUTED, anchor="mm")
+        mask = Image.new("L", (size * 4, size * 4), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, size * 4 - 1, size * 4 - 1), fill=255)
+        mask = mask.resize((size, size), Image.Resampling.LANCZOS)
+        self.img.paste(tile, (int(round(px - rad)), int(round(py - rad))), mask)
+
+    def stat(self, box, label, value, sub=None, color=C_TEXT):
+        """خانة فيها عنوان صغير وقيمة كبيرة وسطر تحتها (حسابي / سوق الذهب)."""
+        x0, y0, x1, y1 = box
+        cx, width = (x0 + x1) / 2, (x1 - x0) - 36
+        self.text(cx, y0 + 46, label, 30, C_MUTED, False, max_w=width)
+        self.text(cx, y0 + 108, value, 56, color, True, max_w=width, ltr=True)
+        if sub:
+            self.text(cx, y0 + 160, sub, 28, C_MUTED, False, max_w=width, ltr=True)
+
+    def chart(self, box, values, color):
+        x0, y0, x1, y1 = box
+        vals = list(values) if len(values) >= 2 else [values[0], values[0]]
+        lo, hi = min(vals), max(vals)
+        span = (hi - lo) or 1
+        count = len(vals)
+        pts = []
+        for i, v in enumerate(vals):
+            y = (y0 + y1) / 2 if hi == lo else y1 - (y1 - y0) * (v - lo) / span
+            pts.append(self.pt(x0 + (x1 - x0) * i / (count - 1), y))
+        self.draw.line(pts, fill=color, width=max(2, int(4 * self.k)), joint="curve")
+        ex, ey = pts[-1]
+        dot = 8 * self.k
+        self.draw.ellipse((ex - dot, ey - dot, ex + dot, ey + dot), fill=color)
+        self.text(x0 - 12, y0, fmt(hi), 22, C_MUTED, False, "rm")
+        self.text(x0 - 12, y1, fmt(lo), 22, C_MUTED, False, "rm")
+
+    def patch(self, src, dst):
+        """ينسخ جزء نظيف من الخلفية فوق بقعة (يخفي الرسمة الباهتة أو المربع اللي طلع من المولّد)."""
+        region = self.img.crop((int(src[0] * self.sx), int(src[1] * self.sy),
+                                int(src[2] * self.sx), int(src[3] * self.sy)))
+        width, height = region.size
+        margin = max(2, min(width, height) // 5)
+        mask = Image.new("L", region.size, 0)
+        ImageDraw.Draw(mask).rectangle((margin, margin, width - margin - 1, height - margin - 1), fill=255)
+        mask = mask.filter(ImageFilter.GaussianBlur(margin / 2))   # حواف ناعمة عشان ما يبان الترقيع
+        self.img.paste(region, (int(dst[0] * self.sx), int(dst[1] * self.sy)), mask)
+
+    def to_bytes(self) -> bytes:
+        buf = io.BytesIO()
+        self.img.convert("RGB").save(buf, "PNG", optimize=True)
+        return buf.getvalue()
+
+
+def _render_account(avatar, name, cash, bank, gold, gold_value, worth, job_text, streak):
+    c = _Canvas("account.png", _REF_WIDE)
+    c.avatar(avatar, 312, 384, 164, name[:1])
+    c.text(312, 622, name, 46, C_TEXT, max_w=500)
+    c.text(312, 672, job_text, 30, C_MUTED, False, max_w=500)
+    if streak > 0:
+        c.text(312, 712, f"ستريك {streak} يوم", 28, C_GOLD, False, max_w=500)
+    c.stat((602, 172, 917, 363), "الكاش", fmt(cash), CURRENCY)
+    c.stat((956, 172, 1271, 363), "البنك", fmt(bank), CURRENCY)
+    c.stat((602, 405, 917, 596), "الذهب", f"{fmt(gold)} جرام", f"قيمته {fmt(gold_value)} {CURRENCY}")
+    c.stat((956, 405, 1271, 596), "صافي الثروة", fmt(worth), CURRENCY, C_GOLD)
+    return c.to_bytes()
+
+
+def _render_receipt(avatar, name, title, amount_text, amount_color, rows):
+    c = _Canvas("receipt.png", _REF_WIDE)
+    c.avatar(avatar, 687, 127, 58, name[:1])
+    c.text(687, 232, name, 42, C_TEXT, max_w=520)
+    c.text(687, 305, amount_text, 80, amount_color, True, max_w=620, ltr=True)
+    c.text(688, 397, title, 34, C_GOLD, True, max_w=560)
+    for cy, (label, value, color) in zip((500, 563, 627), rows[:3]):
+        c.text(990, cy, label, 28, C_MUTED, False, "rm", max_w=200)
+        c.text(386, cy, value, 34, color or C_TEXT, True, "lm", max_w=420, ltr=True)
+    return c.to_bytes()
+
+
+def _render_market(avatar, name, buy_price, sell_price, history, gold_grams, gold_value):
+    c = _Canvas("market.png", _REF_WIDE)
+    c.avatar(avatar, 103, 100, 62, name[:1])
+    c.text(103, 205, name, 26, C_TEXT, max_w=150)
+    c.text(775, 98, "سوق الذهب", 56, C_TEXT, max_w=760)
+    c.stat((1043, 263, 1321, 503), "سعر الشراء", fmt(buy_price), f"{CURRENCY} للجرام")
+    c.stat((55, 263, 333, 503), "سعر البيع", fmt(sell_price), f"{CURRENCY} للجرام")
+    pct = _pct_change(history)
+    if pct is None or round(pct, 1) == 0:
+        trend_text, trend_color = "ثابت", C_GOLD
+    else:
+        trend_text, trend_color = f"{pct:+.1f}%", (C_GREEN if pct > 0 else C_RED)
+    c.patch((620, 420, 810, 525), (395, 420))   # يخفي خط الرسم الباهت اللي بالخلفية
+    c.text(688, 238, "حركة السعر", 28, C_MUTED, False)
+    c.text(688, 284, trend_text, 44, trend_color, True, ltr=True)
+    line_color = C_GREEN if len(history) > 1 and history[-1] >= history[0] else C_RED
+    c.chart((445, 330, 960, 520), history, line_color)
+    c.text(688, 650, f"ذهبك: {fmt(gold_grams)} جرام - قيمته {fmt(gold_value)} {CURRENCY}", 36, C_GOLD, True,
+           max_w=640)
+    return c.to_bytes()
+
+
+def _render_trade(avatar, name, title, rows, footer):
+    c = _Canvas("trade.png", _REF_WIDE)
+    c.patch((598, 24, 642, 56), (518, 24))      # يخفي المربع الرمادي الصغير اللي بالخلفية
+    c.avatar(avatar, 193, 384, 113, name[:1])
+    c.text(193, 548, name, 40, C_TEXT, max_w=330)
+    c.text(688, 92, title, 56, C_TEXT, max_w=760)
+    for cy, (label, value, color) in zip((235, 380, 525), rows[:3]):
+        c.text(1115, cy - 30, label, 26, C_MUTED, False, max_w=340)
+        c.text(1115, cy + 16, value, 44, color or C_TEXT, True, max_w=340, ltr=True)
+    if footer:
+        c.text(688, 680, footer, 32, C_MUTED, False, max_w=760)
+    return c.to_bytes()
+
+
+def _render_result(avatar, name, headline, amount_text, amount_color, lines):
+    c = _Canvas("result.png", _REF_WIDE)
+    c.avatar(avatar, 338, 383, 182, name[:1])
+    c.text(338, 628, name, 46, C_TEXT, max_w=480)
+    cx = 962
+    if amount_text:
+        c.text(cx, 268, headline, 44, C_TEXT, max_w=520)
+        c.text(cx, 360, amount_text, 84, amount_color, True, max_w=520, ltr=True)
+        y, limit = 442, 2
+    else:
+        c.text(cx, 300, headline, 56, C_TEXT, max_w=520)
+        y, limit = 392, 3
+    for text, color in lines[:limit]:
+        c.text(cx, y, text, 30, color, False, max_w=520, ltr=True)
+        y += 48
+    return c.to_bytes()
+
+
+def _render_board(title, rows, footer):
+    c = _Canvas("leaderboard.png", _REF_TALL)
+    c.text(448, 62, title, 56, C_TEXT, max_w=700)
+    for cy, row in zip(_BOARD_ROWS_Y, rows[:10]):
+        c.avatar(row.get("avatar"), 135, cy, 29, row.get("ring", ""), row.get("ring_size"))
+        sub = row.get("name_sub")
+        c.text(190, cy - (14 if sub else 0), row["name"], 34, row.get("name_color", C_TEXT), True, "lm", max_w=380)
+        if sub:
+            c.text(190, cy + 24, sub, 22, C_MUTED, False, "lm", max_w=380)
+        value_sub = row.get("value_sub")
+        c.text(790, cy - (14 if value_sub else 0), row["value"], 32, row.get("value_color", C_GOLD), True, "rm",
+               max_w=230, ltr=True)
+        if value_sub:
+            c.text(790, cy + 24, value_sub, 22, row.get("value_sub_color", C_MUTED), False, "rm", max_w=230, ltr=True)
+    if footer:
+        text, color = footer
+        c.text(448, 1152, text, 28, color, False, max_w=760, ltr=True)
+    return c.to_bytes()
+
+
+# ---------- مساعدات الرسم (async) — أي فشل يرجع None والأمر يطلع بالنص القديم ----------
+async def _avatar_bytes(user, size: int = 256):
+    try:
+        return await asyncio.wait_for(user.display_avatar.replace(size=size, format="png").read(), timeout=2.0)
+    except Exception:
+        return None
+
+
+async def _no_avatar():
+    return None
+
+
+async def _card(render, *args):
+    if not _IMAGES_AVAILABLE:
+        return None
+    try:
+        return await asyncio.to_thread(render, *args)
+    except Exception as e:
+        print(f"[بنك] ⚠️ فشل رسم الصورة ({render.__name__}): {e!r} — رجعنا للنص")
+        return None
+
+
+def _make_file(img: bytes | None) -> discord.File | None:
+    if img is None:
+        return None
+    return discord.File(io.BytesIO(img), filename="bank.png")
+
+
+async def _account_card(data: dict, member, acct: dict):
+    price = data["_gold"]["price"]
+    job = _find_job(acct["job"]) if acct.get("job") else None
+    job_text = f"{job[0]} - المستوى {_level(acct)}" if job else f"عاطل - المستوى {_level(acct)}"
+    worth = _net_worth(acct, price, data["_stocks"]["prices"])
+    avatar = await _avatar_bytes(member)
+    return await _card(_render_account, avatar, _clean_name(member.display_name), acct["cash"], acct["bank"],
+                       acct["gold"], acct["gold"] * price, worth, job_text, acct.get("streak", 0))
+
+
+async def _receipt_card(user, title, amount_text, amount_color, rows):
+    avatar = await _avatar_bytes(user)
+    return await _card(_render_receipt, avatar, _clean_name(user.display_name), title, amount_text,
+                       amount_color, rows)
+
+
+async def _market_card(data: dict, user, acct: dict):
+    gold = data["_gold"]
+    price = gold["price"]
+    sell_price = int(price * (1 - GOLD_SELL_FEE))
+    avatar = await _avatar_bytes(user)
+    return await _card(_render_market, avatar, _clean_name(user.display_name), price, sell_price,
+                       list(gold["history"]), acct["gold"], acct["gold"] * sell_price)
+
+
+async def _trade_card(user, title, rows, footer):
+    avatar = await _avatar_bytes(user)
+    return await _card(_render_trade, avatar, _clean_name(user.display_name), title, rows, footer)
+
+
+async def _result_card(user, headline, amount_text, amount_color, lines):
+    avatar = await _avatar_bytes(user)
+    return await _card(_render_result, avatar, _clean_name(user.display_name), headline, amount_text,
+                       amount_color, lines)
+
+
+async def _board_card(title, rows, footer=None):
+    members = [r.get("member") for r in rows[:10]]
+    avatars = await asyncio.gather(*[_avatar_bytes(m, 128) if m is not None else _no_avatar() for m in members])
+    prepared = []
+    for row, avatar in zip(rows[:10], avatars):
+        item = {k: v for k, v in row.items() if k != "member"}
+        item["avatar"] = avatar
+        prepared.append(item)
+    return await _card(_render_board, title, prepared, footer)
+
+
+# ============================================================
+# الـ embeds (الرد بالنص — يستخدم لو الصورة ما اشتغلت)
 # ============================================================
 def _account_embed(data: dict, member: discord.abc.User, acct: dict) -> discord.Embed:
     price = data["_gold"]["price"]
+    stock_prices = data["_stocks"]["prices"]
     embed = _bank_embed(f"🏦 حساب {member.display_name}")
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.add_field(name="💵 الكاش", value=f"{fmt(acct['cash'])} {CURRENCY}", inline=True)
@@ -450,9 +879,12 @@ def _account_embed(data: dict, member: discord.abc.User, acct: dict) -> discord.
     job = _find_job(acct["job"]) if acct.get("job") else None
     job_text = f"{job[4]} {job[0]} • مستوى {_level(acct)}" if job else f"عاطل • مستوى {_level(acct)}"
     embed.add_field(name="💼 الوظيفة", value=job_text, inline=True)
-    embed.add_field(name="💎 صافي الثروة", value=f"{fmt(_net_worth(acct, price))} {CURRENCY}", inline=True)
+    embed.add_field(name="💎 صافي الثروة", value=f"{fmt(_net_worth(acct, price, stock_prices))} {CURRENCY}", inline=True)
     if acct.get("streak", 0) > 0:
         embed.add_field(name="🔥 ستريك اليومي", value=f"{acct['streak']} يوم", inline=True)
+    stocks_value = _stock_value(acct, stock_prices)
+    if stocks_value > 0:
+        embed.add_field(name="📊 الأسهم", value=f"{fmt(stocks_value)} {CURRENCY}", inline=True)
     items = _items_text(acct)
     if items:
         embed.add_field(name="🎒 الأغراض", value=items, inline=False)
@@ -514,18 +946,49 @@ def _items_embed(acct: dict) -> discord.Embed:
     return _bank_embed("🎒 أغراضي", text or "ما عندك أغراض. اشتر من 🛍️ المتجر.")
 
 
+def _stocks_embed(data: dict, acct: dict) -> discord.Embed:
+    prices = data["_stocks"]["prices"]
+    history = data["_stocks"]["history"]
+    lines = []
+    for sym, (name, _base, _vol) in STOCKS.items():
+        pct = _pct_change(history.get(sym, []))
+        trend = "—" if pct is None else f"{pct:+.1f}%"
+        owned = acct["stocks"].get(sym, {}).get("shares", 0)
+        owned_text = f" (عندك {owned})" if owned else ""
+        lines.append(f"**{name}** ({sym}) — {fmt(prices[sym])} {CURRENCY} — {trend}{owned_text}")
+    embed = _bank_embed("📊 سوق الأسهم", "\n".join(lines))
+    embed.set_footer(text=f"الأسعار تتغير كل {STOCK_STEP_SECONDS // 60} دقيقة • اختر شركة من القوائم تحت للشراء أو البيع")
+    return embed
+
+
+def _portfolio_embed(data: dict, acct: dict) -> discord.Embed:
+    rows = _holdings(acct, data["_stocks"]["prices"])
+    lines = []
+    for sym, name, shares, cost, value, pnl in rows:
+        sign = "+" if pnl > 0 else ""
+        lines.append(f"**{name}** ({sym}) — {fmt(shares)} سهم — {fmt(value)} {CURRENCY} ({sign}{fmt(pnl)})")
+    return _bank_embed("💼 محفظتي", "\n".join(lines) or "ما عندك أسهم لين الحين.")
+
+
 async def _err(interaction: discord.Interaction, text: str) -> None:
     await interaction.response.send_message(text, ephemeral=True)
 
 
-async def _out(interaction: discord.Interaction, panel, embed: discord.Embed,
-               content: str | None = None, ping=None, file: discord.File | None = None) -> None:
-    """لو فيه لوحة: يعدّل رسالة اللوحة. لو لا: يرسل رسالة عامة (للحوالة والسرقة)."""
+async def _out(interaction: discord.Interaction, panel, embed: discord.Embed | None,
+               content: str | None = None, ping=None, file: discord.File | None = None,
+               img: bytes | None = None) -> None:
+    """لو فيه لوحة: يعدّل رسالة اللوحة. لو لا: يرسل رسالة عامة (للحوالة والسرقة).
+    img = الصورة المرسومة؛ لو None يطلع الرد بالنص (embed) زي أول."""
+    if img is not None:
+        file = _make_file(img)
+        embed = None
     if panel is not None:
         await interaction.response.edit_message(embed=embed, view=panel, attachments=[file] if file else [])
     else:
         mentions = discord.AllowedMentions(users=[ping]) if ping is not None else discord.AllowedMentions.none()
-        kwargs = {"embed": embed, "allowed_mentions": mentions}
+        kwargs = {"allowed_mentions": mentions}
+        if embed is not None:
+            kwargs["embed"] = embed
         if content:
             kwargs["content"] = content
         if file:
@@ -540,7 +1003,8 @@ async def _act_account(interaction, panel):
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     bank_save(data)
-    await _out(interaction, panel, _account_embed(data, interaction.user, acct))
+    img = await _account_card(data, interaction.user, acct)
+    await _out(interaction, panel, _account_embed(data, interaction.user, acct), img=img)
 
 
 async def _act_deposit(interaction, text, panel):
@@ -557,7 +1021,11 @@ async def _act_deposit(interaction, text, panel):
     embed = _bank_embed("🏦 تم الإيداع", f"أودعت **{fmt(n)}** {CURRENCY} بالبنك.")
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
     embed.add_field(name="🏦 البنك", value=fmt(acct["bank"]), inline=True)
-    await _out(interaction, panel, embed)
+    img = await _receipt_card(interaction.user, "إيصال إيداع", _money(n), C_TEXT, [
+        ("الكاش", _money(acct["cash"]), None),
+        ("البنك", _money(acct["bank"]), None),
+        ("الإجمالي", _money(acct["cash"] + acct["bank"]), C_GOLD)])
+    await _out(interaction, panel, embed, img=img)
 
 
 async def _act_withdraw(interaction, text, panel):
@@ -574,7 +1042,11 @@ async def _act_withdraw(interaction, text, panel):
     embed = _bank_embed("🏦 تم السحب", f"سحبت **{fmt(n)}** {CURRENCY} للكاش.")
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
     embed.add_field(name="🏦 البنك", value=fmt(acct["bank"]), inline=True)
-    await _out(interaction, panel, embed)
+    img = await _receipt_card(interaction.user, "إيصال سحب", _money(n), C_TEXT, [
+        ("الكاش", _money(acct["cash"]), None),
+        ("البنك", _money(acct["bank"]), None),
+        ("الإجمالي", _money(acct["cash"] + acct["bank"]), C_GOLD)])
+    await _out(interaction, panel, embed, img=img)
 
 
 async def _act_transfer(interaction, member, text):
@@ -599,7 +1071,11 @@ async def _act_transfer(interaction, member, text):
     embed.add_field(name="المبلغ", value=f"{fmt(n)} {CURRENCY}", inline=True)
     embed.add_field(name="الرسوم", value=f"{fmt(fee)} {CURRENCY}", inline=True)
     embed.add_field(name="وصل للمستلم", value=f"{fmt(received)} {CURRENCY}", inline=True)
-    await _out(interaction, None, embed, content=member.mention, ping=member)
+    img = await _receipt_card(interaction.user, "حوالة بنكية", _money(n, "-"), C_RED, [
+        ("إلى", _clean_name(member.display_name), None),
+        ("الرسوم", _money(fee), None),
+        ("وصل للمستلم", _money(received), C_GREEN)])
+    await _out(interaction, None, embed, content=member.mention, ping=member, img=img)
 
 
 async def _act_interest(interaction, panel):
@@ -617,7 +1093,11 @@ async def _act_interest(interaction, panel):
     embed = _bank_embed("📈 فائدة البنك",
                         f"انضاف لرصيدك **{fmt(interest)}** {CURRENCY} ({BANK_INTEREST_RATE * 100:.0f}% من رصيدك).")
     embed.add_field(name="🏦 رصيدك الحين", value=f"{fmt(acct['bank'])} {CURRENCY}", inline=True)
-    await _out(interaction, panel, embed)
+    img = await _receipt_card(interaction.user, "فائدة البنك", _money(interest, "+"), C_GREEN, [
+        ("نسبة الفائدة", f"{BANK_INTEREST_RATE * 100:.0f}%", None),
+        ("رصيدك الحين", _money(acct["bank"]), None),
+        ("الفائدة القادمة", "بعد 24 ساعة", C_MUTED)])
+    await _out(interaction, panel, embed, img=img)
 
 
 async def _act_daily(interaction, panel):
@@ -639,13 +1119,17 @@ async def _act_daily(interaction, panel):
     embed.add_field(name="🔥 الستريك", value=f"{acct['streak']} يوم", inline=True)
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
     embed.set_footer(text="ارجع كل يوم عشان الستريك يكمل وتزيد المكافأة")
-    await _out(interaction, panel, embed)
+    img = await _result_card(interaction.user, "المكافأة اليومية", _money(reward, "+"), C_GREEN, [
+        (f"الستريك: {acct['streak']} يوم", C_GOLD),
+        (f"الكاش: {_money(acct['cash'])}", C_MUTED)])
+    await _out(interaction, panel, embed, img=img)
 
 
 async def _act_gold(interaction, panel):
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
-    await _out(interaction, panel, _gold_embed(data, acct))
+    img = await _market_card(data, interaction.user, acct)
+    await _out(interaction, panel, _gold_embed(data, acct), img=img)
 
 
 async def _act_buy_gold(interaction, text, panel):
@@ -667,7 +1151,12 @@ async def _act_buy_gold(interaction, text, panel):
                         f"اشتريت **{fmt(n)}** جرام بسعر {fmt(price)} للجرام = **{fmt(cost)}** {CURRENCY}.")
     embed.add_field(name="🪙 ذهبك", value=f"{fmt(acct['gold'])} جرام", inline=True)
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
-    await _out(interaction, panel, embed)
+    img = await _trade_card(interaction.user, "تم شراء الذهب", [
+        ("الكمية", f"{fmt(n)} جرام", None),
+        ("سعر الجرام", _money(price), None),
+        ("الإجمالي", _money(cost), C_GOLD)],
+        f"ذهبك الحين: {fmt(acct['gold'])} جرام - الكاش: {_money(acct['cash'])}")
+    await _out(interaction, panel, embed, img=img)
 
 
 async def _act_sell_gold(interaction, text, panel):
@@ -690,13 +1179,33 @@ async def _act_sell_gold(interaction, text, panel):
                         f"وأخذت **{fmt(revenue)}** {CURRENCY}.")
     embed.add_field(name="🪙 ذهبك", value=f"{fmt(acct['gold'])} جرام", inline=True)
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
-    await _out(interaction, panel, embed)
+    img = await _trade_card(interaction.user, "تم بيع الذهب", [
+        ("الكمية", f"{fmt(n)} جرام", None),
+        ("سعر الجرام", _money(price), None),
+        ("المبلغ المستلم", _money(revenue, "+"), C_GREEN)],
+        f"ذهبك الحين: {fmt(acct['gold'])} جرام - الكاش: {_money(acct['cash'])}")
+    await _out(interaction, panel, embed, img=img)
 
 
 async def _act_jobs(interaction, panel):
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
-    await _out(interaction, panel, _jobs_embed(acct))
+    level = _level(acct)
+    rows = []
+    for name, min_level, low, high, _emoji in BANK_JOBS:
+        unlocked = level >= min_level
+        if acct.get("job") == name:
+            sub, name_color = "وظيفتك الحالية", C_GOLD
+        elif unlocked:
+            sub, name_color = None, C_TEXT
+        else:
+            sub, name_color = f"مقفلة - تحتاج مستوى {min_level}", C_MUTED
+        rows.append({"ring": f"{min_level}+", "name": name, "name_color": name_color, "name_sub": sub,
+                     "value": f"{fmt(low)}-{fmt(high)} {CURRENCY}",
+                     "value_color": C_GOLD if unlocked else C_MUTED})
+    img = await _board_card("الوظائف", rows,
+                            (f"مستواك: {level} - كل {WORK_PER_LEVEL} مرات عمل = مستوى", C_MUTED))
+    await _out(interaction, panel, _jobs_embed(acct), img=img)
 
 
 async def _act_apply_job(interaction, job_name, panel):
@@ -713,7 +1222,10 @@ async def _act_apply_job(interaction, job_name, panel):
     acct["job"] = name
     bank_save(data)
     embed = _bank_embed("💼 تم التوظيف", f"مبروك! صرت **{emoji} {name}**.\nالراتب: {fmt(low)}–{fmt(high)} {CURRENCY} بالمرة.")
-    await _out(interaction, panel, embed)
+    img = await _result_card(interaction.user, "تم التوظيف", None, C_TEXT, [
+        (name, C_GOLD),
+        (f"الراتب: {fmt(low)}-{fmt(high)} {CURRENCY}", C_MUTED)])
+    await _out(interaction, panel, embed, img=img)
 
 
 async def _act_quit(interaction, panel):
@@ -724,7 +1236,10 @@ async def _act_quit(interaction, panel):
     old = acct["job"]
     acct["job"] = None
     bank_save(data)
-    await _out(interaction, panel, _bank_embed("📝 استقالة", f"تركت وظيفة **{old}**. مستواك محفوظ."))
+    img = await _result_card(interaction.user, "استقالة", None, C_TEXT, [
+        (f"تركت وظيفة {old}", C_GOLD),
+        ("مستواك محفوظ", C_MUTED)])
+    await _out(interaction, panel, _bank_embed("📝 استقالة", f"تركت وظيفة **{old}**. مستواك محفوظ."), img=img)
 
 
 async def _act_work(interaction, panel):
@@ -762,8 +1277,18 @@ async def _act_work(interaction, panel):
     embed.add_field(name="⭐ المستوى", value=str(new_level), inline=True)
     if new_level > old_level:
         embed.add_field(name="🆙 ترقية!", value=f"وصلت مستوى **{new_level}** — شوف 💼 الوظائف للوظايف الجديدة.", inline=False)
-    file = _banner(embed, "work.png")
-    await _out(interaction, panel, embed, file=file)
+    extras = []
+    if new_level > old_level:
+        extras.append((f"ترقية! وصلت مستوى {new_level}", C_GOLD))
+    if bonus:
+        extras.append(("مكافأة من المدير x1.5", C_GOLD))
+    if used_multiplier:
+        extras.append(("مضاعف الراتب x2", C_GOLD))
+    if not extras:
+        extras.append((f"المستوى {new_level}", C_MUTED))
+    img = await _result_card(interaction.user, f"يوم عمل - {name}", _money(pay, "+"), C_GREEN,
+                             [(f"الكاش: {_money(acct['cash'])}", C_MUTED), extras[0]])
+    await _out(interaction, panel, embed, img=img)
 
 
 async def _act_crime(interaction, panel):
@@ -779,16 +1304,17 @@ async def _act_crime(interaction, panel):
         reward = random.randint(CRIME_REWARD_MIN, CRIME_REWARD_MAX)
         acct["cash"] += reward
         embed = _bank_embed("🦹 نجحت الجريمة", f"نفذت العملية وأخذت **{fmt(reward)}** {CURRENCY} كاش.")
-        banner = "crime_win.png"
+        headline, amount_text, amount_color = "نجحت الجريمة", _money(reward, "+"), C_GREEN
     else:
         fine = min(acct["cash"], max(CRIME_MIN_CASH, int(acct["cash"] * CRIME_FINE_PERCENT)))
         acct["cash"] -= fine
         embed = _bank_embed("🚔 فشلت الجريمة", f"انمسكت ودفعت غرامة **{fmt(fine)}** {CURRENCY}.")
-        banner = "crime_fail.png"
+        headline, amount_text, amount_color = "فشلت الجريمة", _money(fine, "-"), C_RED
     bank_save(data)
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
-    file = _banner(embed, banner)
-    await _out(interaction, panel, embed, file=file)
+    img = await _result_card(interaction.user, headline, amount_text, amount_color,
+                             [(f"الكاش: {_money(acct['cash'])}", C_MUTED)])
+    await _out(interaction, panel, embed, img=img)
 
 
 async def _act_rob(interaction, member):
@@ -815,13 +1341,16 @@ async def _act_rob(interaction, member):
     if locked:
         victim["items"]["lock"] -= 1
 
+    victim_name = _clean_name(member.display_name)
     if not locked and random.random() < chance:
         stolen = min(ROB_MAX_STEAL, max(1, int(victim["cash"] * random.uniform(0.10, 0.30))))
         victim["cash"] -= stolen
         thief["cash"] += stolen
+        thief["robs"] += 1
+        thief["stolen"] += stolen
         embed = _bank_embed("🦹 سرقة ناجحة",
                             f"{interaction.user.mention} سرق **{fmt(stolen)}** {CURRENCY} من {member.mention}!")
-        banner = "rob_win.png"
+        headline, amount_text, amount_color = "سرقة ناجحة", _money(stolen, "+"), C_GREEN
     else:
         fine = min(thief["cash"], max(ROB_MIN_THIEF_CASH, int(thief["cash"] * ROB_FINE_PERCENT)))
         thief["cash"] -= fine
@@ -829,19 +1358,24 @@ async def _act_rob(interaction, member):
         if locked:
             embed = _bank_embed("🔒 القفل صدّ السرقة",
                                 f"{interaction.user.mention} حاول يسرق {member.mention} بس القفل صدّه، ودفع غرامة **{fmt(fine)}** {CURRENCY} للضحية.")
+            headline = "القفل صدّ السرقة"
         else:
             embed = _bank_embed("🚔 انمسكت!",
                                 f"{interaction.user.mention} حاول يسرق {member.mention} وانمسك، ودفع غرامة **{fmt(fine)}** {CURRENCY} للضحية.")
-        banner = "rob_fail.png"
+            headline = "انمسكت!"
+        amount_text, amount_color = _money(fine, "-"), C_RED
     bank_save(data)
     embed.set_footer(text="تنبيه: حط فلوسك بالبنك عشان ما تنسرق")
-    file = _banner(embed, banner)
-    await _out(interaction, None, embed, content=member.mention, ping=member, file=file)
+    img = await _result_card(interaction.user, headline, amount_text, amount_color, [
+        (f"الضحية: {victim_name}", C_MUTED),
+        (f"الكاش: {_money(thief['cash'])}", C_MUTED)])
+    await _out(interaction, None, embed, content=member.mention, ping=member, img=img)
 
 
 async def _act_rich(interaction, panel):
     data = bank_load()
     price = data["_gold"]["price"]
+    stock_prices = data["_stocks"]["prices"]
     rows = []
     for uid, acct in data.get(str(interaction.guild.id), {}).items():
         if not uid.isdigit() or not isinstance(acct, dict):
@@ -849,7 +1383,7 @@ async def _act_rich(interaction, panel):
         member = interaction.guild.get_member(int(uid))
         if member is None or member.bot:
             continue
-        rows.append((member, _net_worth(acct, price)))
+        rows.append((member, _net_worth(acct, price, stock_prices)))
     rows.sort(key=lambda r: r[1], reverse=True)
     if not rows:
         return await _err(interaction, "📉 ما فيه حسابات بنكية لين الحين.")
@@ -858,7 +1392,34 @@ async def _act_rich(interaction, panel):
     for i, (member, worth) in enumerate(rows[:10]):
         rank = medals[i] if i < 3 else f"`#{i + 1}`"
         lines.append(f"{rank} {member.mention} — **{fmt(worth)}** {CURRENCY}")
-    await _out(interaction, panel, _bank_embed("💎 أغنى الأعضاء", "\n".join(lines)))
+    board = [{"member": member, "ring": member.display_name[:1], "name": _clean_name(member.display_name),
+              "value": _money(worth)} for member, worth in rows[:10]]
+    img = await _board_card("أغنى الأعضاء", board)
+    await _out(interaction, panel, _bank_embed("💎 أغنى الأعضاء", "\n".join(lines)), img=img)
+
+
+async def _act_thieves(interaction, panel):
+    data = bank_load()
+    rows = []
+    for uid, acct in data.get(str(interaction.guild.id), {}).items():
+        if not uid.isdigit() or not isinstance(acct, dict) or acct.get("robs", 0) <= 0:
+            continue
+        member = interaction.guild.get_member(int(uid))
+        if member is None or member.bot:
+            continue
+        rows.append((member, acct["robs"], acct.get("stolen", 0)))
+    rows.sort(key=lambda r: (r[1], r[2]), reverse=True)
+    if not rows:
+        return await _err(interaction, "🕵️ ما فيه حرامية لين الحين، ما أحد سرق بنجاح.")
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for i, (member, robs, stolen) in enumerate(rows[:10]):
+        rank = medals[i] if i < 3 else f"`#{i + 1}`"
+        lines.append(f"{rank} {member.mention} — **{fmt(robs)}** سرقة ({fmt(stolen)} {CURRENCY})")
+    board = [{"member": member, "ring": member.display_name[:1], "name": _clean_name(member.display_name),
+              "value": f"{fmt(robs)} سرقة", "value_sub": _money(stolen)} for member, robs, stolen in rows[:10]]
+    img = await _board_card("توب الحرامية", board)
+    await _out(interaction, panel, _bank_embed("🕵️ توب الحرامية", "\n".join(lines)), img=img)
 
 
 async def _act_items(interaction, panel):
@@ -886,6 +1447,136 @@ async def _act_buy_item(interaction, key):
     bank_save(data)
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
     await interaction.response.edit_message(embed=embed, view=ShopView(interaction.user.id))
+
+
+# ---------- الاستثمار (أسهم شركات عالمية) ----------
+async def _stocks_card(data: dict, acct: dict):
+    prices = data["_stocks"]["prices"]
+    history = data["_stocks"]["history"]
+    rows = []
+    for sym, (name, _base, _vol) in STOCKS.items():
+        pct = _pct_change(history.get(sym, []))
+        if pct is None or round(pct, 1) == 0:
+            trend, trend_color = "ثابت", C_MUTED
+        else:
+            trend, trend_color = f"{pct:+.1f}%", (C_GREEN if pct > 0 else C_RED)
+        owned = acct["stocks"].get(sym, {}).get("shares", 0)
+        rows.append({"ring": sym, "ring_size": 15, "name": name,
+                     "name_sub": f"عندك {fmt(owned)} سهم" if owned else None,
+                     "value": _money(prices[sym]), "value_sub": trend, "value_sub_color": trend_color})
+    return await _board_card("سوق الأسهم", rows,
+                             (f"الأسعار تتغير كل {STOCK_STEP_SECONDS // 60} دقيقة", C_MUTED))
+
+
+async def _portfolio_card(data: dict, acct: dict):
+    rows, total_pnl = [], 0
+    for sym, name, shares, _cost, value, pnl in _holdings(acct, data["_stocks"]["prices"]):
+        total_pnl += pnl
+        sign = "+" if pnl > 0 else ("-" if pnl < 0 else "")
+        pnl_color = C_GREEN if pnl > 0 else (C_RED if pnl < 0 else C_MUTED)
+        rows.append({"ring": sym, "ring_size": 15, "name": name, "name_sub": f"{fmt(shares)} سهم",
+                     "value": _money(value), "value_sub": f"{sign}{fmt(abs(pnl))} {CURRENCY}",
+                     "value_sub_color": pnl_color})
+    sign = "+" if total_pnl > 0 else ("-" if total_pnl < 0 else "")
+    color = C_GREEN if total_pnl > 0 else (C_RED if total_pnl < 0 else C_MUTED)
+    return await _board_card("محفظتي", rows, (f"إجمالي الربح والخسارة: {sign}{fmt(abs(total_pnl))} {CURRENCY}", color))
+
+
+async def _act_invest_open(interaction, owner_id):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    bank_save(data)
+    img = await _stocks_card(data, acct)
+    kwargs = {"view": InvestView(owner_id), "ephemeral": True}
+    if img is not None:
+        kwargs["file"] = _make_file(img)
+    else:
+        kwargs["embed"] = _stocks_embed(data, acct)
+    await interaction.response.send_message(**kwargs)
+
+
+async def _act_stocks_list(interaction, panel):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    img = await _stocks_card(data, acct)
+    await _out(interaction, panel, _stocks_embed(data, acct), img=img)
+
+
+async def _act_portfolio(interaction, panel):
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    if not _holdings(acct, data["_stocks"]["prices"]):
+        return await _err(interaction, "📊 ما عندك أسهم لين الحين. اشتر من القائمة اللي فوق.")
+    img = await _portfolio_card(data, acct)
+    await _out(interaction, panel, _portfolio_embed(data, acct), img=img)
+
+
+async def _act_buy_stock(interaction, sym, text, panel):
+    if sym not in STOCKS:
+        return await _err(interaction, "⚠️ ما لقيت هذي الشركة.")
+    name = STOCKS[sym][0]
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    price = data["_stocks"]["prices"][sym]
+    n = parse_amount(text, acct["cash"] // price)
+    if not n:
+        if acct["cash"] < price:
+            return await _err(interaction, f"❌ كاشك ما يكفي لسهم واحد (سعر سهم {name} **{fmt(price)}** {CURRENCY}).")
+        return await _err(interaction, "⚠️ اكتب عدد الأسهم (رقم) أو كلمة `كل`.")
+    cost = n * price
+    if cost > acct["cash"]:
+        return await _err(interaction, f"❌ كاشك ما يكفي. تكلفة {fmt(n)} سهم = **{fmt(cost)}** {CURRENCY} وكاشك **{fmt(acct['cash'])}**.")
+    holding = acct["stocks"].setdefault(sym, {"shares": 0, "cost": 0})
+    holding["shares"] += n
+    holding["cost"] += cost
+    acct["cash"] -= cost
+    bank_save(data)
+    embed = _bank_embed(f"📊 تم شراء أسهم {name}",
+                        f"اشتريت **{fmt(n)}** سهم بسعر {fmt(price)} للسهم = **{fmt(cost)}** {CURRENCY}.")
+    embed.add_field(name="📊 أسهمك", value=f"{fmt(holding['shares'])} سهم", inline=True)
+    embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
+    img = await _result_card(interaction.user, f"شراء أسهم {name}", _money(cost), C_GOLD, [
+        (f"{fmt(n)} سهم بسعر {_money(price)}", C_MUTED),
+        (f"الكاش: {_money(acct['cash'])}", C_MUTED)])
+    await _out(interaction, panel, embed, img=img)
+
+
+async def _act_sell_stock(interaction, sym, text, panel):
+    if sym not in STOCKS:
+        return await _err(interaction, "⚠️ ما لقيت هذي الشركة.")
+    name = STOCKS[sym][0]
+    data = bank_load()
+    acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    holding = acct["stocks"].get(sym)
+    shares = holding["shares"] if isinstance(holding, dict) else 0
+    n = parse_amount(text, shares)
+    if not n:
+        if shares == 0:
+            return await _err(interaction, f"❌ ما عندك أسهم في {name}.")
+        return await _err(interaction, "⚠️ اكتب عدد الأسهم (رقم) أو كلمة `كل`.")
+    if n > shares:
+        return await _err(interaction, f"❌ ما عندك كفاية. معك **{fmt(shares)}** سهم في {name}.")
+    price = data["_stocks"]["prices"][sym]
+    revenue = int(n * price * (1 - STOCK_SELL_FEE))
+    cost_part = round(holding["cost"] * n / shares)
+    pnl = revenue - cost_part
+    holding["shares"] -= n
+    holding["cost"] -= cost_part
+    if holding["shares"] <= 0:
+        del acct["stocks"][sym]
+    acct["cash"] += revenue
+    bank_save(data)
+    sign = "+" if pnl > 0 else ("-" if pnl < 0 else "")
+    embed = _bank_embed(f"📊 تم بيع أسهم {name}",
+                        f"بعت **{fmt(n)}** سهم بسعر {fmt(price)} للسهم (بعد عمولة {STOCK_SELL_FEE * 100:.0f}%) "
+                        f"وأخذت **{fmt(revenue)}** {CURRENCY}.")
+    embed.add_field(name="الربح / الخسارة", value=f"{sign}{fmt(abs(pnl))} {CURRENCY}", inline=True)
+    embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
+    pnl_color = C_GREEN if pnl > 0 else (C_RED if pnl < 0 else C_GOLD)
+    img = await _result_card(interaction.user, f"بيع أسهم {name}", _money(abs(pnl), sign), pnl_color, [
+        (f"المبلغ المستلم: {_money(revenue)}", C_MUTED),
+        (f"الكاش: {_money(acct['cash'])}", C_MUTED)])
+    await _out(interaction, panel, embed, img=img)
 
 
 # ============================================================
@@ -971,6 +1662,54 @@ class ShopView(discord.ui.View):
             await interaction.response.send_message("⚠️ هذا المتجر مو لك، اكتب `بنك` وتطلع لك لوحتك.", ephemeral=True)
             return False
         return True
+
+
+# ---------- الاستثمار ----------
+class StockSelect(discord.ui.Select):
+    """قائمة الشركات: mode = buy أو sell."""
+
+    def __init__(self, mode: str, row: int):
+        options = [discord.SelectOption(label=name, value=sym, description=sym)
+                   for sym, (name, _base, _vol) in STOCKS.items()]
+        placeholder = "📈 اشتر أسهم من شركة" if mode == "buy" else "📉 بيع أسهم من شركة"
+        super().__init__(placeholder=placeholder, options=options, min_values=1, max_values=1, row=row)
+        self.mode = mode
+
+    async def callback(self, interaction: discord.Interaction):
+        sym = self.values[0]
+        name = STOCKS[sym][0]
+        mode = self.mode
+
+        async def handler(inter, text, panel):
+            if mode == "buy":
+                await _act_buy_stock(inter, sym, text, panel)
+            else:
+                await _act_sell_stock(inter, sym, text, panel)
+
+        title = f"شراء أسهم {name}" if mode == "buy" else f"بيع أسهم {name}"
+        await interaction.response.send_modal(AmountModal(title[:45], "عدد الأسهم (أو كل)", handler, self.view))
+
+
+class InvestView(discord.ui.View):
+    def __init__(self, owner_id: int):
+        super().__init__(timeout=300)
+        self.owner_id = owner_id
+        self.add_item(StockSelect("buy", 0))
+        self.add_item(StockSelect("sell", 1))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("⚠️ هذي القائمة مو لك، اضغط 💹 استثمار من لوحتك.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="الشركات", emoji="📊", style=discord.ButtonStyle.secondary, row=2)
+    async def b_list(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _act_stocks_list(interaction, self)
+
+    @discord.ui.button(label="محفظتي", emoji="💼", style=discord.ButtonStyle.secondary, row=2)
+    async def b_portfolio(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _act_portfolio(interaction, self)
 
 
 # ---------- اللوحة الرئيسية (كل الأزرار بلون رمادي طبيعي) ----------
@@ -1060,7 +1799,7 @@ class BankPanel(discord.ui.View):
     async def b_rob(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("اختر الضحية:", view=RobSelectView(self.owner_id), ephemeral=True)
 
-    # ----- صف 5: المتجر والأغراض (صف 4 للقائمة المنسدلة للوظائف) -----
+    # ----- صف 5: المتجر والأغراض وتوب حرامية واستثمار (صف 4 للقائمة المنسدلة للوظائف) -----
     @discord.ui.button(label="المتجر", emoji="🛍️", style=discord.ButtonStyle.secondary, row=4)
     async def b_shop(self, interaction: discord.Interaction, button: discord.ui.Button):
         data = bank_load()
@@ -1070,6 +1809,14 @@ class BankPanel(discord.ui.View):
     @discord.ui.button(label="أغراضي", emoji="🎒", style=discord.ButtonStyle.secondary, row=4)
     async def b_items(self, interaction: discord.Interaction, button: discord.ui.Button):
         await _act_items(interaction, self)
+
+    @discord.ui.button(label="توب حرامية", emoji="🕵️", style=discord.ButtonStyle.secondary, row=4)
+    async def b_thieves(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _act_thieves(interaction, self)
+
+    @discord.ui.button(label="استثمار", emoji="💹", style=discord.ButtonStyle.secondary, row=4)
+    async def b_invest(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await _act_invest_open(interaction, self.owner_id)
 
 
 async def _wrong_channel(message: discord.Message) -> None:
@@ -1090,8 +1837,13 @@ async def open_bank_panel(message: discord.Message) -> None:
     acct = bank_acct(data, message.guild.id, message.author.id)
     bank_save(data)
     panel = BankPanel(message.author.id)
-    msg = await message.channel.send(embed=_account_embed(data, message.author, acct), view=panel,
-                                     allowed_mentions=discord.AllowedMentions.none())
+    img = await _account_card(data, message.author, acct)
+    if img is not None:
+        msg = await message.channel.send(file=_make_file(img), view=panel,
+                                         allowed_mentions=discord.AllowedMentions.none())
+    else:
+        msg = await message.channel.send(embed=_account_embed(data, message.author, acct), view=panel,
+                                         allowed_mentions=discord.AllowedMentions.none())
     panel.message = msg
 
 
@@ -1105,8 +1857,12 @@ async def show_member_account(message: discord.Message, member: discord.Member) 
         return
     data = bank_load()
     acct = bank_acct(data, message.guild.id, member.id)
-    await message.channel.send(embed=_account_embed(data, member, acct),
-                               allowed_mentions=discord.AllowedMentions.none())
+    img = await _account_card(data, member, acct)
+    if img is not None:
+        await message.channel.send(file=_make_file(img), allowed_mentions=discord.AllowedMentions.none())
+    else:
+        await message.channel.send(embed=_account_embed(data, member, acct),
+                                   allowed_mentions=discord.AllowedMentions.none())
 
 
 # ============================================================
