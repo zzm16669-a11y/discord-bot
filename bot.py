@@ -35,6 +35,7 @@ import os
 import re
 import random
 import threading
+import time
 from io import BytesIO
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timezone, timedelta
@@ -91,6 +92,8 @@ LOG_CHANNEL_IDS = {
     "bot": 1538327078162927716,
     "security": 1538327174124408872,
     "delete": 1552223827449221140,
+    "kick": 1572424796799762534,   # سجلات طرد الأعضاء (كيك / ترحيل)
+    "nick": 1572424869805563934,   # سجلات تغيير ألقاب الأعضاء
 }
 
 LOG_CHANNEL_NAMES = {
@@ -105,6 +108,8 @@ LOG_CHANNEL_NAMES = {
     "bot": ["bot-logs"],
     "security": ["security-logs"],
     "delete": ["delete-logs"],
+    "kick": ["kick-logs"],
+    "nick": ["nick-logs"],
 }
 
 
@@ -152,9 +157,40 @@ async def log_mod_action(guild: discord.Guild, title: str, moderator: discord.Me
     await send_log(guild, "mod", embed)
 
 
-async def get_audit_executor(guild: discord.Guild, action: discord.AuditLogAction,
-                              target_id: int, max_age: int = 20):
-    """يدور بسجل التدقيق (Audit Log) على آخر عملية من نوع معيّن على هدف معيّن ويرجع اللي سواها (أو None)."""
+# ------------------------------------------------------------
+# تتبّع "مين استخدم أمر البوت" — عشان اللوقات تطلع اسم الإداري مو اسم البوت
+# ------------------------------------------------------------
+# لما إداري يكتب أمر (رول / تايم / لقب / ترحيل ...) البوت هو اللي ينفذه فيطلع بسجل التدقيق (Audit Log)
+# إن البوت هو الفاعل. نسجل هنا مين كتب الأمر، ولما نلقى إن الفاعل هو البوت نبدله بالإداري.
+bot_action_issuers: dict[int, tuple[int, float]] = {}
+BOT_ACTION_WINDOW = 60  # ثانية
+recent_bot_kicks: set[int] = set()  # أعضاء انطردوا بأمر من البوت (عشان ما يتكرر لوق الطرد)
+
+
+def note_bot_action(target_id: int, issuer_id: int) -> None:
+    """يسجل إن العضو issuer_id هو اللي استخدم أمر بوت على الهدف target_id."""
+    now = time.time()
+    bot_action_issuers[target_id] = (issuer_id, now)
+    for tid, (_, ts) in list(bot_action_issuers.items()):
+        if now - ts > BOT_ACTION_WINDOW * 5:
+            bot_action_issuers.pop(tid, None)
+
+
+def resolve_bot_issuer(guild: discord.Guild, executor, target_id: int):
+    """لو الفاعل بسجل التدقيق هو البوت نفسه، يرجع الإداري اللي كتب الأمر (لو معروف)."""
+    if executor is None or bot.user is None or executor.id != bot.user.id:
+        return executor
+    record = bot_action_issuers.get(target_id)
+    if record and time.time() - record[1] <= BOT_ACTION_WINDOW:
+        member = guild.get_member(record[0])
+        if member is not None:
+            return member
+    return executor
+
+
+async def get_audit_entry(guild: discord.Guild, action: discord.AuditLogAction,
+                          target_id: int, max_age: int = 20):
+    """يدور بسجل التدقيق على آخر عملية من نوع معيّن على هدف معيّن ويرجع الـ entry كامل (أو None)."""
     await asyncio.sleep(1.5)  # ننتظر شوي عشان ديسكورد يسجل العملية بالأوديت لوق
     try:
         async for entry in guild.audit_logs(action=action, limit=10):
@@ -162,10 +198,19 @@ async def get_audit_executor(guild: discord.Guild, action: discord.AuditLogActio
                 continue
             if (discord.utils.utcnow() - entry.created_at).total_seconds() > max_age:
                 continue
-            return entry.user
+            return entry
     except (discord.Forbidden, discord.HTTPException):
         pass
     return None
+
+
+async def get_audit_executor(guild: discord.Guild, action: discord.AuditLogAction,
+                              target_id: int, max_age: int = 20):
+    """يرجع اللي سوا العملية. لو اللي سواها البوت (بأمر من إداري) يرجع الإداري اللي كتب الأمر."""
+    entry = await get_audit_entry(guild, action, target_id, max_age)
+    if entry is None:
+        return None
+    return resolve_bot_issuer(guild, entry.user, target_id)
 
 
 async def audit_who(guild: discord.Guild, action: discord.AuditLogAction, target_id: int,
@@ -173,6 +218,18 @@ async def audit_who(guild: discord.Guild, action: discord.AuditLogAction, target
     """يرجع منشن اللي سوا العملية (من سجل التدقيق) أو fallback لو ما انعرف."""
     user = await get_audit_executor(guild, action, target_id, max_age)
     return user.mention if user else fallback
+
+
+async def log_kick(guild: discord.Guild, moderator, target, reason: str | None) -> None:
+    """يسجل طرد عضو بروم سجلات الطرد (kick)."""
+    embed = discord.Embed(title="👢 تم طرد عضو من السيرفر", color=discord.Color.red(),
+                           timestamp=datetime.now(timezone.utc))
+    embed.add_field(name="العضو", value=f"{target} ({target.mention})", inline=True)
+    embed.add_field(name="اللي طرده", value=moderator.mention if moderator else "غير معروف", inline=True)
+    embed.add_field(name="السبب", value=reason or "لم يُذكر سبب", inline=False)
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.set_footer(text=f"معرف العضو: {target.id}")
+    await send_log(guild, "kick", embed)
 
 
 intents = discord.Intents.default()
@@ -354,6 +411,27 @@ def is_staff_member(member) -> bool:
     return has_role(member, TRIAL_ROLES)
 
 
+def is_warn_staff(member) -> bool:
+    """أمر التحذير: أي شخص معه أي رول إداري (Support / staff / Verification Head وكل الرتب الأعلى)
+    أو مالك السيرفر أو صاحب صلاحية Administrator."""
+    if not isinstance(member, discord.Member):
+        return False
+    if member.id == member.guild.owner_id or member.guild_permissions.administrator:
+        return True
+    return has_role(member, ALL_STAFF_ROLES)
+
+
+def can_warn_target(author: discord.Member, target) -> bool:
+    """تسلسل الرتب للتحذير: الرتب اللي بالتسلسل (Trial Mod وفوق) تحذّر اللي أقل منها،
+    والرتب الإدارية الثانية (Support / staff / Verification Head) تحذّر الأعضاء العاديين بس."""
+    if not isinstance(target, discord.Member) or author.id == target.id:
+        return False
+    author_rank = get_rank(author)
+    if author_rank >= 0:
+        return author_rank > get_rank(target)
+    return get_rank(target) < 0 and not has_role(target, ALL_STAFF_ROLES)
+
+
 class ReasonSelect(discord.ui.Select):
     def __init__(self):
         options = [discord.SelectOption(label=text, value=text, emoji=emoji_text)
@@ -490,8 +568,8 @@ WARN_COMMAND_PATTERN = re.compile(r"^تحذير(?:\s|$)")
 async def handle_warn_command(message: discord.Message):
     author = message.author
 
-    # ما عنده صلاحية ← رياكشن ❌ بس
-    if not is_staff_member(author):
+    # ما معه أي رول إداري ← رياكشن ❌ بس
+    if not is_warn_staff(author):
         await react(message, "❌")
         return
 
@@ -505,7 +583,7 @@ async def handle_warn_command(message: discord.Message):
         return
 
     # تسلسل الرتب: ما تقدر تحذر عضو رتبته أعلى منك أو مساوية لك
-    if not can_act_on(author, target):
+    if not can_warn_target(author, target):
         await react(message, "❌")
         return
 
@@ -659,6 +737,9 @@ def normalize(text: str) -> str:
 # آيديات رسائل ".قول" اللي حذفها البوت نفسه — ما نسجلها بروم delete-logs
 silent_deleted_ids: set[int] = set()
 
+# مرفقات (صور/فيديو) رسائل ".قول" — نحملها قبل ما نحذف رسالة العضو عشان البوت يعيد إرسالها
+say_files_cache: dict[int, list] = {}
+
 
 @bot.event
 async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
@@ -709,7 +790,7 @@ HELP_PUBLIC_SECTIONS = {
         "`a [@عضو]` — صورة الحساب (الافتار).",
     ]),
     "general": ("ℹ️ عام", [
-        "`.قول <النص>` — يحذف رسالتك والبوت يكتب النص عنك.",
+        "`.قول <النص>` — يحذف رسالتك والبوت يكتب النص عنك (تقدر ترفق صورة أو فيديو ويرسلها البوت).",
         "`.afk <السبب>` — تفعّل وضع AFK.",
         "`.اوامر` — تعرض هذي القائمة.",
     ]),
@@ -785,19 +866,30 @@ async def commands_list_cmd(ctx: commands.Context):
     view.message = await ctx.send(embed=embed, view=view)
 
 
-# ---------- .قول: البوت يكرر النص اللي تكتبه ----------
-SAY_COMMAND_PATTERN = re.compile(r"^\.قول\s+\S")
+# ---------- .قول: البوت يكرر النص (وأي صورة/فيديو) اللي تكتبه ----------
+# يشتغل لو فيه نص، أو لو فيه مرفق (صورة / فيديو) حتى بدون نص
+SAY_COMMAND_PATTERN = re.compile(r"^\.قول(?:\s|$)")
 
 
 @bot.command(name="قول")
 async def say_cmd(ctx: commands.Context, *, text: str = None):
-    if not text or not text.strip():
-        await ctx.send("⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.قول النص اللي تبيه`")
+    # المرفقات اللي حملناها قبل حذف رسالة العضو
+    files = say_files_cache.pop(ctx.message.id, None)
+    if files is None and ctx.message.attachments:
+        try:
+            files = [await a.to_file() for a in ctx.message.attachments]
+        except (discord.HTTPException, discord.NotFound):
+            files = []
+    files = files or []
+
+    text = (text or "").strip()
+    if not text and not files:
+        await ctx.send("⚠️ استخدم الأمر بطريقة صحيحة، مثال:\n`.قول النص اللي تبيه`\nأو أرفق صورة/فيديو مع `.قول`")
         return
-    if ctx.guild is not None and message_has_blocked_link(text) and not is_link_exempt(ctx.author):
+    if text and ctx.guild is not None and message_has_blocked_link(text) and not is_link_exempt(ctx.author):
         await ctx.send(f"{ctx.author.mention} ❌ ما أقدر أرسل روابط.")
         return
-    await ctx.send(text, allowed_mentions=discord.AllowedMentions.none())
+    await ctx.send(text or None, files=files, allowed_mentions=discord.AllowedMentions.none())
 
 
 # ---------- .تست: يتأكد إن البوت شغال ----------
@@ -844,6 +936,9 @@ MANAGEMENT_ROLES = [MANAGEMENT] + ADMIN_ROLES
 HEAD_MOD_ROLES = [HEAD_MOD] + MANAGEMENT_ROLES
 MOD_ROLES = [MODERATOR] + HEAD_MOD_ROLES
 TRIAL_ROLES = [TRIAL_MOD] + MOD_ROLES
+
+# كل الرتب الإدارية (حتى اللي مو بالتسلسل مثل Support / staff / Verification Head) — يستخدمها أمر "تحذير"
+ALL_STAFF_ROLES = list(ROLE_LABELS.keys())
 
 
 def has_role(member: discord.Member, allowed: list[int]) -> bool:
@@ -956,11 +1051,14 @@ async def cmd_kick(message: discord.Message, args: str):
     reason = await get_reason(message, args, target, "طرد", "👢")
     if reason is None:
         return None
+    # نسجل إن الطرد جاي بأمر من البوت عشان on_member_remove ما يكرر اللوق
+    recent_bot_kicks.add(target.id)
     try:
         await target.kick(reason=reason)
-        await log_mod_action(message.guild, "👢 طرد عضو", message.author, target, reason)
+        await log_kick(message.guild, message.author, target, reason)
         return True
     except discord.Forbidden:
+        recent_bot_kicks.discard(target.id)
         await reply(message, "❌ ما أقدر أطرد هذا العضو.")
         return False
 
@@ -1403,8 +1501,8 @@ ADMIN_COMMANDS = {
     # إدارة الأعضاء
     "برا": (TOP_ROLES, cmd_ban),
     "سماح": (TOP_ROLES, cmd_unban),
-    "ترحيل": (MOD_ROLES, cmd_kick),
-    "كيك": (MOD_ROLES, cmd_kick),
+    "ترحيل": (TOP_ROLES, cmd_kick),   # الإدارة العليا بس
+    "كيك": (TOP_ROLES, cmd_kick),     # الإدارة العليا بس
     "تايم": (TRIAL_ROLES, cmd_timeout),
     "اص": (TRIAL_ROLES, cmd_timeout),
     "تحرير": (TRIAL_ROLES, cmd_untimeout),
@@ -1468,6 +1566,13 @@ async def try_dispatch_admin_command(message: discord.Message) -> bool:
                     return True
 
             args = content[len(trigger):].strip()
+
+            # نسجل مين كتب الأمر عشان اللوقات تطلع اسمه بدل اسم البوت
+            if message.mentions:
+                note_bot_action(message.mentions[0].id, message.author.id)
+            elif args.split() and args.split()[0].isdigit():
+                note_bot_action(int(args.split()[0]), message.author.id)
+
             try:
                 result = await handler(message, args)
             except (discord.Forbidden, discord.HTTPException) as e:
@@ -1487,7 +1592,7 @@ ADMIN_HELP_SECTIONS = [
     ("👥 إدارة الأعضاء", [
         (["برا"], "برا @عضو [السبب]", "حظر عضو من السيرفر.", None),
         (["سماح"], "سماح <آيدي العضو>", "فك الحظر عن عضو بالآيدي.", None),
-        (["ترحيل", "كيك"], "ترحيل / كيك @عضو [السبب]", "طرد عضو من السيرفر.", None),
+        (["ترحيل", "كيك"], "ترحيل / كيك @عضو [السبب]", "طرد عضو من السيرفر (للإدارة العليا بس).", None),
         (["تايم", "اص"], "تايم / اص @عضو [المدة] [السبب]", "كتم مؤقت (تايم أوت)، المدة مثل 10m أو 2h أو 1d.", None),
         (["تحرير"], "تحرير @عضو", "فك التايم عن عضو.", None),
         (["اخرس"], "اخرس @عضو [السبب]", "إسكات عضو بالشات (رتبة Muted).", None),
@@ -1499,7 +1604,7 @@ ADMIN_HELP_SECTIONS = [
         (["رجع"], "رجع @عضو", "إرجاع آخر رتبة سُحبت من العضو.", None),
         (["رول"], "رول @عضو اسم_الرتبة", "إعطاء رتبة لعضو (بشرط تكون أقل من رتبتك).", None),
         (["تحذير"], "تحذير @عضو [السبب]", "تسجيل تحذير رسمي على عضو، وتطلع لك أزرار أسباب تختار منها.",
-         f"أي إداري (**{ROLE_LABELS[TRIAL_MOD]}** وأعلى)"),
+         "أي شخص معه رول إداري"),
         (["شيل تحذير"], "شيل تحذير @عضو [الكل]", "يشيل آخر تحذير مسجل على عضو، أو كل تحذيراته لو كتبت «الكل».", None),
     ]),
     ("💬 إدارة الرومات", [
@@ -1745,6 +1850,7 @@ async def purchase_title(guild: discord.Guild, author: discord.Member, title_tex
     original_nick = (old_entry.get("original_nick")
                      if (old_entry and old_entry.get("type") == "title") else author.nick)
     new_nick = f"{original_nick or author.name} | {title_text}"[:32]
+    note_bot_action(author.id, author.id)  # اللوق يطلع العضو نفسه مو البوت
     try:
         await author.edit(nick=new_nick, reason="شراء لقب مؤقت من المتجر")
     except discord.Forbidden:
@@ -1760,6 +1866,7 @@ async def purchase_color(guild: discord.Guild, author: discord.Member, color_nam
     price = SHOP_COLOR_PRICE
     if get_balance(guild.id, author.id) < price:
         return False, f"❌ رصيدك ما يكفي (تحتاج {price} نقطة)."
+    note_bot_action(author.id, author.id)  # اللوق يطلع العضو نفسه مو البوت
     for name in SHOP_COLOR_ROLES:
         old_role = discord.utils.get(guild.roles, name=f"🎨 {name}")
         if old_role and old_role in author.roles:
@@ -3474,15 +3581,24 @@ async def on_message(message: discord.Message):
     if await handle_locket_filter(message):
         return
 
-    # ".قول <نص>": نحذف رسالة صاحب الأمر فورًا
+    # ".قول <نص>" أو ".قول" مع صورة/فيديو: نحمّل المرفقات أول، وبعدين نحذف رسالة صاحب الأمر
     if message.guild is not None and SAY_COMMAND_PATTERN.match(message.content):
-        say_text = message.content.split(None, 1)[1]
-        if not (message_has_blocked_link(say_text) and not is_link_exempt(message.author)):
-            silent_deleted_ids.add(message.id)
-            try:
-                await message.delete()
-            except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-                silent_deleted_ids.discard(message.id)
+        say_parts = message.content.split(None, 1)
+        say_text = say_parts[1] if len(say_parts) > 1 else ""
+        link_blocked = bool(say_text) and message_has_blocked_link(say_text) and not is_link_exempt(message.author)
+        if not link_blocked and (say_text or message.attachments):
+            can_delete = True
+            if message.attachments:
+                try:
+                    say_files_cache[message.id] = [await a.to_file() for a in message.attachments]
+                except (discord.HTTPException, discord.NotFound):
+                    can_delete = False  # ما قدرنا نحمّل المرفقات، ما نحذف الرسالة عشان ما تضيع
+            if can_delete:
+                silent_deleted_ids.add(message.id)
+                try:
+                    await message.delete()
+                except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+                    silent_deleted_ids.discard(message.id)
 
     if message.guild is not None:
         if INVITE_LINK_PATTERN.search(message.content):
@@ -3611,13 +3727,23 @@ async def on_member_join(member: discord.Member):
 
 @bot.event
 async def on_member_remove(member: discord.Member):
-    kicker = await get_audit_executor(member.guild, discord.AuditLogAction.kick, member.id, max_age=10)
-    title = "👢 تم طرد عضو من السيرفر" if kicker else "📤 عضو خرج من السيرفر"
-    embed = discord.Embed(title=title, color=discord.Color.red(),
+    # لو الطرد جاي بأمر (ترحيل / كيك) من البوت، اللوق انسجل بروم الطرد من الأمر نفسه
+    if member.id in recent_bot_kicks:
+        recent_bot_kicks.discard(member.id)
+        return
+
+    entry = await get_audit_entry(member.guild, discord.AuditLogAction.kick, member.id, max_age=10)
+
+    # طرد يدوي (مو بأمر البوت) ← يروح لروم سجلات الطرد
+    if entry is not None:
+        kicker = resolve_bot_issuer(member.guild, entry.user, member.id)
+        await log_kick(member.guild, kicker, member, entry.reason)
+        return
+
+    # عضو خرج بنفسه
+    embed = discord.Embed(title="📤 عضو خرج من السيرفر", color=discord.Color.red(),
                            timestamp=datetime.now(timezone.utc))
     embed.add_field(name="العضو", value=f"{member} ({member.mention})", inline=True)
-    if kicker:
-        embed.add_field(name="اللي طرده", value=kicker.mention, inline=True)
     if member.joined_at:
         embed.add_field(name="انضم بتاريخ", value=discord.utils.format_dt(member.joined_at, "R"), inline=True)
     embed.set_thumbnail(url=member.display_avatar.url)
@@ -3633,7 +3759,7 @@ async def on_member_ban(guild: discord.Guild, user):
     try:
         async for entry in guild.audit_logs(action=discord.AuditLogAction.ban, limit=3):
             if entry.target and entry.target.id == user.id:
-                moderator, reason = entry.user, entry.reason
+                moderator, reason = resolve_bot_issuer(guild, entry.user, user.id), entry.reason
                 break
     except discord.Forbidden:
         pass
@@ -3654,7 +3780,7 @@ async def on_member_unban(guild: discord.Guild, user):
     try:
         async for entry in guild.audit_logs(action=discord.AuditLogAction.unban, limit=3):
             if entry.target and entry.target.id == user.id:
-                moderator = entry.user
+                moderator = resolve_bot_issuer(guild, entry.user, user.id)
                 break
     except discord.Forbidden:
         pass
@@ -3691,7 +3817,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         embed.set_footer(text=f"معرف العضو: {after.id}")
         await send_log(guild, "role", embed)
 
-    # ---- اللقب ----
+    # ---- اللقب (يروح لروم سجلات الألقاب) ----
     if before.nick != after.nick:
         executor = await get_audit_executor(guild, discord.AuditLogAction.member_update, after.id)
         if executor is None or executor.id == after.id:
@@ -3705,7 +3831,7 @@ async def on_member_update(before: discord.Member, after: discord.Member):
         embed.add_field(name="قبل", value=before.nick or "(بدون لقب)", inline=False)
         embed.add_field(name="بعد", value=after.nick or "(بدون لقب)", inline=False)
         embed.set_footer(text=f"معرف العضو: {after.id}")
-        await send_log(guild, "member", embed)
+        await send_log(guild, "nick", embed)
 
     # ---- التايم أوت ----
     if before.timed_out_until != after.timed_out_until:
