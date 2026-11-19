@@ -298,20 +298,20 @@ def chunk_text_lines(header: str, lines: list, limit: int = 1900) -> list:
 # ============================================================
 # الميزات: key -> الاسم + السعر. تقدر تغيّر الأسعار من هنا.
 SHOP_ITEMS = {
-    "protect": {"name": "حماية", "price": 150},     # روليت / زر / كراسي: تمنع طردك مرة وحدة وتروح للراوند اللي بعده
-    "reverse": {"name": "عكسية", "price": 200},     # روليت: لو أحد طلّعك ينعكس عليه ويطلع هو
-    "bomb": {"name": "قنبلة", "price": 300},        # روليت: لو العجلة اختارتك تفجرها وتطلّع كم واحد
-    "hint": {"name": "تلميح", "price": 50},         # ألعاب الجولات (اعلام، ايموجي...) + خمن: تلميح خاص لك
-    "scout": {"name": "كشّاف", "price": 120},       # مافيا: يكشف لك دور لاعب عشوائي
-    "reroll": {"name": "إعادة رمي", "price": 80},   # نرد: ترمي النرد مرة ثانية
-    "extra": {"name": "محاولات إضافية", "price": 100},  # غميضة: تزيد محاولات الباحث
-    "peek": {"name": "نظرة", "price": 70},          # اكشف: تشوف كل البطاقات ثواني
+    "protect": {"name": "حماية", "price": 150, "for": "الروليت، الزر، الكراسي"},     # روليت / زر / كراسي: تمنع طردك مرة وحدة وتروح للراوند اللي بعده
+    "reverse": {"name": "عكسية", "price": 200, "for": "الروليت"},     # روليت: لو أحد طلّعك ينعكس عليه ويطلع هو
+    "bomb": {"name": "قنبلة", "price": 300, "for": "الروليت"},        # روليت: لو العجلة اختارتك تفجرها وتطلّع كم واحد
+    "hint": {"name": "تلميح", "price": 50, "for": "ألعاب الجولات (اعلام، ايموجي...) ولعبة خمن"},         # ألعاب الجولات (اعلام، ايموجي...) + خمن: تلميح خاص لك
+    "scout": {"name": "كشّاف", "price": 120, "for": "المافيا"},       # مافيا: يكشف لك دور لاعب عشوائي
+    "reroll": {"name": "إعادة رمي", "price": 80, "for": "النرد"},   # نرد: ترمي النرد مرة ثانية
+    "extra": {"name": "محاولات إضافية", "price": 100, "for": "الغميضة"},  # غميضة: تزيد محاولات الباحث
+    "peek": {"name": "نظرة", "price": 70, "for": "لعبة اكشف"},          # اكشف: تشوف كل البطاقات ثواني
     # ---------- الجديد ----------
     # "kind": نوع الشراء. بدونها = ميزة تنخزن بالمخزون وتنستهلك باللعب.
-    "lootbox": {"name": "صندوق الحظ", "price": 120, "kind": "lootbox"},   # يطلع منه ميزة عشوائية بندرة مختلفة
-    "entrance": {"name": "دخلة", "price": 400, "kind": "entrance"},        # رسالة فوز خاصة بدل "جاوب صح!"
-    "frame": {"name": "إطار", "price": 300, "kind": "frame"},              # حلقة لون حول صورتك بلوحة .توب
-    "crown": {"name": "تاج", "price": 500, "kind": "crown"},               # تاج فوق صورتك بلوحة .توب
+    "lootbox": {"name": "صندوق الحظ", "price": 120, "kind": "lootbox", "for": "كل الألعاب (يطلع لك عنصر عشوائي)"},   # يطلع منه ميزة عشوائية بندرة مختلفة
+    "entrance": {"name": "دخلة", "price": 400, "kind": "entrance", "for": "ألعاب الجولات (تطلع لما تفوز)"},        # رسالة فوز خاصة بدل "جاوب صح!"
+    "frame": {"name": "إطار", "price": 300, "kind": "frame", "for": "لوحة .توب"},              # حلقة لون حول صورتك بلوحة .توب
+    "crown": {"name": "تاج", "price": 500, "kind": "crown", "for": "لوحة .توب"},               # تاج فوق صورتك بلوحة .توب
 }
 
 # الإطار والتاج يبانون على لوحة .توب بس، ولوحة .توب صارت ترسمهم فخليناها True.
@@ -502,7 +502,7 @@ class FrameColorSelect(discord.ui.Select):
 class ShopBuyButton(discord.ui.Button):
     def __init__(self, key: str):
         item = SHOP_ITEMS[key]
-        super().__init__(label=f"اشتري {item['name']} · {item['price']}", style=discord.ButtonStyle.secondary)
+        super().__init__(label=f"اشتري · {item['price']}", style=discord.ButtonStyle.secondary)
         self.key = key
 
     async def callback(self, interaction: discord.Interaction):
@@ -573,16 +573,17 @@ def _shop_keys() -> list:
 
 
 class ShopView(discord.ui.LayoutView):
-    """واجهة المتجر: أزرار شراء بس (بدون أي نص)، وتبان للضاغط لحاله (ephemeral).
-    لو انفتحت لأن اللاعب ما عنده ميزة، يطلع فوق الأزرار سطر ينبّهه."""
+    """واجهة المتجر: كل عنصر سطر فيه اسمه وسعره و"خاص بـ ..." (اللعبة اللي يشتغل فيها) وجنبه زر الشراء،
+    وتبان للضاغط لحاله (ephemeral). لو انفتحت لأن اللاعب ما عنده ميزة، يطلع فوق سطر ينبّهه."""
 
     def __init__(self, note: str | None = None):
         super().__init__(timeout=180)
         if note:
             self.add_item(discord.ui.TextDisplay(note))
-        keys = _shop_keys()
-        for i in range(0, len(keys), 5):
-            self.add_item(discord.ui.ActionRow(*[ShopBuyButton(k) for k in keys[i:i + 5]]))
+        for k in _shop_keys():
+            item = SHOP_ITEMS[k]
+            text = f"**{item['name']}** — {item['price']} نقطة\n-# خاص بـ {item['for']}"
+            self.add_item(discord.ui.Section(discord.ui.TextDisplay(text), accessory=ShopBuyButton(k)))
 
 
 async def open_shop(interaction: discord.Interaction, note: str | None = None) -> None:
@@ -2111,8 +2112,8 @@ async def rps_cmd(ctx: commands.Context, opponent: discord.Member):
 # 8) نظام اللوبي العام (للألعاب الجماعية — دخول/خروج/بدء، 30 ثانية، حتى 1000 لاعب)
 # ============================================================
 class GameLobby(discord.ui.LayoutView):
-    """لوبي الانضمام لكل الألعاب الجماعية (بما فيها الروليت): كل شي داخل إطار واحد —
-    صورة اللعبة + عداد تنازلي حي + عدد المشاركين + اللاعبين + أزرار دخول / خروج / بدء / متجر.
+    """لوبي الانضمام لكل الألعاب الجماعية (بما فيها الروليت): بدون إمبد ولا إطار —
+    فوق: عدد المشاركين (من 1000) + العداد التنازلي، تحتها صورة اللعبة، وتحت الصورة أزرار دخول / خروج / بدء / متجر.
     (يحتاج discord.py 2.6 أو أحدث)"""
 
     def __init__(self, host: discord.Member, game_title: str, min_players: int = 3,
@@ -2128,23 +2129,16 @@ class GameLobby(discord.ui.LayoutView):
         self.ends_at = discord.utils.utcnow() + timedelta(seconds=countdown)
         self.image_name = game_image_name(game_key)
 
-        # ---------- الإطار ----------
-        self.container = discord.ui.Container(accent_colour=VIBE_COLOR)
-        if self.image_name:
-            self.container.add_item(discord.ui.MediaGallery(
-                discord.MediaGalleryItem(f"attachment://{self.image_name}")))
-            self.container.add_item(discord.ui.Separator())
-        self.title_text = discord.ui.TextDisplay("-")
+        # ---------- فوق الصورة: عدد المشاركين + العداد ----------
         self.info_text = discord.ui.TextDisplay("-")
-        self.players_text = discord.ui.TextDisplay("-")
-        self.footer_text = discord.ui.TextDisplay("-")
-        self.container.add_item(self.title_text)
-        self.container.add_item(self.info_text)
-        self.container.add_item(self.players_text)
-        self.container.add_item(self.footer_text)
-        self.container.add_item(discord.ui.Separator())
+        self.add_item(self.info_text)
 
-        # ---------- الأزرار (داخل نفس الإطار) ----------
+        # ---------- الصورة (بدون إمبد) ----------
+        if self.image_name:
+            self.add_item(discord.ui.MediaGallery(
+                discord.MediaGalleryItem(f"attachment://{self.image_name}")))
+
+        # ---------- الأزرار تحت الصورة ----------
         self.join_btn = discord.ui.Button(label=f"{UI_ICONS['join']} دخول", style=discord.ButtonStyle.secondary)
         self.leave_btn = discord.ui.Button(label=f"{UI_ICONS['leave']} خروج", style=discord.ButtonStyle.secondary)
         self.start_btn = discord.ui.Button(label=f"{UI_ICONS['start']} ابدأ الآن", style=discord.ButtonStyle.secondary)
@@ -2153,22 +2147,17 @@ class GameLobby(discord.ui.LayoutView):
         self.leave_btn.callback = self.on_leave
         self.start_btn.callback = self.on_start
         self.shop_btn.callback = self.on_shop
-        self.container.add_item(discord.ui.ActionRow(self.join_btn, self.leave_btn, self.start_btn, self.shop_btn))
-        self.add_item(self.container)
+        self.add_item(discord.ui.ActionRow(self.join_btn, self.leave_btn, self.start_btn, self.shop_btn))
         self.refresh()
 
     def refresh(self, closed: bool = False) -> None:
-        """يحدّث نصوص اللوحة (العداد، عدد المشاركين، اللاعبين)."""
+        """يحدّث نص اللوحة (عدد المشاركين والعداد)."""
         count_line = f"**عدد المشاركين:** ({len(self.players)} / {self.max_players})"
-        self.title_text.content = f"### ◈  {self.game_title}"
         if closed:
-            self.info_text.content = f"**انتهى وقت التسجيل**\n{count_line}"
+            self.info_text.content = f"### {self.game_title}\n**انتهى وقت التسجيل**\n{count_line}"
         else:
-            self.info_text.content = (f"**ستبدأ اللعبة خلال:** {discord.utils.format_dt(self.ends_at, 'R')}\n"
-                                      f"{count_line}")
-        players = mentions_text(self.players, 1500)
-        self.players_text.content = f"**اللاعبون**\n{players}"
-        self.footer_text.content = f"-# الحد الأدنى {self.min_players} لاعبين  |  المضيف: {self.host.display_name}"
+            self.info_text.content = (f"### {self.game_title}\n{count_line}\n"
+                                      f"**ستبدأ اللعبة خلال:** {discord.utils.format_dt(self.ends_at, 'R')}")
 
     def disable_buttons(self) -> None:
         for b in (self.join_btn, self.leave_btn, self.start_btn, self.shop_btn):
@@ -4520,23 +4509,30 @@ async def _run_chairs(ctx: commands.Context):
 # ============================================================
 # أمر .توب — متصدرين النقاط (صورة) + الإطار والتاج من المتجر
 # ============================================================
-# إحداثيات صورة top.png بالبكسل على مقاسها الأصلي 1672×941
+# إحداثيات صورة top.png بالبكسل على مقاسها الأصلي 896×1200 (صورة طولية فيها 9 صفوف: 3 ذهبية + 6 داكنة)
 # (تتحول تلقائيًا لو مقاس صورتك اختلف). لو بغيت تزبط شي، عدّل الأرقام هنا بس.
-TOP_BASE_W, TOP_BASE_H = 1672, 941
+# التخطيط (عربي RTL): الأفتار يمين بالدايرة، الاسم بجنبه يسار الدايرة (محاذاة يمين)، النقاط يسار قريبة من خانة الرقم، والرقم بالخانة اليسار.
+TOP_BASE_W, TOP_BASE_H = 896, 1200
 TOP_DEFAULT_SIZE = (TOP_BASE_W, TOP_BASE_H)
+TOP_CIRCLE_X = 746                      # مركز كل الدواير أفقيًا
+TOP_CIRCLE_R = 37                       # نصف قطر الدايرة (الحلقة الذهبية من برا)
+# مركز كل صف عموديًا (من فوق لتحت): 3 صفوف ذهبية ثم 6 داكنة
+TOP_ROW_Y = [286, 380, 473, 570, 665, 760, 855, 950, 1045]
 # كل صف: (مركز الدايرة x, مركز الدايرة y, نصف قطر الدايرة)
-TOP_CIRCLES = [
-    (394, 296, 56),
-    (394, 424, 56),
-    (394, 550, 56),
-    (394, 673, 53),
-    (394, 793, 52),
-]
-TOP_ROW_HALF_H = [56, 55, 55, 52, 52]   # نص ارتفاع كل شريط (للخلفية البديلة بس)
-TOP_ROW_END_X = 1332                    # نهاية الشريط من اليمين
-TOP_RANK_X = 317                        # مكان رقم الترتيب (بين حافة اللوحة والدايرة)
-TOP_NAME_GAP = 22                       # المسافة بين الدايرة وبداية الاسم
-TOP_RIGHT_PAD = 34                      # المسافة بين النقاط وحافة الشريط اليمين
+TOP_CIRCLES = [(TOP_CIRCLE_X, y, TOP_CIRCLE_R) for y in TOP_ROW_Y]
+TOP_ROW_HALF_H = [38] * len(TOP_ROW_Y)  # نص ارتفاع كل شريط (للخلفية البديلة بس)
+TOP_ROW_START_X = 103                   # بداية الشريط من اليسار
+TOP_ROW_END_X = 793                     # نهاية الشريط من اليمين
+TOP_RANK_X = 147                        # مركز خانة الرقم (الكبسولة اليسار)
+TOP_RING_W = 5                          # سماك الحلقة الذهبية اللي حول الأفتار بالصورة (الأفتار يجلس داخلها)
+TOP_NAME_GAP = 20                       # المسافة بين الدايرة وبداية الاسم (من اليمين)
+TOP_POINTS_X = 215                      # بداية النقاط من اليسار (بعد خانة الرقم)
+TOP_TEXT_GAP = 24                       # أقل مسافة بين الاسم والنقاط
+# أحجام الخطوط كنسبة من عرض الصورة
+TOP_NAME_FONT = 0.036
+TOP_PTS_FONT = 0.030
+TOP_RANK_FONT = 0.032
+TOP_GOLD = (226, 191, 120, 255)         # لون الأرقام والنقاط (ذهبي هادي يناسب اللوحة)
 
 
 def _hex_rgb(hex_color, default=(159, 196, 224)):
@@ -4587,14 +4583,14 @@ async def _no_avatar():
 
 
 async def build_top_image(guild: discord.Guild, rows: list) -> bytes:
-    """يرسم لوحة المتصدرين: rows = [(آيدي اللاعب, نقاطه)] مرتبة من الأعلى. يرجع PNG bytes.
+    """يرسم لوحة المتصدرين: rows = [(آيدي اللاعب, نقاطه)] مرتبة من الأعلى (لين 9). يرجع PNG bytes.
     الخلفية: game_images/top.png (ولو مو موجودة يرسم خلفية بسيطة بنفس التخطيط)."""
     bg_path = os.path.join(GAME_IMAGES_DIR, GAME_IMAGES["توب"])
     has_bg = os.path.exists(bg_path)
     if has_bg:
         img = Image.open(bg_path).convert("RGBA")
     else:
-        img = Image.new("RGBA", TOP_DEFAULT_SIZE, (31, 46, 48, 255))
+        img = Image.new("RGBA", TOP_DEFAULT_SIZE, (31, 33, 40, 255))
     W, H = img.size
     sx, sy = W / TOP_BASE_W, H / TOP_BASE_H
     draw = ImageDraw.Draw(img)
@@ -4611,28 +4607,31 @@ async def build_top_image(guild: discord.Guild, rows: list) -> bytes:
     avatars = await asyncio.gather(*(_get_avatar_circle(m) if m is not None else _no_avatar()
                                      for m in members))
 
-    name_font = _replica_font(max(14, int(H * 0.036)))
-    pts_font = _replica_font(max(14, int(H * 0.031)))
-    rank_font = _replica_font(max(14, int(H * 0.034)))
-    rank_colors = [(255, 215, 0, 255), (192, 192, 192, 255), (205, 127, 50, 255)]
+    name_font = _replica_font(max(12, int(W * TOP_NAME_FONT)))
+    pts_font = _replica_font(max(12, int(W * TOP_PTS_FONT)))
+    rank_font = _replica_font(max(12, int(W * TOP_RANK_FONT)))
     row_end = TOP_ROW_END_X * sx
+    row_start = TOP_ROW_START_X * sx
 
     for i, (uid, pts) in enumerate(rows[:len(TOP_CIRCLES)]):
         bcx, bcy, br = TOP_CIRCLES[i]
         cx, cy, r = int(bcx * sx), int(bcy * sy), int(br * sx)
-        av_r = r - 5                      # الأفتار يجلس داخل حلقة الدايرة بدون ما يغطيها
+        ring = max(2, int(TOP_RING_W * sx))
+        av_r = r - ring                   # الأفتار يجلس داخل حلقة الدايرة بدون ما يغطيها
         member = members[i]
 
-        if not has_bg:   # بدون صورة خلفية: نرسم الصف والدايرة بنفسنا
+        if not has_bg:   # بدون صورة خلفية: نرسم الصف والدايرة والخانة بنفسنا
             half = int(TOP_ROW_HALF_H[i] * sy)
-            draw.rounded_rectangle((cx, cy - half, row_end, cy + half), radius=half // 2,
-                                   fill=(57, 70, 74, 255), outline=(169, 194, 196, 255), width=2)
-            draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(31, 46, 48, 255),
-                         outline=(169, 194, 196, 255), width=2)
+            draw.rounded_rectangle((row_start, cy - half, row_end, cy + half), radius=half,
+                                   fill=(48, 50, 58, 255), outline=(201, 170, 105, 255), width=2)
+            draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(31, 33, 40, 255),
+                         outline=(201, 170, 105, 255), width=ring)
+            draw.rounded_rectangle((row_start + 2, cy - 26 * sy, row_start + 88 * sx, cy + 26 * sy),
+                                   radius=26 * sy, fill=(70, 66, 56, 255))
 
-        # رقم الترتيب (بالفراغ اللي بين حافة اللوحة والدايرة)
-        _top_text(draw, TOP_RANK_X * sx, cy, str(i + 1), rank_font,
-                  rank_colors[i] if i < 3 else (255, 255, 255, 255), "center")
+        # رقم الترتيب: 1-3 مطبوعين بالصورة نفسها، فنكتب من 4 وطالع (وبدون صورة خلفية نكتب الكل)
+        if i >= 3 or not has_bg:
+            _top_text(draw, TOP_RANK_X * sx, cy, str(i + 1), rank_font, TOP_GOLD, "center")
 
         # الأفتار داخل الدايرة
         av = avatars[i]
@@ -4640,30 +4639,30 @@ async def build_top_image(guild: discord.Guild, rows: list) -> bytes:
             av = av.resize((av_r * 2, av_r * 2), Image.LANCZOS)
             img.paste(av, (cx - av_r, cy - av_r), av)
         else:
-            draw.ellipse((cx - av_r, cy - av_r, cx + av_r, cy + av_r), fill=(86, 100, 113, 255))
+            draw.ellipse((cx - av_r, cy - av_r, cx + av_r, cy + av_r), fill=(86, 92, 104, 255))
 
         # الإطار (من المتجر): حلقة بلون اللاعب فوق حلقة الدايرة
         frame = get_cosmetic(guild.id, uid, "frame")
         if frame:
             color = _hex_rgb(frame.get("color")) + (255,)
             draw.ellipse((cx - r - 1, cy - r - 1, cx + r + 1, cy + r + 1),
-                         outline=color, width=5)
+                         outline=color, width=max(3, int(4 * sx)))
 
-        # التاج (من المتجر): فوق يسار الأفتار
+        # التاج (من المتجر): فوق يمين الأفتار
         if get_cosmetic(guild.id, uid, "crown"):
-            _draw_crown(draw, cx - r * 0.62, cy - r * 0.62, r * 0.75, r * 0.5,
-                        fill=(230, 184, 74, 255), outline=(31, 46, 48, 255))
+            _draw_crown(draw, cx + r * 0.45, cy - r * 0.78, r * 0.8, r * 0.5,
+                        fill=(230, 184, 74, 255), outline=(31, 33, 40, 255))
 
-        # الاسم (يسار) والنقاط (يمين) — كلهم داخل الشريط
+        # الاسم (يمين بجنب الدايرة) والنقاط (يسار بجنب خانة الرقم) — كلهم داخل الشريط
         name = member.display_name if member is not None else "غير معروف"
         pts_text = _ar_text(f"{pts:,} نقطة")
         pts_w = draw.textlength(pts_text, font=pts_font)
-        right = row_end - TOP_RIGHT_PAD * sx
-        name_x = cx + r + TOP_NAME_GAP * sx
-        max_name_w = (right - pts_w - 24 * sx) - name_x
-        _top_text(draw, name_x, cy, _top_fit(draw, name, name_font, max_name_w),
-                  name_font, (255, 255, 255, 255), "left")
-        _top_text(draw, right, cy, pts_text, pts_font, (169, 194, 196, 255), "right")
+        pts_x = TOP_POINTS_X * sx
+        name_right = cx - r - TOP_NAME_GAP * sx
+        max_name_w = name_right - (pts_x + pts_w + TOP_TEXT_GAP * sx)
+        _top_text(draw, name_right, cy, _top_fit(draw, name, name_font, max_name_w),
+                  name_font, (255, 255, 255, 255), "right")
+        _top_text(draw, pts_x, cy, pts_text, pts_font, TOP_GOLD, "left")
 
     buf = BytesIO()
     img.save(buf, format="PNG")
@@ -4672,14 +4671,14 @@ async def build_top_image(guild: discord.Guild, rows: list) -> bytes:
 
 @commands.command(name="توب")
 async def top_cmd(ctx: commands.Context):
-    """متصدرين النقاط: أغنى 5 لاعبين بصورة (مفتوح للكل، ما يحتاج رول الألعاب)."""
+    """متصدرين النقاط: أغنى 9 لاعبين بصورة (مفتوح للكل، ما يحتاج رول الألعاب)."""
     if ctx.guild is None:
         return
     data = load_json(ECONOMY_FILE).get(str(ctx.guild.id), {})
     rows = [(int(k), int(v)) for k, v in data.items()
             if str(k).isdigit() and isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0]
     rows.sort(key=lambda x: -x[1])
-    rows = rows[:5]
+    rows = rows[:len(TOP_CIRCLES)]
     if not rows:
         await ctx.send("ما فيه أحد عنده نقاط للحين.")
         return
@@ -4769,7 +4768,7 @@ GAME_HELP = {
     "الوان": "البوت يسأل سؤال عن الألوان (خلط ألوان، لون شي معروف، ألوان مكمّلة...)، وأول وحد يجاوب صح يفوز.",
     "ايموجي": "البوت يعرض رموز مركبة (وتحتها التصنيف: فيلم / شخصية / قصة / مكان...)، وأول وحد يخمن المقصود يفوز.",
     "اكشف": "لعبة ذاكرة فردية، دور بطاقتين متطابقتين من شبكة 16 بطاقة بأقل عدد محاولات ممكن.",
-    "توب": "يعرض أغنى 5 لاعبين بالنقاط بصورة، ويبان فيها إطار وتاج اللي اشتراهم من المتجر.",
+    "توب": "يعرض أغنى 9 لاعبين بالنقاط بصورة، ويبان فيها إطار وتاج اللي اشتراهم من المتجر.",
     "متجر": (
         "زر **المتجر** موجود بلوبي كل لعبة جماعية، تشتري فيه ميزات بنقاطك (كلها أزرار شراء، والميزة تنخزن عندك لين تستخدمها):\n"
         "• **حماية**: لو أحد حاول يطلّعك بالروليت ما تطلع وننتقل للراوند اللي بعده. تنفع بالروليت (ضد الطرد والقنبلة)، لعبة الأزرار، والكراسي.\n"
