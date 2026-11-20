@@ -20,7 +20,8 @@ bank.py — نظام البنك (وحدة داخل بوت الكنترول bot.p
       * نجح الأمر       ← رياكشن ✅
       * كتبه غلط        ← رد "استخدم الأمر بطريقة صحيحة" مع مثال
   - bank.get_bank_balance(guild_id, user_id) ← يستخدمها أمر p بالبوت الأساسي (بطاقة البروفايل).
-  - ردود البنك صور (Pillow): الخلفيات من مجلد assets والخط من مجلد fonts:
+  - ردود البنك صور (Pillow): الخلفيات من مجلد assets (أو bank_images أو bank، جنب bank.py أو جنب البوت)
+    والخط من مجلد fonts (أي ملف Tajawal .ttf). الامتداد png أو jpg أو jpeg أو webp وحالة الأحرف ما تفرق:
       assets/account.png  ← حسابي (+ بنك @عضو)
       assets/receipt.png  ← إيداع / سحب / حوالة / فائدة
       assets/market.png   ← سوق الذهب
@@ -214,6 +215,7 @@ BANK_COLOR = discord.Color.from_rgb(57, 64, 71)
 # مجلدات صور البنك: الخلفيات + الخط (لو ناقصة يرد بالنص القديم)
 BANK_ASSETS_DIR = "assets"
 BANK_FONTS_DIR = "fonts"
+BANK_EXTRA_DIRS = ("bank_images", "bank", "images")   # أماكن ثانية يدور فيها على الصور والخط
 BANK_FONT_REGULAR = "Tajawal-Regular.ttf"
 BANK_FONT_BOLD = "Tajawal-Bold.ttf"
 
@@ -587,22 +589,106 @@ def _shape(text, ltr: bool = False) -> str:
     return get_display(shaped)
 
 
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+_BANK_BG_NAMES = ("account", "receipt", "market", "trade", "result", "leaderboard")
+_SYSTEM_FONTS = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansArabic-Regular.ttf",
+)
+
+
+def _candidate_dirs(primary: str) -> list:
+    """المجلدات اللي ندور فيها: جنب bank.py وجنب مكان تشغيل البوت، بالاسم الأساسي ثم الأسماء البديلة."""
+    bases = [os.path.dirname(os.path.abspath(__file__)), os.getcwd()]
+    names = [primary, *BANK_EXTRA_DIRS, ""]
+    seen, result = set(), []
+    for base in bases:
+        for name in names:
+            folder = os.path.join(base, name) if name else base
+            if folder not in seen and os.path.isdir(folder):
+                seen.add(folder)
+                result.append(folder)
+    return result
+
+
+def _find_asset(stem: str) -> str | None:
+    """يلقى صورة الخلفية باسمها (account / receipt ...) بأي امتداد وأي حالة أحرف."""
+    for folder in _candidate_dirs(BANK_ASSETS_DIR):
+        try:
+            files = {f.lower(): f for f in os.listdir(folder)}
+        except OSError:
+            continue
+        for ext in _IMAGE_EXTS:
+            found = files.get((stem + ext).lower())
+            if found:
+                return os.path.join(folder, found)
+    return None
+
+
+@lru_cache(maxsize=4)
+def _find_font(bold: bool) -> str | None:
+    wanted = (BANK_FONT_BOLD if bold else BANK_FONT_REGULAR).lower()
+    candidates = []
+    for folder in _candidate_dirs(BANK_FONTS_DIR):
+        try:
+            names = os.listdir(folder)
+        except OSError:
+            continue
+        candidates += [(folder, f) for f in names if f.lower().endswith((".ttf", ".otf"))]
+    for folder, f in candidates:
+        if f.lower() == wanted:
+            return os.path.join(folder, f)
+    style_words = ("bold",) if bold else ("regular", "medium")
+    tajawal = [(d, f) for d, f in candidates if "tajawal" in f.lower()]
+    for pool in (tajawal, candidates):
+        for folder, f in pool:
+            if any(w in f.lower() for w in style_words):
+                return os.path.join(folder, f)
+        if pool:
+            return os.path.join(pool[0][0], pool[0][1])
+    for path in _SYSTEM_FONTS:      # آخر حل: خط النظام (يدعم العربي) لو ما حطيت Tajawal
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 @lru_cache(maxsize=64)
 def _load_font(size: int, bold: bool):
-    bold_path = os.path.join(BANK_FONTS_DIR, BANK_FONT_BOLD)
-    regular_path = os.path.join(BANK_FONTS_DIR, BANK_FONT_REGULAR)
-    path = bold_path if bold else regular_path
-    if not os.path.exists(path):
-        path = bold_path if os.path.exists(bold_path) else regular_path
+    path = _find_font(bold)
+    if path is None:
+        raise FileNotFoundError("ما لقيت ملف الخط Tajawal (.ttf) — حطه بمجلد fonts")
     # BASIC لأن التشكيل والترتيب سويناهم بالكود (لو raqm اشتغل يعكس النص مرتين)
     return ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.BASIC)
+
+
+def _images_report() -> list:
+    """يرجع قائمة مشاكل الصور (فاضية = كل شي تمام). يطبعها setup_bank باللوق عشان تعرف وش ناقص."""
+    problems = []
+    if not _IMAGES_AVAILABLE:
+        problems.append("مكتبات الصور مو مثبتة (Pillow / arabic-reshaper / python-bidi)")
+        return problems
+    for stem in _BANK_BG_NAMES:
+        if _find_asset(stem) is None:
+            problems.append(f"ناقصة الخلفية: {stem}.png")
+    if _find_font(True) is None:
+        problems.append("ما لقيت ملف الخط Tajawal (.ttf) بمجلد fonts")
+    if problems:
+        folders = ", ".join(_candidate_dirs(BANK_ASSETS_DIR)) or "(ما لقيت أي مجلد)"
+        problems.append(f"المجلدات اللي دورت فيها: {folders}")
+    return problems
 
 
 class _Canvas:
     """لوحة رسم فوق خلفية جاهزة. كل الإحداثيات بمقاس الخلفية الأصلي وتتحول تلقائيًا."""
 
     def __init__(self, bg_name: str, ref: tuple):
-        self.img = Image.open(os.path.join(BANK_ASSETS_DIR, bg_name)).convert("RGBA")
+        path = _find_asset(os.path.splitext(bg_name)[0])
+        if path is None:
+            raise FileNotFoundError(f"ما لقيت صورة الخلفية {bg_name} (مجلد assets أو bank_images)")
+        self.img = Image.open(path).convert("RGBA")
         width, height = self.img.size
         self.sx, self.sy = width / ref[0], height / ref[1]
         self.k = (self.sx + self.sy) / 2
@@ -1987,3 +2073,10 @@ def setup_bank(bot: commands.Bot) -> None:
             except commands.CommandRegistrationError as e:
                 print(f"[بنك] ⚠️ تخطيت أمر مكرر: {e}")
     print(f"[بنك] ✅ تم تحميل نظام البنك (لوحة أزرار + {added} أمر)")
+    problems = _images_report()
+    if problems:
+        print("[بنك] ⚠️ الصور مو جاهزة، البنك بيرد بالنص لين تنحل:")
+        for problem in problems:
+            print(f"[بنك]    - {problem}")
+    else:
+        print("[بنك] 🖼️ صور البنك جاهزة")
