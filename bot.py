@@ -254,6 +254,7 @@ games.setup_games(bot)
 import colors
 colors.setup_colors(bot)
 import card_backgrounds
+from broadcast import handle_broadcast_message
 # ============================================================
 # فلتر المنشن الصريح (يمنع إن مجرد "الرد" على رسالة حد يعتبر منشن له)
 # ============================================================
@@ -3570,6 +3571,9 @@ async def send_divider_cmd(ctx: commands.Context):
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
+        return
+
+    if await handle_broadcast_message(message):
         return
 
     # روم الفخ: أول شي قبل أي معالجة ثانية
