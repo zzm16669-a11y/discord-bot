@@ -39,6 +39,7 @@ import json
 import os
 import random
 import re
+import time
 from datetime import datetime, timezone, timedelta
 from functools import lru_cache
 
@@ -286,7 +287,22 @@ BANK_JOBS = [
     ("مهندس", 8, 400, 650, "👷"),
     ("مبرمج", 12, 600, 950, "💻"),
     ("طبيب", 16, 900, 1400, "🩺"),
+    ("مدير مشروع", 20, 1400, 2200, "📋"),
+    ("طيار", 25, 2200, 3500, "✈️"),
+    ("محامي", 30, 3500, 5500, "⚖️"),
+    ("جراح", 35, 5500, 9000, "🏥"),
+    ("مدير بنك", 40, 9000, 15000, "🏦"),
+    ("مستثمر عقاري", 45, 15000, 25000, "🏢"),
+    ("رجل أعمال", 50, 25000, 45000, "💼"),
+    ("مدير تنفيذي", 60, 45000, 80000, "👔"),
+    ("وزير", 70, 80000, 140000, "🏛️"),
+    ("صاحب شركة عالمية", 80, 140000, 250000, "🌍"),
+    ("ملياردير", 90, 250000, 450000, "💎"),
+    ("مالك جزيرة", 100, 450000, 800000, "🏝️"),
+    ("مالك نادي رياضي", 110, 800000, 1400000, "🏆"),
+    ("إمبراطور الأعمال", 120, 1400000, 2500000, "👑"),
 ]
+JOBS_PER_PAGE = 10                # صورة الوظائف تعرض 10 بالصفحة (زر الوظائف يقلّب الصفحات)
 
 # المتجر: المفتاح -> (الاسم, ايموجي, السعر, الوصف)
 SHOP_ITEMS = {
@@ -578,17 +594,24 @@ def _clean_name(name: str) -> str:
     return cleaned or "عضو"
 
 
+_NUMBER_TOKEN = re.compile(r"[+\-]?\d+(?:[.,:\-]\d+)*%?")
+_BIDI_CONTROLS = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+
 def _shape(text, ltr: bool = False) -> str:
-    """يوصّل الحروف العربية ويرتبها يمين لشمال عشان Pillow يرسمها صح."""
+    """يوصّل الحروف العربية ويرتبها يمين لشمال عشان Pillow يرسمها صح.
+    الأرقام (80-160 / 4,800 / +650) تنحط بين علامات اتجاه عشان ترتيبها ما ينقلب وسط العربي."""
     shaped = arabic_reshaper.reshape(str(text))
-    if ltr:
-        try:
-            return get_display(shaped, base_dir="L")
-        except TypeError:
-            return get_display(shaped)
-    return get_display(shaped)
+    shaped = _NUMBER_TOKEN.sub(lambda m: "\u202a" + m.group(0) + "\u202c", shaped)
+    try:
+        shown = get_display(shaped, base_dir="L") if ltr else get_display(shaped)
+    except TypeError:
+        shown = get_display(shaped)
+    return _BIDI_CONTROLS.sub("", shown)
 
 
+_BG_CACHE: dict = {}        # الخلفيات تنحمّل مرة وحدة (أسرع بكثير)
+_AVATAR_CACHE: dict = {}    # أفتارات الأعضاء (عشان ما ننزّلها كل مرة)
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 _BANK_BG_NAMES = ("account", "receipt", "market", "trade", "result", "leaderboard")
 _SYSTEM_FONTS = (
@@ -664,6 +687,19 @@ def _load_font(size: int, bold: bool):
     return ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.BASIC)
 
 
+def _prewarm_images() -> None:
+    """يحمّل الخلفيات والخط مسبقًا عشان أول ضغطة ما تتأخر."""
+    try:
+        for stem in _BANK_BG_NAMES:
+            path = _find_asset(stem)
+            if path and path not in _BG_CACHE:
+                _BG_CACHE[path] = Image.open(path).convert("RGBA")
+        _load_font(30, True)
+        _load_font(30, False)
+    except Exception as e:
+        print(f"[بنك] ⚠️ ما قدرت أحمّل الصور مسبقًا: {e!r}")
+
+
 def _images_report() -> list:
     """يرجع قائمة مشاكل الصور (فاضية = كل شي تمام). يطبعها setup_bank باللوق عشان تعرف وش ناقص."""
     problems = []
@@ -688,7 +724,11 @@ class _Canvas:
         path = _find_asset(os.path.splitext(bg_name)[0])
         if path is None:
             raise FileNotFoundError(f"ما لقيت صورة الخلفية {bg_name} (مجلد assets أو bank_images)")
-        self.img = Image.open(path).convert("RGBA")
+        cached = _BG_CACHE.get(path)
+        if cached is None:
+            cached = Image.open(path).convert("RGBA")
+            _BG_CACHE[path] = cached
+        self.img = cached.copy()
         width, height = self.img.size
         self.sx, self.sy = width / ref[0], height / ref[1]
         self.k = (self.sx + self.sy) / 2
@@ -727,8 +767,8 @@ class _Canvas:
                 fsize = label_size or r * (0.95 if len(label) <= 2 else 0.5)
                 font = _load_font(max(8, int(round(fsize * self.k))), True)
                 ImageDraw.Draw(tile).text((rad, rad), _shape(label, True), font=font, fill=C_MUTED, anchor="mm")
-        mask = Image.new("L", (size * 4, size * 4), 0)
-        ImageDraw.Draw(mask).ellipse((0, 0, size * 4 - 1, size * 4 - 1), fill=255)
+        mask = Image.new("L", (size * 2, size * 2), 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, size * 2 - 1, size * 2 - 1), fill=255)
         mask = mask.resize((size, size), Image.Resampling.LANCZOS)
         self.img.paste(tile, (int(round(px - rad)), int(round(py - rad))), mask)
 
@@ -771,7 +811,7 @@ class _Canvas:
 
     def to_bytes(self) -> bytes:
         buf = io.BytesIO()
-        self.img.convert("RGB").save(buf, "PNG", optimize=True)
+        self.img.convert("RGB").save(buf, "JPEG", quality=92, subsampling=0)   # أخف بـ3 مرات من PNG = رفع أسرع
         return buf.getvalue()
 
 
@@ -861,14 +901,15 @@ def _render_board(title, rows, footer):
     for cy, row in zip(_BOARD_ROWS_Y, rows[:10]):
         c.avatar(row.get("avatar"), 135, cy, 29, row.get("ring", ""), row.get("ring_size"))
         sub = row.get("name_sub")
-        c.text(190, cy - (14 if sub else 0), row["name"], 34, row.get("name_color", C_TEXT), True, "lm", max_w=380)
+        c.text(190, cy - (13 if sub else 0), row["name"], 30 if sub else 34, row.get("name_color", C_TEXT), True,
+               "lm", max_w=380)
         if sub:
-            c.text(190, cy + 24, sub, 22, C_MUTED, False, "lm", max_w=380)
+            c.text(190, cy + 20, sub, 20, C_MUTED, False, "lm", max_w=380)
         value_sub = row.get("value_sub")
-        c.text(790, cy - (14 if value_sub else 0), row["value"], 32, row.get("value_color", C_GOLD), True, "rm",
-               max_w=230, ltr=True)
+        c.text(790, cy - (13 if value_sub else 0), row["value"], 30 if value_sub else 32,
+               row.get("value_color", C_GOLD), True, "rm", max_w=230, ltr=True)
         if value_sub:
-            c.text(790, cy + 24, value_sub, 22, row.get("value_sub_color", C_MUTED), False, "rm", max_w=230, ltr=True)
+            c.text(790, cy + 20, value_sub, 20, row.get("value_sub_color", C_MUTED), False, "rm", max_w=230, ltr=True)
     if footer:
         text, color = footer
         c.text(448, 1152, text, 28, color, False, max_w=760, ltr=True)
@@ -878,7 +919,16 @@ def _render_board(title, rows, footer):
 # ---------- مساعدات الرسم (async) — أي فشل يرجع None والأمر يطلع بالنص القديم ----------
 async def _avatar_bytes(user, size: int = 256):
     try:
-        return await asyncio.wait_for(user.display_avatar.replace(size=size, format="png").read(), timeout=2.0)
+        asset = user.display_avatar.replace(size=size, format="png")
+        key = str(asset.url)
+        cached = _AVATAR_CACHE.get(key)
+        if cached is not None:
+            return cached
+        data = await asyncio.wait_for(asset.read(), timeout=2.0)
+        if len(_AVATAR_CACHE) >= 300:
+            _AVATAR_CACHE.pop(next(iter(_AVATAR_CACHE)))
+        _AVATAR_CACHE[key] = data
+        return data
     except Exception:
         return None
 
@@ -887,20 +937,29 @@ async def _no_avatar():
     return None
 
 
+_RENDER_LIMIT = asyncio.Semaphore(2)   # أقصى رسمتين بنفس الوقت (الضغط المتتابع يصطف بدل ما يخنق السيرفر)
+
+
 async def _card(render, *args):
     if not _IMAGES_AVAILABLE:
         return None
+    started = time.monotonic()
     try:
-        return await asyncio.to_thread(render, *args)
+        async with _RENDER_LIMIT:
+            result = await asyncio.to_thread(render, *args)
     except Exception as e:
         print(f"[بنك] ⚠️ فشل رسم الصورة ({render.__name__}): {e!r} — رجعنا للنص")
         return None
+    took = time.monotonic() - started
+    if took > 1.5:
+        print(f"[بنك] ⏱️ رسم الصورة ({render.__name__}) أخذ {took:.1f} ثانية — السيرفر بطيء")
+    return result
 
 
 def _make_file(img: bytes | None) -> discord.File | None:
     if img is None:
         return None
-    return discord.File(io.BytesIO(img), filename="bank.png")
+    return discord.File(io.BytesIO(img), filename="bank.jpg")
 
 
 async def _account_card(data: dict, member, acct: dict):
@@ -1057,17 +1116,51 @@ def _portfolio_embed(data: dict, acct: dict) -> discord.Embed:
 
 
 async def _err(interaction: discord.Interaction, text: str) -> None:
-    await interaction.response.send_message(text, ephemeral=True)
+    if interaction.response.is_done():      # لو سبق ورددنا (defer) نرسل الخطأ كرسالة خاصة
+        await interaction.followup.send(text, ephemeral=True)
+    else:
+        await interaction.response.send_message(text, ephemeral=True)
+
+
+async def _defer(interaction: discord.Interaction, thinking: bool = False, ephemeral: bool = False) -> None:
+    """يرد على ديسكورد فورًا (عنده 3 ثواني بس وإلا يطلع "didn't respond in time")، وبعدها نرسم الصورة براحتنا."""
+    if interaction.response.is_done():
+        return
+    try:
+        lag = (discord.utils.utcnow() - interaction.created_at).total_seconds()
+        if lag > 1.5:
+            print(f"[بنك] ⏱️ البوت تأخر {lag:.1f} ثانية قبل ما يرد على الضغطة — السيرفر مشغول أو بطيء")
+    except Exception:
+        pass
+    try:
+        await interaction.response.defer(thinking=thinking, ephemeral=ephemeral)
+    except (discord.HTTPException, discord.InteractionResponded):
+        pass
 
 
 async def _out(interaction: discord.Interaction, panel, embed: discord.Embed | None,
                content: str | None = None, ping=None, file: discord.File | None = None,
                img: bytes | None = None) -> None:
     """لو فيه لوحة: يعدّل رسالة اللوحة. لو لا: يرسل رسالة عامة (للحوالة والسرقة).
-    img = الصورة المرسومة؛ لو None يطلع الرد بالنص (embed) زي أول."""
+    img = الصورة المرسومة؛ لو None يطلع الرد بالنص (embed) زي أول.
+    لو سبق وسوينا _defer نرد عن طريق edit_original_response / followup."""
     if img is not None:
         file = _make_file(img)
         embed = None
+    if interaction.response.is_done():
+        if panel is not None:
+            await interaction.edit_original_response(embed=embed, view=panel, attachments=[file] if file else [])
+        else:
+            mentions = discord.AllowedMentions(users=[ping]) if ping is not None else discord.AllowedMentions.none()
+            kwargs = {"allowed_mentions": mentions}
+            if embed is not None:
+                kwargs["embed"] = embed
+            if content:
+                kwargs["content"] = content
+            if file:
+                kwargs["file"] = file
+            await interaction.followup.send(**kwargs)
+        return
     if panel is not None:
         await interaction.response.edit_message(embed=embed, view=panel, attachments=[file] if file else [])
     else:
@@ -1086,14 +1179,17 @@ async def _out(interaction: discord.Interaction, panel, embed: discord.Embed | N
 # منطق الأزرار
 # ============================================================
 async def _act_account(interaction, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     bank_save(data)
+    await _defer(interaction)
     img = await _account_card(data, interaction.user, acct)
     await _out(interaction, panel, _account_embed(data, interaction.user, acct), img=img)
 
 
 async def _act_deposit(interaction, text, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     n = parse_amount(text, acct["cash"])
@@ -1107,6 +1203,7 @@ async def _act_deposit(interaction, text, panel):
     embed = _bank_embed("🏦 تم الإيداع", f"أودعت **{fmt(n)}** {CURRENCY} بالبنك.")
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
     embed.add_field(name="🏦 البنك", value=fmt(acct["bank"]), inline=True)
+    await _defer(interaction)
     img = await _receipt_card(interaction.user, "إيصال إيداع", _money(n), C_TEXT, [
         ("الكاش", _money(acct["cash"]), None),
         ("البنك", _money(acct["bank"]), None),
@@ -1115,6 +1212,7 @@ async def _act_deposit(interaction, text, panel):
 
 
 async def _act_withdraw(interaction, text, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     n = parse_amount(text, acct["bank"])
@@ -1128,6 +1226,7 @@ async def _act_withdraw(interaction, text, panel):
     embed = _bank_embed("🏦 تم السحب", f"سحبت **{fmt(n)}** {CURRENCY} للكاش.")
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
     embed.add_field(name="🏦 البنك", value=fmt(acct["bank"]), inline=True)
+    await _defer(interaction)
     img = await _receipt_card(interaction.user, "إيصال سحب", _money(n), C_TEXT, [
         ("الكاش", _money(acct["cash"]), None),
         ("البنك", _money(acct["bank"]), None),
@@ -1157,6 +1256,7 @@ async def _act_transfer(interaction, member, text):
     embed.add_field(name="المبلغ", value=f"{fmt(n)} {CURRENCY}", inline=True)
     embed.add_field(name="الرسوم", value=f"{fmt(fee)} {CURRENCY}", inline=True)
     embed.add_field(name="وصل للمستلم", value=f"{fmt(received)} {CURRENCY}", inline=True)
+    await _defer(interaction, True)
     img = await _receipt_card(interaction.user, "حوالة بنكية", _money(n, "-"), C_RED, [
         ("إلى", _clean_name(member.display_name), None),
         ("الرسوم", _money(fee), None),
@@ -1165,6 +1265,7 @@ async def _act_transfer(interaction, member, text):
 
 
 async def _act_interest(interaction, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     wait = _cooldown_left(acct["last_interest"], BANK_INTEREST_COOLDOWN)
@@ -1179,6 +1280,7 @@ async def _act_interest(interaction, panel):
     embed = _bank_embed("📈 فائدة البنك",
                         f"انضاف لرصيدك **{fmt(interest)}** {CURRENCY} ({BANK_INTEREST_RATE * 100:.0f}% من رصيدك).")
     embed.add_field(name="🏦 رصيدك الحين", value=f"{fmt(acct['bank'])} {CURRENCY}", inline=True)
+    await _defer(interaction)
     img = await _receipt_card(interaction.user, "فائدة البنك", _money(interest, "+"), C_GREEN, [
         ("نسبة الفائدة", f"{BANK_INTEREST_RATE * 100:.0f}%", None),
         ("رصيدك الحين", _money(acct["bank"]), None),
@@ -1187,6 +1289,7 @@ async def _act_interest(interaction, panel):
 
 
 async def _act_daily(interaction, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     wait = _cooldown_left(acct["last_daily"], DAILY_COOLDOWN)
@@ -1205,6 +1308,7 @@ async def _act_daily(interaction, panel):
     embed.add_field(name="🔥 الستريك", value=f"{acct['streak']} يوم", inline=True)
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
     embed.set_footer(text="ارجع كل يوم عشان الستريك يكمل وتزيد المكافأة")
+    await _defer(interaction)
     img = await _result_card(interaction.user, "المكافأة اليومية", _money(reward, "+"), C_GREEN, [
         (f"الستريك: {acct['streak']} يوم", C_GOLD),
         (f"الكاش: {_money(acct['cash'])}", C_MUTED)])
@@ -1212,13 +1316,16 @@ async def _act_daily(interaction, panel):
 
 
 async def _act_gold(interaction, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    await _defer(interaction)
     img = await _market_card(data, interaction.user, acct)
     await _out(interaction, panel, _gold_embed(data, acct), img=img)
 
 
 async def _act_buy_gold(interaction, text, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     price = data["_gold"]["price"]
@@ -1237,6 +1344,7 @@ async def _act_buy_gold(interaction, text, panel):
                         f"اشتريت **{fmt(n)}** جرام بسعر {fmt(price)} للجرام = **{fmt(cost)}** {CURRENCY}.")
     embed.add_field(name="🪙 ذهبك", value=f"{fmt(acct['gold'])} جرام", inline=True)
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
+    await _defer(interaction)
     img = await _trade_card(interaction.user, "تم شراء الذهب", [
         ("الكمية", f"{fmt(n)} جرام", None),
         ("سعر الجرام", _money(price), None),
@@ -1246,6 +1354,7 @@ async def _act_buy_gold(interaction, text, panel):
 
 
 async def _act_sell_gold(interaction, text, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     price = data["_gold"]["price"]
@@ -1265,6 +1374,7 @@ async def _act_sell_gold(interaction, text, panel):
                         f"وأخذت **{fmt(revenue)}** {CURRENCY}.")
     embed.add_field(name="🪙 ذهبك", value=f"{fmt(acct['gold'])} جرام", inline=True)
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
+    await _defer(interaction)
     img = await _trade_card(interaction.user, "تم بيع الذهب", [
         ("الكمية", f"{fmt(n)} جرام", None),
         ("سعر الجرام", _money(price), None),
@@ -1273,12 +1383,19 @@ async def _act_sell_gold(interaction, text, panel):
     await _out(interaction, panel, embed, img=img)
 
 
-async def _act_jobs(interaction, panel):
+def _jobs_pages() -> int:
+    return max(1, -(-len(BANK_JOBS) // JOBS_PER_PAGE))
+
+
+async def _act_jobs(interaction, panel, page: int = 0):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     level = _level(acct)
+    pages = _jobs_pages()
+    page = max(0, min(page, pages - 1))
     rows = []
-    for name, min_level, low, high, _emoji in BANK_JOBS:
+    for name, min_level, low, high, _emoji in BANK_JOBS[page * JOBS_PER_PAGE:(page + 1) * JOBS_PER_PAGE]:
         unlocked = level >= min_level
         if acct.get("job") == name:
             sub, name_color = "وظيفتك الحالية", C_GOLD
@@ -1286,15 +1403,18 @@ async def _act_jobs(interaction, panel):
             sub, name_color = None, C_TEXT
         else:
             sub, name_color = f"مقفلة - تحتاج مستوى {min_level}", C_MUTED
-        rows.append({"ring": f"{min_level}+", "name": name, "name_color": name_color, "name_sub": sub,
-                     "value": f"{fmt(low)}-{fmt(high)} {CURRENCY}",
+        rows.append({"ring": f"{min_level}+", "ring_size": 17, "name": name, "name_color": name_color,
+                     "name_sub": sub, "value": f"{fmt(low)}-{fmt(high)} {CURRENCY}",
                      "value_color": C_GOLD if unlocked else C_MUTED})
-    img = await _board_card("الوظائف", rows,
-                            (f"مستواك: {level} - كل {WORK_PER_LEVEL} مرات عمل = مستوى", C_MUTED))
+    footer = f"مستواك {level} - صفحة {page + 1} من {pages}"
+    if pages > 1:
+        footer += " - اضغط الوظائف للصفحة التالية"
+    img = await _board_card("الوظائف", rows, (footer, C_MUTED))
     await _out(interaction, panel, _jobs_embed(acct), img=img)
 
 
 async def _act_apply_job(interaction, job_name, panel):
+    await _defer(interaction)
     job = _find_job(job_name)
     if job is None:
         return await _err(interaction, "⚠️ ما لقيت هذي الوظيفة.")
@@ -1308,13 +1428,15 @@ async def _act_apply_job(interaction, job_name, panel):
     acct["job"] = name
     bank_save(data)
     embed = _bank_embed("💼 تم التوظيف", f"مبروك! صرت **{emoji} {name}**.\nالراتب: {fmt(low)}–{fmt(high)} {CURRENCY} بالمرة.")
+    await _defer(interaction)
     img = await _result_card(interaction.user, "تم التوظيف", None, C_TEXT, [
         (name, C_GOLD),
-        (f"الراتب: {fmt(low)}-{fmt(high)} {CURRENCY}", C_MUTED)])
+        (f"الراتب: من {fmt(low)} إلى {fmt(high)} {CURRENCY}", C_MUTED)])
     await _out(interaction, panel, embed, img=img)
 
 
 async def _act_quit(interaction, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     if not acct.get("job"):
@@ -1322,6 +1444,7 @@ async def _act_quit(interaction, panel):
     old = acct["job"]
     acct["job"] = None
     bank_save(data)
+    await _defer(interaction)
     img = await _result_card(interaction.user, "استقالة", None, C_TEXT, [
         (f"تركت وظيفة {old}", C_GOLD),
         ("مستواك محفوظ", C_MUTED)])
@@ -1329,6 +1452,7 @@ async def _act_quit(interaction, panel):
 
 
 async def _act_work(interaction, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     job = _find_job(acct["job"]) if acct.get("job") else None
@@ -1372,12 +1496,14 @@ async def _act_work(interaction, panel):
         extras.append(("مضاعف الراتب x2", C_GOLD))
     if not extras:
         extras.append((f"المستوى {new_level}", C_MUTED))
+    await _defer(interaction)
     img = await _result_card(interaction.user, f"يوم عمل - {name}", _money(pay, "+"), C_GREEN,
                              [(f"الكاش: {_money(acct['cash'])}", C_MUTED), extras[0]])
     await _out(interaction, panel, embed, img=img)
 
 
 async def _act_crime(interaction, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     wait = _cooldown_left(acct["last_crime"], CRIME_COOLDOWN)
@@ -1398,6 +1524,7 @@ async def _act_crime(interaction, panel):
         headline, amount_text, amount_color = "فشلت الجريمة", _money(fine, "-"), C_RED
     bank_save(data)
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
+    await _defer(interaction)
     img = await _result_card(interaction.user, headline, amount_text, amount_color,
                              [(f"الكاش: {_money(acct['cash'])}", C_MUTED)])
     await _out(interaction, panel, embed, img=img)
@@ -1452,6 +1579,7 @@ async def _act_rob(interaction, member):
         amount_text, amount_color = _money(fine, "-"), C_RED
     bank_save(data)
     embed.set_footer(text="تنبيه: حط فلوسك بالبنك عشان ما تنسرق")
+    await _defer(interaction, True)
     img = await _result_card(interaction.user, headline, amount_text, amount_color, [
         (f"الضحية: {victim_name}", C_MUTED),
         (f"الكاش: {_money(thief['cash'])}", C_MUTED)])
@@ -1459,6 +1587,7 @@ async def _act_rob(interaction, member):
 
 
 async def _act_rich(interaction, panel):
+    await _defer(interaction)
     data = bank_load()
     price = data["_gold"]["price"]
     stock_prices = data["_stocks"]["prices"]
@@ -1480,11 +1609,13 @@ async def _act_rich(interaction, panel):
         lines.append(f"{rank} {member.mention} — **{fmt(worth)}** {CURRENCY}")
     board = [{"member": member, "ring": member.display_name[:1], "name": _clean_name(member.display_name),
               "value": _money(worth)} for member, worth in rows[:10]]
+    await _defer(interaction)
     img = await _board_card("أغنى الأعضاء", board)
     await _out(interaction, panel, _bank_embed("💎 أغنى الأعضاء", "\n".join(lines)), img=img)
 
 
 async def _act_thieves(interaction, panel):
+    await _defer(interaction)
     data = bank_load()
     rows = []
     for uid, acct in data.get(str(interaction.guild.id), {}).items():
@@ -1504,6 +1635,7 @@ async def _act_thieves(interaction, panel):
         lines.append(f"{rank} {member.mention} — **{fmt(robs)}** سرقة ({fmt(stolen)} {CURRENCY})")
     board = [{"member": member, "ring": member.display_name[:1], "name": _clean_name(member.display_name),
               "value": f"{fmt(robs)} سرقة", "value_sub": _money(stolen)} for member, robs, stolen in rows[:10]]
+    await _defer(interaction)
     img = await _board_card("توب الحرامية", board)
     await _out(interaction, panel, _bank_embed("🕵️ توب الحرامية", "\n".join(lines)), img=img)
 
@@ -1572,32 +1704,38 @@ async def _act_invest_open(interaction, owner_id):
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     bank_save(data)
+    await _defer(interaction, True, True)
     img = await _stocks_card(data, acct)
     kwargs = {"view": InvestView(owner_id), "ephemeral": True}
     if img is not None:
         kwargs["file"] = _make_file(img)
     else:
         kwargs["embed"] = _stocks_embed(data, acct)
-    await interaction.response.send_message(**kwargs)
+    await interaction.followup.send(**kwargs)
 
 
 async def _act_stocks_list(interaction, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
+    await _defer(interaction)
     img = await _stocks_card(data, acct)
     await _out(interaction, panel, _stocks_embed(data, acct), img=img)
 
 
 async def _act_portfolio(interaction, panel):
+    await _defer(interaction)
     data = bank_load()
     acct = bank_acct(data, interaction.guild.id, interaction.user.id)
     if not _holdings(acct, data["_stocks"]["prices"]):
         return await _err(interaction, "📊 ما عندك أسهم لين الحين. اشتر من القائمة اللي فوق.")
+    await _defer(interaction)
     img = await _portfolio_card(data, acct)
     await _out(interaction, panel, _portfolio_embed(data, acct), img=img)
 
 
 async def _act_buy_stock(interaction, sym, text, panel):
+    await _defer(interaction)
     if sym not in STOCKS:
         return await _err(interaction, "⚠️ ما لقيت هذي الشركة.")
     name = STOCKS[sym][0]
@@ -1621,6 +1759,7 @@ async def _act_buy_stock(interaction, sym, text, panel):
                         f"اشتريت **{fmt(n)}** سهم بسعر {fmt(price)} للسهم = **{fmt(cost)}** {CURRENCY}.")
     embed.add_field(name="📊 أسهمك", value=f"{fmt(holding['shares'])} سهم", inline=True)
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
+    await _defer(interaction)
     img = await _result_card(interaction.user, f"شراء أسهم {name}", _money(cost), C_GOLD, [
         (f"{fmt(n)} سهم بسعر {_money(price)}", C_MUTED),
         (f"الكاش: {_money(acct['cash'])}", C_MUTED)])
@@ -1628,6 +1767,7 @@ async def _act_buy_stock(interaction, sym, text, panel):
 
 
 async def _act_sell_stock(interaction, sym, text, panel):
+    await _defer(interaction)
     if sym not in STOCKS:
         return await _err(interaction, "⚠️ ما لقيت هذي الشركة.")
     name = STOCKS[sym][0]
@@ -1659,6 +1799,7 @@ async def _act_sell_stock(interaction, sym, text, panel):
     embed.add_field(name="الربح / الخسارة", value=f"{sign}{fmt(abs(pnl))} {CURRENCY}", inline=True)
     embed.add_field(name="💵 الكاش", value=fmt(acct["cash"]), inline=True)
     pnl_color = C_GREEN if pnl > 0 else (C_RED if pnl < 0 else C_GOLD)
+    await _defer(interaction)
     img = await _result_card(interaction.user, f"بيع أسهم {name}", _money(abs(pnl), sign), pnl_color, [
         (f"المبلغ المستلم: {_money(revenue)}", C_MUTED),
         (f"الكاش: {_money(acct['cash'])}", C_MUTED)])
@@ -1714,7 +1855,7 @@ class JobSelect(discord.ui.Select):
     def __init__(self):
         options = [
             discord.SelectOption(label=name, value=name, emoji=emoji,
-                                 description=f"مستوى {lvl}+ • {low}–{high} {CURRENCY}")
+                                 description=f"مستوى {lvl}+ • {fmt(low)}–{fmt(high)} {CURRENCY}")
             for name, lvl, low, high, emoji in BANK_JOBS
         ]
         super().__init__(placeholder="💼 اختر وظيفة للتوظف", options=options, min_values=1, max_values=1, row=3)
@@ -1804,6 +1945,7 @@ class BankPanel(discord.ui.View):
         super().__init__(timeout=300)
         self.owner_id = owner_id
         self.message: discord.Message | None = None
+        self.jobs_page = -1   # أول ضغطة على "الوظائف" تفتح الصفحة 1 وكل ضغطة بعدها الصفحة اللي بعدها
         self.add_item(JobSelect())
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -1867,7 +2009,8 @@ class BankPanel(discord.ui.View):
     # ----- صف 3: الوظائف والجريمة والسرقة -----
     @discord.ui.button(label="الوظائف", emoji="💼", style=discord.ButtonStyle.secondary, row=2)
     async def b_jobs(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await _act_jobs(interaction, self)
+        self.jobs_page = (self.jobs_page + 1) % _jobs_pages()
+        await _act_jobs(interaction, self, self.jobs_page)
 
     @discord.ui.button(label="عمل", emoji="⚒️", style=discord.ButtonStyle.secondary, row=2)
     async def b_work(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2079,4 +2222,5 @@ def setup_bank(bot: commands.Bot) -> None:
         for problem in problems:
             print(f"[بنك]    - {problem}")
     else:
+        _prewarm_images()
         print("[بنك] 🖼️ صور البنك جاهزة")
