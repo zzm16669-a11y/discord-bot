@@ -25,66 +25,68 @@ class StopBroadcastView(View):
         )
 
 
-def setup_broadcast(bot: discord.Client):
-    @bot.event
-    async def on_message(message: discord.Message):
-        if message.author.bot or not message.guild:
-            return
+async def handle_broadcast_message(message: discord.Message) -> bool:
+    """ينفّذ أمر .dc ويرجع True إذا كانت الرسالة أمر برودكاست."""
+    if message.author.bot or not message.guild:
+        return False
 
-        content = message.content.strip()
-        if content == ".dc" or content.startswith(".dc "):
-            if not message.author.guild_permissions.administrator:
-                await message.reply("❌ هذا الأمر مخصص للإدارة فقط.")
-                return
+    content = message.content.strip()
+    if content != ".dc" and not content.startswith(".dc "):
+        return False
 
-            broadcast_text = message.content[3:].strip()
-            if not broadcast_text:
-                await message.reply(
-                    "⚠️ اكتب الرسالة بعد الأمر، مثال:\n`.dc حياكم الله في السيرفر`"
-                )
-                return
+    if not message.author.guild_permissions.administrator:
+        await message.reply("❌ هذا الأمر مخصص للإدارة فقط.")
+        return True
 
-            targets = [m for m in message.guild.members if not m.bot]
-            if not targets:
-                await message.reply("⚠️ لا يوجد أعضاء مستهدفون للإرسال.")
-                return
+    broadcast_text = message.content[3:].strip()
+    if not broadcast_text:
+        await message.reply(
+            "⚠️ اكتب الرسالة بعد الأمر، مثال:\n`.dc حياكم الله في السيرفر`"
+        )
+        return True
 
-            stop_event = asyncio.Event()
-            view = StopBroadcastView(message.author.id, stop_event)
+    targets = [m for m in message.guild.members if not m.bot]
+    if not targets:
+        await message.reply("⚠️ لا يوجد أعضاء مستهدفون للإرسال.")
+        return True
 
-            status_msg = await message.reply(
-                f"⏳ بدأ الإرسال لـ **{len(targets)}** عضو (تأخير 3 ثواني بين كل رسالة)...",
-                view=view,
-            )
+    stop_event = asyncio.Event()
+    view = StopBroadcastView(message.author.id, stop_event)
 
-            sent_count = 0
-            failed_count = 0
+    status_msg = await message.reply(
+        f"⏳ بدأ الإرسال لـ **{len(targets)}** عضو (تأخير 3 ثواني بين كل رسالة)...",
+        view=view,
+    )
 
-            for index, member in enumerate(targets):
-                if stop_event.is_set():
-                    break
+    sent_count = 0
+    failed_count = 0
 
-                try:
-                    await member.send(f"{broadcast_text}\n<@{member.id}>")
-                    sent_count += 1
-                except Exception:
-                    failed_count += 1
+    for index, member in enumerate(targets):
+        if stop_event.is_set():
+            break
 
-                if index < len(targets) - 1 and not stop_event.is_set():
-                    try:
-                        await asyncio.wait_for(stop_event.wait(), timeout=3.0)
-                        break
-                    except asyncio.TimeoutError:
-                        pass
+        try:
+            await member.send(f"{broadcast_text}\n<@{member.id}>")
+            sent_count += 1
+        except Exception:
+            failed_count += 1
 
-            title = "🛑 **تم إيقاف البرودكاست!**" if stop_event.is_set() else "✅ **اكتمل البرودكاست!**"
-            remaining = len(targets) - (sent_count + failed_count)
-            await status_msg.edit(
-                content=(
-                    f"{title}\n"
-                    f"• تم الإرسال بنجاح: **{sent_count}**\n"
-                    f"• فشل الإرسال (الخاص مقفل أو خطأ): **{failed_count}**\n"
-                    f"• المتبقي غير المرسل: **{remaining}**"
-                ),
-                view=None,
-            )
+        if index < len(targets) - 1 and not stop_event.is_set():
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=3.0)
+                break
+            except asyncio.TimeoutError:
+                pass
+
+    title = "🛑 **تم إيقاف البرودكاست!**" if stop_event.is_set() else "✅ **اكتمل البرودكاست!**"
+    remaining = len(targets) - (sent_count + failed_count)
+    await status_msg.edit(
+        content=(
+            f"{title}\n"
+            f"• تم الإرسال بنجاح: **{sent_count}**\n"
+            f"• فشل الإرسال (الخاص مقفل أو خطأ): **{failed_count}**\n"
+            f"• المتبقي غير المرسل: **{remaining}**"
+        ),
+        view=None,
+    )
+    return True
