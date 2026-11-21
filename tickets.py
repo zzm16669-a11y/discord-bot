@@ -52,12 +52,10 @@ ENFORCE_CLAIM_LOCK = True
 TICKET_PANEL_IMAGE = "panel.png"
 
 TICKET_TYPES = [
-    ("inquiry", "❓", "استفسار"),
-    ("complaint", "⚠️", "شكوى"),
-    ("support", "🛠️", "التواصل مع الدعم الفني"),
-    ("verification", "✅", "توثيق"),
+    ("support", "📢", "دعم | d3m"),
 ]
 TICKET_TYPE_LABELS = {key: label for key, _, label in TICKET_TYPES}
+TICKET_TYPE_DESCRIPTION = "طلب دعم"
 
 
 # ============================================================
@@ -139,7 +137,8 @@ async def _lock_to_claimer(channel: discord.TextChannel, claimer: discord.Member
 class TicketTypeSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label=label, value=key, emoji=emoji)
+            discord.SelectOption(
+                label=label, value=key, emoji=emoji, description=TICKET_TYPE_DESCRIPTION)
             for key, emoji, label in TICKET_TYPES
         ]
         super().__init__(
@@ -204,7 +203,7 @@ async def open_ticket(interaction: discord.Interaction, ticket_type: str):
     embed.add_field(name="فتحه", value=author.mention, inline=True)
     embed.set_footer(text=f"معرف العضو: {author.id}")
 
-    await channel.send(content=role.mention, embed=embed, view=TicketControlView())
+    await channel.send(content=f"{author.mention} {role.mention}", embed=embed, view=TicketControlView())
     await interaction.followup.send(f"✅ تم فتح تكتك: {channel.mention}", ephemeral=True)
 
 
@@ -243,9 +242,9 @@ class TicketControlView(discord.ui.View):
         if ticket is None:
             await interaction.response.send_message("⚠️ هذا الروم مو مسجل كتكت.", ephemeral=True)
             return
-        is_opener = str(interaction.user.id) == ticket["opener_id"]
-        if not (_is_support(interaction.user) or is_opener):
-            await interaction.response.send_message("⚠️ بس فريق الدعم أو صاحب التكت يقدر يغلقه.", ephemeral=True)
+        # الإغلاق للإدارة (فريق الدعم) فقط — صاحب التكت ما يقدر يقفله
+        if not _is_support(interaction.user):
+            await interaction.response.send_message("⚠️ بس فريق الدعم يقدر يغلق التكت.", ephemeral=True)
             return
         for c in self.children:
             c.disabled = True
