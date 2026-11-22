@@ -6,7 +6,7 @@ from discord.ext import commands
 from PIL import Image, ImageDraw
 
 # ================== الإعدادات ==================
-WELCOME_CHANNEL_ID = 123456789012345678  # حط هنا ايدي روم الترحيب
+WELCOME_CHANNEL_ID = 1573898040362668084  # حط هنا ايدي روم الترحيب
 
 # الصورة لازم تكون بنفس مجلد هذا الملف باسم welcome_bg.png
 BG_PATH = Path(__file__).parent / "welcome_bg.png"
