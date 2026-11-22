@@ -1,10 +1,10 @@
 """
-voice_rooms.py — نظام الغرف الصوتية الخاصة (Join to Create) + لوحة تحكم بالأزرار
+voice_rooms.py — نظام الغرف الصوتية الخاصة (Join to Create) + لوحة تحكم ثابتة بروم نصي
 =====================================================================
 الفكرة:
   - العضو يدخل روم "أنشئ غرفتك" ← البوت يسوي له روم صوتي خاص وينقله له.
-  - داخل شات الروم الصوتي تنرسل لوحة التحكم (صورة + أزرار).
-  - بس مالك الغرفة يقدر يضغط الأزرار، والباقي يطلع له رد مخفي.
+  - لوحة التحكم رسالة وحدة ثابتة بروم "لوحة-التحكم". تكتب  .لوحة  فتنرسل اللوحة وتنحذف رسالة الأمر.
+  - أي زر يتحكم بالغرفة اللي العضو داخلها الحين، وبس مالك الغرفة يقدر يستخدمه.
   - الغرفة تنحذف تلقائيًا لما تفضى من الأعضاء.
   - الأزرار تشتغل حتى بعد ريستارت البوت.
 
@@ -12,23 +12,27 @@ voice_rooms.py — نظام الغرف الصوتية الخاصة (Join to Crea
     import voice_rooms
     voice_rooms.setup_voice_rooms(bot)
 
-صلاحيات البوت المطلوبة: Manage Channels / Move Members / Send Messages / Embed Links / Attach Files
+صلاحيات البوت المطلوبة: Manage Channels / Move Members / Send Messages / Embed Links /
+                         Attach Files / Manage Messages (عشان يحذف رسالة .لوحة)
 المكتبة: discord.py 2.1 أو أحدث (عشان قوائم اختيار الأعضاء).
 """
 
 import asyncio
 import json
 import os
+import sys
 import time
 
 import discord
 from discord import ui
+from discord.ext import commands
 
 # ============================================================
 # الإعدادات — عدّل هنا بس
 # ============================================================
-CREATE_ROOM_CHANNEL_ID = 1573893960781533295     # آيدي روم "أنشئ غرفتك" الصوتي  (لازم تحطه)
-ROOMS_CATEGORY_ID = 1573893886206550147          # آيدي الكاتقوري اللي تنعمل فيه الغرف (0 = نفس كاتقوري روم الإنشاء)
+CREATE_ROOM_CHANNEL_ID = 1573893960781533295   # روم "أنشئ غرفتك" الصوتي
+ROOMS_CATEGORY_ID = 1573893886206550147        # الكاتقوري اللي تنعمل فيه الغرف (0 = نفس كاتقوري روم الإنشاء)
+CONTROL_CHANNEL_ID = 1573895530252083260       # روم "لوحة-التحكم" النصي (اللوحة تنرسل له)
 
 PANEL_IMAGE_PATH = "voice_panel.png"   # صورة اللوحة (جنب bot.py). لو ما لقاها يرسل اللوحة بدون صورة
 PANEL_FOOTER = "OwzKLR"
@@ -78,80 +82,19 @@ def _save() -> None:
         print(f"[voice_rooms] ما قدرت أحفظ الملف: {e}")
 
 
-_rooms: dict = _load()          # {آيدي الروم: {"owner": آيدي المالك, "panel": آيدي رسالة اللوحة}}
+_rooms: dict = _load()          # {آيدي الروم: {"owner": آيدي المالك}}
 _cooldown: dict = {}            # {آيدي العضو: وقت آخر إنشاء}
 _creating: set = set()          # أعضاء جاري إنشاء غرفة لهم الحين
 _ready_done = False
+_bot = None
 
 
 def get_room(channel_id) -> dict | None:
     return _rooms.get(str(channel_id))
 
 
-# ============================================================
-# حالة الغرفة + شكل اللوحة
-# ============================================================
-def room_state(channel: discord.VoiceChannel) -> tuple[bool, bool, int]:
-    """(مقفلة؟، مخفية؟، حد الأعضاء) من صلاحيات الغرفة الحالية."""
-    ow = channel.overwrites_for(channel.guild.default_role)
-    return ow.connect is False, ow.view_channel is False, channel.user_limit
-
-
-def build_embed(channel: discord.VoiceChannel, owner_id: int, has_image: bool,
-                locked: bool, hidden: bool, limit: int) -> discord.Embed:
-    owner = channel.guild.get_member(owner_id)
-    embed = discord.Embed(
-        title="لوحة التحكم بالغرفة",
-        description="تحكم بغرفتك الصوتية من الأزرار تحت.\nبس مالك الغرفة يقدر يستخدمها.",
-        color=GOLD,
-    )
-    embed.add_field(name="المالك", value=owner.mention if owner else f"<@{owner_id}>", inline=True)
-    embed.add_field(name="الحالة", value="مقفلة" if locked else "مفتوحة", inline=True)
-    embed.add_field(name="الظهور", value="مخفية" if hidden else "ظاهرة", inline=True)
-    embed.add_field(name="عدد الأعضاء", value=str(limit) if limit else "بدون حد", inline=True)
-    embed.set_footer(text=PANEL_FOOTER)
-    if has_image:
-        embed.set_image(url=f"attachment://{PANEL_IMAGE_NAME}")
-    return embed
-
-
-async def refresh_panel(channel: discord.VoiceChannel, *, owner_id: int | None = None,
-                        locked: bool | None = None, hidden: bool | None = None,
-                        limit: int | None = None) -> None:
-    """يحدّث رسالة اللوحة. القيم اللي تمررها تُستخدم بدل قراءة الكاش (الكاش يتأخر بعد التعديل)."""
-    info = get_room(channel.id)
-    if not info or not info.get("panel"):
-        return
-    try:
-        msg = await channel.fetch_message(info["panel"])
-    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-        return
-    cur_locked, cur_hidden, cur_limit = room_state(channel)
-    locked = cur_locked if locked is None else locked
-    hidden = cur_hidden if hidden is None else hidden
-    limit = cur_limit if limit is None else limit
-    has_image = any(a.filename == PANEL_IMAGE_NAME for a in msg.attachments)
-    embed = build_embed(channel, owner_id or info["owner"], has_image, locked, hidden, limit)
-    try:
-        await msg.edit(embed=embed, view=RoomPanel(locked, hidden))
-    except (discord.NotFound, discord.HTTPException):
-        pass
-
-
-# ============================================================
-# فحص المالك
-# ============================================================
-async def get_owned_room(interaction: discord.Interaction) -> discord.VoiceChannel | None:
-    """يرجع الروم لو اللي ضغط هو المالك، وإلا يرد عليه رد مخفي ويرجع None."""
-    channel = interaction.guild.get_channel(interaction.channel_id) if interaction.guild else None
-    info = get_room(interaction.channel_id) if channel is not None else None
-    if info is None:
-        await interaction.response.send_message("هذي مو غرفة خاصة.", ephemeral=True)
-        return None
-    if info["owner"] != interaction.user.id:
-        await interaction.response.send_message("هذي مو غرفتك، بس مالك الغرفة يقدر يستخدم الأزرار.", ephemeral=True)
-        return None
-    return channel
+def _has_humans(channel: discord.VoiceChannel) -> bool:
+    return any(not m.bot for m in channel.members)
 
 
 async def remove_room(channel: discord.VoiceChannel, reason: str) -> None:
@@ -161,6 +104,45 @@ async def remove_room(channel: discord.VoiceChannel, reason: str) -> None:
         await channel.delete(reason=reason)
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         pass
+
+
+# ============================================================
+# فحص المالك — الأزرار تتحكم بالغرفة اللي العضو داخلها
+# ============================================================
+async def get_owned_room(interaction: discord.Interaction) -> discord.VoiceChannel | None:
+    """يرجع غرفة العضو لو هو مالكها، وإلا يرد عليه رد مخفي ويرجع None."""
+    voice = getattr(interaction.user, "voice", None)
+    channel = voice.channel if voice is not None else None
+    if channel is None:
+        await interaction.response.send_message(
+            "ادخل غرفتك الصوتية أول عشان تتحكم فيها.", ephemeral=True)
+        return None
+    info = get_room(channel.id)
+    if info is None:
+        await interaction.response.send_message(
+            "انت مو داخل غرفة خاصة. ادخل روم «أنشئ غرفتك» وتنعمل لك غرفة.", ephemeral=True)
+        return None
+    if info["owner"] != interaction.user.id:
+        await interaction.response.send_message(
+            "هذي مو غرفتك، بس مالك الغرفة يقدر يستخدم الأزرار.", ephemeral=True)
+        return None
+    return channel
+
+
+async def _set_everyone(interaction: discord.Interaction, channel: discord.VoiceChannel,
+                        ok_text: str, **perms) -> None:
+    """يعدل صلاحية @everyone على الغرفة (قفل / فتح / إخفاء / إظهار) ويرد على المالك."""
+    await interaction.response.defer(ephemeral=True)
+    ow = channel.overwrites_for(channel.guild.default_role)
+    for key, value in perms.items():
+        setattr(ow, key, value)
+    try:
+        await channel.set_permissions(channel.guild.default_role, overwrite=ow,
+                                      reason="تحكم من مالك الغرفة")
+    except discord.HTTPException:
+        await interaction.followup.send("ما قدرت أنفذ الأمر.", ephemeral=True)
+        return
+    await interaction.followup.send(ok_text, ephemeral=True)
 
 
 # ============================================================
@@ -210,7 +192,6 @@ class LimitModal(ui.Modal, title="عدد الأعضاء"):
         except discord.HTTPException:
             await interaction.followup.send("ما قدرت أغير العدد.", ephemeral=True)
             return
-        await refresh_panel(channel, limit=limit)
         await interaction.followup.send("تم تحديد العدد: " + (str(limit) if limit else "بدون حد"), ephemeral=True)
 
 
@@ -229,7 +210,6 @@ class PickSelect(ui.UserSelect):
         await interaction.response.defer()
         picked = self.values[0]
         target = interaction.guild.get_member(picked.id)
-        owner_id = interaction.user.id
         result = ""
 
         if self.action == "allow":
@@ -246,7 +226,7 @@ class PickSelect(ui.UserSelect):
         elif target is None or target not in channel.members:
             result = "هذا الشخص مو موجود بالغرفة."
 
-        elif target.id == owner_id:
+        elif target.id == interaction.user.id:
             result = "هذا انت مالك الغرفة."
 
         elif self.action == "kick":
@@ -266,7 +246,6 @@ class PickSelect(ui.UserSelect):
                                                   stream=True, reason="نقل ملكية الغرفة")
                     _rooms[str(channel.id)]["owner"] = target.id
                     _save()
-                    await refresh_panel(channel, owner_id=target.id)
                     result = f"تم نقل ملكية الغرفة إلى {target.mention}."
                 except discord.HTTPException:
                     result = "ما قدرت أنقل الملكية."
@@ -284,58 +263,37 @@ class PickView(ui.View):
 # لوحة التحكم (دائمة — تشتغل بعد الريستارت)
 # ============================================================
 class RoomPanel(ui.View):
-    def __init__(self, locked: bool = False, hidden: bool = False):
+    def __init__(self):
         super().__init__(timeout=None)
-        # النص والإيموجي يتغيرون حسب الحالة
-        self.lock_toggle.label = "فتح الغرفة" if locked else "قفل الغرفة"
-        self.lock_toggle.emoji = EMOJI["unlock"] if locked else EMOJI["lock"]
-        self.hide_toggle.label = "إظهار الغرفة" if hidden else "إخفاء الغرفة"
-        self.hide_toggle.emoji = EMOJI["eye"] if hidden else EMOJI["eye_hidden"]
 
     # ---------- الصف الأول ----------
     @ui.button(label="قفل الغرفة", emoji=EMOJI["lock"], style=discord.ButtonStyle.secondary,
                custom_id="vr:lock", row=0)
-    async def lock_toggle(self, interaction: discord.Interaction, button: ui.Button):
+    async def lock_btn(self, interaction: discord.Interaction, button: ui.Button):
         channel = await get_owned_room(interaction)
-        if channel is None:
-            return
-        await interaction.response.defer()
-        locked, hidden, limit = room_state(channel)
-        locked = not locked
-        ow = channel.overwrites_for(channel.guild.default_role)
-        ow.connect = False if locked else None
-        try:
-            await channel.set_permissions(channel.guild.default_role, overwrite=ow,
-                                          reason="قفل/فتح الغرفة من المالك")
-        except discord.HTTPException:
-            await interaction.followup.send("ما قدرت أغير حالة القفل.", ephemeral=True)
-            return
-        has_image = any(a.filename == PANEL_IMAGE_NAME for a in interaction.message.attachments)
-        await interaction.edit_original_response(
-            embed=build_embed(channel, interaction.user.id, has_image, locked, hidden, limit),
-            view=RoomPanel(locked, hidden))
+        if channel is not None:
+            await _set_everyone(interaction, channel, "تم قفل الغرفة.", connect=False)
+
+    @ui.button(label="فتح الغرفة", emoji=EMOJI["unlock"], style=discord.ButtonStyle.secondary,
+               custom_id="vr:unlock", row=0)
+    async def unlock_btn(self, interaction: discord.Interaction, button: ui.Button):
+        channel = await get_owned_room(interaction)
+        if channel is not None:
+            await _set_everyone(interaction, channel, "تم فتح الغرفة.", connect=None)
+
+    @ui.button(label="إظهار الغرفة", emoji=EMOJI["eye"], style=discord.ButtonStyle.secondary,
+               custom_id="vr:show", row=0)
+    async def show_btn(self, interaction: discord.Interaction, button: ui.Button):
+        channel = await get_owned_room(interaction)
+        if channel is not None:
+            await _set_everyone(interaction, channel, "تم إظهار الغرفة.", view_channel=None)
 
     @ui.button(label="إخفاء الغرفة", emoji=EMOJI["eye_hidden"], style=discord.ButtonStyle.secondary,
                custom_id="vr:hide", row=0)
-    async def hide_toggle(self, interaction: discord.Interaction, button: ui.Button):
+    async def hide_btn(self, interaction: discord.Interaction, button: ui.Button):
         channel = await get_owned_room(interaction)
-        if channel is None:
-            return
-        await interaction.response.defer()
-        locked, hidden, limit = room_state(channel)
-        hidden = not hidden
-        ow = channel.overwrites_for(channel.guild.default_role)
-        ow.view_channel = False if hidden else None
-        try:
-            await channel.set_permissions(channel.guild.default_role, overwrite=ow,
-                                          reason="إخفاء/إظهار الغرفة من المالك")
-        except discord.HTTPException:
-            await interaction.followup.send("ما قدرت أغير حالة الإخفاء.", ephemeral=True)
-            return
-        has_image = any(a.filename == PANEL_IMAGE_NAME for a in interaction.message.attachments)
-        await interaction.edit_original_response(
-            embed=build_embed(channel, interaction.user.id, has_image, locked, hidden, limit),
-            view=RoomPanel(locked, hidden))
+        if channel is not None:
+            await _set_everyone(interaction, channel, "تم إخفاء الغرفة.", view_channel=False)
 
     @ui.button(label="تغيير الاسم", emoji=EMOJI["rename"], style=discord.ButtonStyle.secondary,
                custom_id="vr:rename", row=0)
@@ -344,14 +302,14 @@ class RoomPanel(ui.View):
             return
         await interaction.response.send_modal(RenameModal())
 
+    # ---------- الصف الثاني ----------
     @ui.button(label="عدد الأعضاء", emoji=EMOJI["limit"], style=discord.ButtonStyle.secondary,
-               custom_id="vr:limit", row=0)
+               custom_id="vr:limit", row=1)
     async def limit_btn(self, interaction: discord.Interaction, button: ui.Button):
         if await get_owned_room(interaction) is None:
             return
         await interaction.response.send_modal(LimitModal())
 
-    # ---------- الصف الثاني ----------
     @ui.button(label="طرد شخص", emoji=EMOJI["kick"], style=discord.ButtonStyle.secondary,
                custom_id="vr:kick", row=1)
     async def kick_btn(self, interaction: discord.Interaction, button: ui.Button):
@@ -386,13 +344,60 @@ class RoomPanel(ui.View):
         await remove_room(channel, "حذف الغرفة من المالك")
 
 
+def build_panel_embed(has_image: bool) -> discord.Embed:
+    embed = discord.Embed(
+        title="لوحة التحكم بالغرفة",
+        description="ادخل غرفتك الصوتية ثم اضغط الأزرار تحت عشان تتحكم فيها.\n"
+                    "بس مالك الغرفة يقدر يستخدم الأزرار.",
+        color=GOLD,
+    )
+    embed.set_footer(text=PANEL_FOOTER)
+    if has_image:
+        embed.set_image(url=f"attachment://{PANEL_IMAGE_NAME}")
+    return embed
+
+
+# ============================================================
+# أمر .لوحة — يرسل لوحة التحكم ويحذف رسالة الأمر
+# ============================================================
+@commands.command(name="لوحة")
+async def panel_cmd(ctx: commands.Context):
+    member = ctx.author
+    allowed = ctx.guild is not None and isinstance(member, discord.Member) and (
+        member.id == ctx.guild.owner_id or member.guild_permissions.administrator)
+    if not allowed:
+        try:
+            await ctx.message.add_reaction("❌")
+        except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+            pass
+        return
+
+    target = ctx.guild.get_channel(CONTROL_CHANNEL_ID) or ctx.channel
+    kwargs = {}
+    has_image = os.path.isfile(_PANEL_FILE)
+    if has_image:
+        kwargs["file"] = discord.File(_PANEL_FILE, filename=PANEL_IMAGE_NAME)
+    try:
+        await target.send(embed=build_panel_embed(has_image), view=RoomPanel(), **kwargs)
+    except (discord.Forbidden, discord.HTTPException) as e:
+        print(f"[voice_rooms] ما قدرت أرسل اللوحة: {e}")
+        await ctx.send("ما قدرت أرسل اللوحة، تأكد من صلاحيات البوت بروم التحكم.")
+        return
+
+    # نحذف رسالة الأمر بدون ما تنسجل بلوق الحذف (نفس طريقة .قول)
+    silent_ids = getattr(sys.modules.get("__main__"), "silent_deleted_ids", None)
+    if isinstance(silent_ids, set):
+        silent_ids.add(ctx.message.id)
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        if isinstance(silent_ids, set):
+            silent_ids.discard(ctx.message.id)
+
+
 # ============================================================
 # إنشاء الغرفة تلقائيًا + حذفها لما تفضى
 # ============================================================
-def _has_humans(channel: discord.VoiceChannel) -> bool:
-    return any(not m.bot for m in channel.members)
-
-
 async def create_room(member: discord.Member, create_channel: discord.VoiceChannel) -> int | None:
     """ينشئ غرفة للعضو وينقله لها. لو عنده غرفة من قبل ينقله لها. يرجع آيدي الغرفة."""
     guild = member.guild
@@ -434,7 +439,7 @@ async def create_room(member: discord.Member, create_channel: discord.VoiceChann
             print(f"[voice_rooms] فشل إنشاء الغرفة: {e}")
             return None
 
-        _rooms[str(room.id)] = {"owner": member.id, "panel": None}
+        _rooms[str(room.id)] = {"owner": member.id}
         _save()
 
         try:
@@ -442,19 +447,6 @@ async def create_room(member: discord.Member, create_channel: discord.VoiceChann
         except discord.HTTPException:
             await remove_room(room, "العضو طلع قبل النقل")
             return None
-
-        kwargs = {}
-        has_image = os.path.isfile(_PANEL_FILE)
-        if has_image:
-            kwargs["file"] = discord.File(_PANEL_FILE, filename=PANEL_IMAGE_NAME)
-        try:
-            msg = await room.send(content=member.mention,
-                                  embed=build_embed(room, member.id, has_image, False, False, room.user_limit),
-                                  view=RoomPanel(), **kwargs)
-            _rooms[str(room.id)]["panel"] = msg.id
-            _save()
-        except (discord.Forbidden, discord.HTTPException) as e:
-            print(f"[voice_rooms] ما قدرت أرسل اللوحة: {e}")
         return room.id
     finally:
         _creating.discard(member.id)
@@ -480,7 +472,7 @@ async def _on_ready():
     if _ready_done:
         return
     _ready_done = True
-    _bot.add_view(RoomPanel())   # يخلي أزرار اللوحات القديمة تشتغل بعد الريستارت
+    _bot.add_view(RoomPanel())   # يخلي أزرار اللوحة تشتغل بعد الريستارت
 
     # تنظيف الغرف اللي انحذفت أو فضت وقت ما كان البوت مطفي
     for cid in list(_rooms.keys()):
@@ -495,12 +487,14 @@ async def _on_ready():
         print("[voice_rooms] ⚠️ لازم تحط CREATE_ROOM_CHANNEL_ID داخل voice_rooms.py عشان النظام يشتغل.")
 
 
-_bot = None
-
-
 def setup_voice_rooms(bot) -> None:
     """يسجل النظام بالبوت. يتنادى مرة وحدة من bot.py."""
     global _bot
     _bot = bot
     bot.add_listener(_on_voice_state_update, "on_voice_state_update")
     bot.add_listener(_on_ready, "on_ready")
+    # يتسجل بس لو ما فيه أمر "لوحة" ثاني (يمنع خطأ "الأمر مسجل مرتين")
+    if bot.get_command("لوحة") is None:
+        bot.add_command(panel_cmd)
+    else:
+        print("[voice_rooms] ⚠️ فيه أمر اسمه «لوحة» مسجل من قبل، ما سجلت أمر اللوحة.")
