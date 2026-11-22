@@ -267,35 +267,35 @@ class RoomPanel(ui.View):
         super().__init__(timeout=None)
 
     # ---------- الصف الأول ----------
-    @ui.button(label="قفل الغرفة", emoji=EMOJI["lock"], style=discord.ButtonStyle.secondary,
+    @ui.button(emoji=EMOJI["lock"], style=discord.ButtonStyle.secondary,
                custom_id="vr:lock", row=0)
     async def lock_btn(self, interaction: discord.Interaction, button: ui.Button):
         channel = await get_owned_room(interaction)
         if channel is not None:
             await _set_everyone(interaction, channel, "تم قفل الغرفة.", connect=False)
 
-    @ui.button(label="فتح الغرفة", emoji=EMOJI["unlock"], style=discord.ButtonStyle.secondary,
+    @ui.button(emoji=EMOJI["unlock"], style=discord.ButtonStyle.secondary,
                custom_id="vr:unlock", row=0)
     async def unlock_btn(self, interaction: discord.Interaction, button: ui.Button):
         channel = await get_owned_room(interaction)
         if channel is not None:
             await _set_everyone(interaction, channel, "تم فتح الغرفة.", connect=None)
 
-    @ui.button(label="إظهار الغرفة", emoji=EMOJI["eye"], style=discord.ButtonStyle.secondary,
+    @ui.button(emoji=EMOJI["eye"], style=discord.ButtonStyle.secondary,
                custom_id="vr:show", row=0)
     async def show_btn(self, interaction: discord.Interaction, button: ui.Button):
         channel = await get_owned_room(interaction)
         if channel is not None:
             await _set_everyone(interaction, channel, "تم إظهار الغرفة.", view_channel=None)
 
-    @ui.button(label="إخفاء الغرفة", emoji=EMOJI["eye_hidden"], style=discord.ButtonStyle.secondary,
+    @ui.button(emoji=EMOJI["eye_hidden"], style=discord.ButtonStyle.secondary,
                custom_id="vr:hide", row=0)
     async def hide_btn(self, interaction: discord.Interaction, button: ui.Button):
         channel = await get_owned_room(interaction)
         if channel is not None:
             await _set_everyone(interaction, channel, "تم إخفاء الغرفة.", view_channel=False)
 
-    @ui.button(label="تغيير الاسم", emoji=EMOJI["rename"], style=discord.ButtonStyle.secondary,
+    @ui.button(emoji=EMOJI["rename"], style=discord.ButtonStyle.secondary,
                custom_id="vr:rename", row=0)
     async def rename_btn(self, interaction: discord.Interaction, button: ui.Button):
         if await get_owned_room(interaction) is None:
@@ -303,14 +303,14 @@ class RoomPanel(ui.View):
         await interaction.response.send_modal(RenameModal())
 
     # ---------- الصف الثاني ----------
-    @ui.button(label="عدد الأعضاء", emoji=EMOJI["limit"], style=discord.ButtonStyle.secondary,
+    @ui.button(emoji=EMOJI["limit"], style=discord.ButtonStyle.secondary,
                custom_id="vr:limit", row=1)
     async def limit_btn(self, interaction: discord.Interaction, button: ui.Button):
         if await get_owned_room(interaction) is None:
             return
         await interaction.response.send_modal(LimitModal())
 
-    @ui.button(label="طرد شخص", emoji=EMOJI["kick"], style=discord.ButtonStyle.secondary,
+    @ui.button(emoji=EMOJI["kick"], style=discord.ButtonStyle.secondary,
                custom_id="vr:kick", row=1)
     async def kick_btn(self, interaction: discord.Interaction, button: ui.Button):
         if await get_owned_room(interaction) is None:
@@ -318,7 +318,7 @@ class RoomPanel(ui.View):
         await interaction.response.send_message("اختر الشخص اللي تبي تطرده من الغرفة:",
                                                 view=PickView("kick", "اختر شخص من الغرفة..."), ephemeral=True)
 
-    @ui.button(label="سماح لشخص", emoji=EMOJI["allow"], style=discord.ButtonStyle.secondary,
+    @ui.button(emoji=EMOJI["allow"], style=discord.ButtonStyle.secondary,
                custom_id="vr:allow", row=1)
     async def allow_btn(self, interaction: discord.Interaction, button: ui.Button):
         if await get_owned_room(interaction) is None:
@@ -326,7 +326,7 @@ class RoomPanel(ui.View):
         await interaction.response.send_message("اختر الشخص اللي تبي تسمح له بدخول الغرفة (حتى لو مقفلة):",
                                                 view=PickView("allow", "اختر شخص..."), ephemeral=True)
 
-    @ui.button(label="نقل الملكية", emoji=EMOJI["owner"], style=discord.ButtonStyle.secondary,
+    @ui.button(emoji=EMOJI["owner"], style=discord.ButtonStyle.secondary,
                custom_id="vr:owner", row=1)
     async def owner_btn(self, interaction: discord.Interaction, button: ui.Button):
         if await get_owned_room(interaction) is None:
@@ -334,7 +334,7 @@ class RoomPanel(ui.View):
         await interaction.response.send_message("اختر الشخص اللي تبي تنقل له ملكية الغرفة (لازم يكون بالغرفة):",
                                                 view=PickView("owner", "اختر شخص من الغرفة..."), ephemeral=True)
 
-    @ui.button(label="حذف الغرفة", emoji=EMOJI["delete"], style=discord.ButtonStyle.danger,
+    @ui.button(emoji=EMOJI["delete"], style=discord.ButtonStyle.secondary,
                custom_id="vr:delete", row=1)
     async def delete_btn(self, interaction: discord.Interaction, button: ui.Button):
         channel = await get_owned_room(interaction)
@@ -342,19 +342,6 @@ class RoomPanel(ui.View):
             return
         await interaction.response.send_message("تم حذف الغرفة.", ephemeral=True)
         await remove_room(channel, "حذف الغرفة من المالك")
-
-
-def build_panel_embed(has_image: bool) -> discord.Embed:
-    embed = discord.Embed(
-        title="لوحة التحكم بالغرفة",
-        description="ادخل غرفتك الصوتية ثم اضغط الأزرار تحت عشان تتحكم فيها.\n"
-                    "بس مالك الغرفة يقدر يستخدم الأزرار.",
-        color=GOLD,
-    )
-    embed.set_footer(text=PANEL_FOOTER)
-    if has_image:
-        embed.set_image(url=f"attachment://{PANEL_IMAGE_NAME}")
-    return embed
 
 
 # ============================================================
@@ -374,11 +361,13 @@ async def panel_cmd(ctx: commands.Context):
 
     target = ctx.guild.get_channel(CONTROL_CHANNEL_ID) or ctx.channel
     kwargs = {}
-    has_image = os.path.isfile(_PANEL_FILE)
-    if has_image:
+    if os.path.isfile(_PANEL_FILE):
         kwargs["file"] = discord.File(_PANEL_FILE, filename=PANEL_IMAGE_NAME)
+    else:
+        # ديسكورد ما يقبل رسالة فاضية، فنحط نص بس لو الصورة مو موجودة
+        kwargs["content"] = "لوحة التحكم بالغرفة"
     try:
-        await target.send(embed=build_panel_embed(has_image), view=RoomPanel(), **kwargs)
+        await target.send(view=RoomPanel(), **kwargs)
     except (discord.Forbidden, discord.HTTPException) as e:
         print(f"[voice_rooms] ما قدرت أرسل اللوحة: {e}")
         await ctx.send("ما قدرت أرسل اللوحة، تأكد من صلاحيات البوت بروم التحكم.")
