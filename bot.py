@@ -239,6 +239,11 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix=".", intents=intents)
 
+async def setup_hook():
+    await bot.load_extension("welcome")
+
+bot.setup_hook = setup_hook
+
 import tickets
 tickets.setup_tickets(bot)
 import protection
