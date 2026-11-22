@@ -253,6 +253,8 @@ import games
 games.setup_games(bot)
 import colors
 colors.setup_colors(bot)
+import voice_rooms
+voice_rooms.setup_voice_rooms(bot)
 import card_backgrounds
 from broadcast import handle_broadcast_message
 # ============================================================
